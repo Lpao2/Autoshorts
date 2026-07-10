@@ -1,0 +1,62 @@
+﻿# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Credentials and authenticated sessions
+cookies
+cookies.*
+state*.json
+storage_state*.json
+sessions/
+profiles/
+browser_data/
+user_data/
+
+# Private configurations
+config/local*
+config/private*
+*.private.py
+keys.txt
+secrets.*
+
+# Generated media
+data/
+downloads/
+output/
+outputs/
+temp/
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.mp3
+*.wav
+*.srt
+
+# Runtime data
+last_video_index.json
+*.log
+logs/
+
+# Build
+build/
+dist/
+*.spec
+
+# Operating system
+Thumbs.db
+desktop.ini
+.DS_Store

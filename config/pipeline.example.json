@@ -1,0 +1,9 @@
+﻿{
+  "output_width": 1080,
+  "output_height": 1920,
+  "streamer_height_ratio": 0.30,
+  "maximum_clip_duration": 60,
+  "extra_clip_seconds": 6,
+  "video_codec": "libx264",
+  "audio_codec": "aac"
+}
