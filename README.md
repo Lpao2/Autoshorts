@@ -40,21 +40,13 @@ flowchart LR
     F --> G[Generated short videos]
 ```
 
-## Example result
+## Visual demonstration
 
-The foreground preserves the original video proportions while a blurred copy fills the vertical background.
+The image below represents a fictional long-form video used as input by the pipeline.
 
-Add a demonstration image to:
+![Fictional source video used by AutoShorts](samples/sample.png)
 
-```text
-docs/images/pipeline-demo.png
-```
-
-Then uncomment this line:
-
-```markdown
-<!-- ![AutoShorts processing demonstration](docs/images/pipeline-demo.png) -->
-```
+*Fictional demonstration created exclusively for this portfolio project.*
 
 ## Technologies
 
@@ -76,7 +68,8 @@ autoshorts/
 ├── docs/
 ├── samples/
 │   ├── cuts.demo.txt
-│   └── cuts.example.txt
+│   ├── cuts.example.txt
+│   └── sample.png
 ├── src/
 │   └── autoshorts/
 │       ├── __init__.py
