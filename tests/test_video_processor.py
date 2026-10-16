@@ -1,6 +1,7 @@
 import pytest
 
-from autoshorts.video_processor import build_vertical_filter, sanitize_filename
+from autoshorts.naming import sanitize_filename
+from autoshorts.video_processor import build_vertical_filter
 
 
 def test_sanitize_filename_removes_windows_unsafe_characters() -> None:

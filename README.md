@@ -4,7 +4,7 @@ Automated local pipeline for transforming selected moments from long-form videos
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-Video%20Processing-007808?logo=ffmpeg&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-4B5563)
 ![Status](https://img.shields.io/badge/Status-Functional-success)
 
 > This repository contains the portfolio edition of a larger private automation project. It demonstrates the local media-processing pipeline while excluding credentials, authenticated sessions and production-specific integrations.
@@ -25,6 +25,11 @@ The public edition focuses on the core engineering work:
 - Preserving optional audio
 - Loading configuration from environment variables
 - Running the complete flow through a command-line interface
+- Probing and validating source media before rendering
+- Dry-run render plans and machine-readable run manifests
+- Atomic outputs with explicit overwrite policies
+- Bounded parallel rendering
+- FFprobe validation of generated dimensions and duration
 
 Production account integrations, authenticated browser sessions and private automation logic remain outside this repository.
 
@@ -74,10 +79,15 @@ autoshorts/
 │   └── autoshorts/
 │       ├── __init__.py
 │       ├── config.py
+│       ├── media_probe.py
 │       ├── main.py
+│       ├── naming.py
+│       ├── pipeline.py
+│       ├── render_plan.py
 │       ├── timestamp_parser.py
 │       └── video_processor.py
-├── tests/
+├── tests/                     # Unit and FFmpeg integration tests
+├── pyproject.toml
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
@@ -88,7 +98,7 @@ autoshorts/
 
 - Python 3.11 or newer
 - FFmpeg available in the system `PATH`
-- Windows PowerShell
+- Windows PowerShell or a Linux shell
 
 ## Installation
 
@@ -176,6 +186,12 @@ OUTPUT_WIDTH=1080
 OUTPUT_HEIGHT=1920
 MAX_CLIP_DURATION=60
 EXTRA_CLIP_SECONDS=6
+VIDEO_CODEC=libx264
+VIDEO_PRESET=medium
+VIDEO_CRF=20
+AUDIO_CODEC=aac
+AUDIO_BITRATE=192k
+OVERWRITE_POLICY=error
 ```
 
 The real `.env` file is ignored by Git.
@@ -213,12 +229,13 @@ Current capabilities:
 
 Possible future improvements:
 
-- Automated tests
 - Subtitle rendering
-- Parallel clip processing
 - Progress reporting
 - Optional content-analysis adapters
 - Pluggable uploader interfaces
+
+See [the manual end-to-end test](docs/manual-test.md) to validate the current
+pipeline with a real local video.
 
 ---
 

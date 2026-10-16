@@ -1,26 +1,27 @@
-"""Local video processing through FFmpeg."""
+"""Validated local video rendering through FFmpeg."""
 
 from __future__ import annotations
 
-import re
 import subprocess
-from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 from autoshorts.config import Settings
-from autoshorts.timestamp_parser import Clip, seconds_to_timestamp
+from autoshorts.media_probe import validate_rendered_media
+from autoshorts.render_plan import PlannedClip, RenderPlan
+from autoshorts.timestamp_parser import seconds_to_timestamp
 
 
 class OutputExistsError(FileExistsError):
     """Raised when an output exists and replacement is disabled."""
 
 
-def sanitize_filename(value: str) -> str:
-    """Convert a clip title into a safe, bounded filename component."""
-
-    normalized = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", value.strip())
-    normalized = re.sub(r"\s+", "_", normalized).strip(" ._")
-    return normalized[:80].rstrip(" .") or "untitled_clip"
+@dataclass(frozen=True, slots=True)
+class RenderResult:
+    index: int
+    output_path: Path
+    status: str
 
 
 def build_vertical_filter(width: int, height: int) -> str:
@@ -41,52 +42,23 @@ def build_vertical_filter(width: int, height: int) -> str:
     )
 
 
-def _output_path(clip: Clip, settings: Settings, index: int) -> Path:
-    filename = f"{index:02d}_{sanitize_filename(clip.title)}.mp4"
-    return settings.output_dir / filename
-
-
-def process_clip(
-    input_video: str | Path,
-    clip: Clip,
+def _ffmpeg_command(
+    source: Path,
+    planned: PlannedClip,
+    temporary_path: Path,
     settings: Settings,
-    index: int,
-) -> Path:
-    """Cut and convert one selected clip into a vertical MP4 atomically."""
-
-    source = Path(input_video)
-    if not source.is_file():
-        raise FileNotFoundError(f"Input video not found: {source}")
-
-    settings.output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = _output_path(clip, settings, index)
-
-    if output_path.exists():
-        if settings.overwrite_policy == "skip":
-            return output_path
-        if settings.overwrite_policy == "error":
-            raise OutputExistsError(f"Output already exists: {output_path}")
-
-    temporary_path = output_path.with_suffix(".part.mp4")
-    if temporary_path.exists():
-        temporary_path.unlink()
-
-    duration = min(
-        clip.duration_seconds + settings.extra_clip_seconds,
-        settings.maximum_clip_duration,
-    )
-
-    command = [
+) -> list[str]:
+    return [
         settings.ffmpeg_path,
         "-hide_banner",
         "-nostdin",
         "-y",
         "-ss",
-        seconds_to_timestamp(clip.start_seconds),
+        seconds_to_timestamp(planned.clip.start_seconds),
         "-i",
         str(source),
         "-t",
-        str(duration),
+        f"{planned.duration_seconds:.3f}",
         "-filter_complex",
         build_vertical_filter(settings.output_width, settings.output_height),
         "-map",
@@ -108,40 +80,100 @@ def process_clip(
         str(temporary_path),
     ]
 
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+
+def render_planned_clip(
+    source: Path,
+    planned: PlannedClip,
+    settings: Settings,
+) -> RenderResult:
+    """Render and validate one planned clip atomically."""
+
+    output_path = planned.output_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[{planned.index:02d}] Rendering: {planned.clip.title}")
+
+    if output_path.exists():
+        if settings.overwrite_policy == "skip":
+            validate_rendered_media(
+                output_path,
+                ffprobe_path=settings.ffprobe_path,
+                expected_width=settings.output_width,
+                expected_height=settings.output_height,
+                expected_duration=planned.duration_seconds,
+            )
+            print(f"[{planned.index:02d}] Reused: {output_path}")
+            return RenderResult(planned.index, output_path, "skipped")
+        if settings.overwrite_policy == "error":
+            raise OutputExistsError(f"Output already exists: {output_path}")
+
+    temporary_path = output_path.with_suffix(".part.mp4")
+    temporary_path.unlink(missing_ok=True)
+
+    try:
+        result = subprocess.run(
+            _ffmpeg_command(source, planned, temporary_path, settings),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"FFmpeg executable not found: {settings.ffmpeg_path}"
+        ) from exc
 
     if result.returncode != 0:
         temporary_path.unlink(missing_ok=True)
         raise RuntimeError(
-            f"FFmpeg failed while processing '{clip.title}'.\n\n{result.stderr[-3000:]}"
+            f"FFmpeg failed while processing '{planned.clip.title}'.\n\n"
+            f"{result.stderr[-3000:]}"
         )
 
-    if not temporary_path.is_file() or temporary_path.stat().st_size == 0:
+    try:
+        validate_rendered_media(
+            temporary_path,
+            ffprobe_path=settings.ffprobe_path,
+            expected_width=settings.output_width,
+            expected_height=settings.output_height,
+            expected_duration=planned.duration_seconds,
+        )
+        temporary_path.replace(output_path)
+    except Exception:
         temporary_path.unlink(missing_ok=True)
-        raise RuntimeError(f"FFmpeg created no usable output for '{clip.title}'.")
+        raise
 
-    temporary_path.replace(output_path)
-    return output_path
+    print(f"[{planned.index:02d}] Ready: {output_path}")
+    return RenderResult(planned.index, output_path, "generated")
 
 
-def process_clips(
-    input_video: str | Path,
-    clips: Iterable[Clip],
+def process_render_plan(
+    plan: RenderPlan,
     settings: Settings,
-) -> list[Path]:
-    """Process all selected clips sequentially."""
+) -> tuple[RenderResult, ...]:
+    """Render a plan with bounded parallelism and deterministic result order."""
 
-    outputs: list[Path] = []
-    for index, clip in enumerate(clips, start=1):
-        print(f"[{index}] Processing: {clip.title} ({clip.duration_seconds}s)")
-        output = process_clip(input_video, clip, settings, index)
-        outputs.append(output)
-        print(f"    Ready: {output}")
-    return outputs
+    if settings.max_workers == 1 or len(plan.clips) == 1:
+        return tuple(
+            render_planned_clip(plan.source.path, item, settings) for item in plan.clips
+        )
+
+    results: dict[int, RenderResult] = {}
+    with ThreadPoolExecutor(
+        max_workers=min(settings.max_workers, len(plan.clips)),
+        thread_name_prefix="autoshorts-render",
+    ) as executor:
+        futures = {
+            executor.submit(render_planned_clip, plan.source.path, item, settings): item
+            for item in plan.clips
+        }
+        try:
+            for future in as_completed(futures):
+                result = future.result()
+                results[result.index] = result
+        except Exception:
+            for future in futures:
+                future.cancel()
+            raise
+
+    return tuple(results[index] for index in sorted(results))
