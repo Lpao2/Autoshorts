@@ -1,50 +1,49 @@
-﻿"""Local video processing through FFmpeg."""
+"""Local video processing through FFmpeg."""
 
 from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from autoshorts.config import Settings
 from autoshorts.timestamp_parser import Clip, seconds_to_timestamp
 
 
+class OutputExistsError(FileExistsError):
+    """Raised when an output exists and replacement is disabled."""
+
+
 def sanitize_filename(value: str) -> str:
-    """Convert a clip title into a safe filename."""
+    """Convert a clip title into a safe, bounded filename component."""
 
-    normalized = re.sub(
-        r'[<>:"/\\|?*]+',
-        "",
-        value.strip(),
-    )
-
-    normalized = re.sub(r"\s+", "_", normalized)
-
-    return normalized[:80] or "untitled_clip"
+    normalized = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", value.strip())
+    normalized = re.sub(r"\s+", "_", normalized).strip(" ._")
+    return normalized[:80].rstrip(" .") or "untitled_clip"
 
 
 def build_vertical_filter(width: int, height: int) -> str:
-    """
-    Create a vertical layout with a blurred background.
+    """Create a vertical layout with a blurred background."""
 
-    The complete original frame remains visible in the foreground.
-    """
+    if width <= 0 or height <= 0 or width % 2 or height % 2:
+        raise ValueError("Output dimensions must be positive even integers.")
 
     return (
         "[0:v]split=2[background_source][foreground_source];"
-        f"[background_source]"
-        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},"
-        "boxblur=20:10[background];"
-        f"[foreground_source]"
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease"
-        "[foreground];"
-        "[background][foreground]"
-        "overlay=(W-w)/2:(H-h)/2,"
+        f"[background_source]scale={width}:{height}:"
+        "force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},boxblur=20:10[background];"
+        f"[foreground_source]scale={width}:{height}:"
+        "force_original_aspect_ratio=decrease[foreground];"
+        "[background][foreground]overlay=(W-w)/2:(H-h)/2,"
         "format=yuv420p[video]"
     )
+
+
+def _output_path(clip: Clip, settings: Settings, index: int) -> Path:
+    filename = f"{index:02d}_{sanitize_filename(clip.title)}.mp4"
+    return settings.output_dir / filename
 
 
 def process_clip(
@@ -53,29 +52,34 @@ def process_clip(
     settings: Settings,
     index: int,
 ) -> Path:
-    """Cut and convert one selected clip into a vertical MP4."""
+    """Cut and convert one selected clip into a vertical MP4 atomically."""
 
     source = Path(input_video)
-
     if not source.is_file():
         raise FileNotFoundError(f"Input video not found: {source}")
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = _output_path(clip, settings, index)
+
+    if output_path.exists():
+        if settings.overwrite_policy == "skip":
+            return output_path
+        if settings.overwrite_policy == "error":
+            raise OutputExistsError(f"Output already exists: {output_path}")
+
+    temporary_path = output_path.with_suffix(".part.mp4")
+    if temporary_path.exists():
+        temporary_path.unlink()
 
     duration = min(
         clip.duration_seconds + settings.extra_clip_seconds,
         settings.maximum_clip_duration,
     )
 
-    filename = (
-        f"{index:02d}_"
-        f"{sanitize_filename(clip.title)}.mp4"
-    )
-
-    output_path = settings.output_dir / filename
-
     command = [
         settings.ffmpeg_path,
+        "-hide_banner",
+        "-nostdin",
         "-y",
         "-ss",
         seconds_to_timestamp(clip.start_seconds),
@@ -84,27 +88,24 @@ def process_clip(
         "-t",
         str(duration),
         "-filter_complex",
-        build_vertical_filter(
-            settings.output_width,
-            settings.output_height,
-        ),
+        build_vertical_filter(settings.output_width, settings.output_height),
         "-map",
         "[video]",
         "-map",
         "0:a?",
         "-c:v",
-        "libx264",
+        settings.video_codec,
         "-preset",
-        "medium",
+        settings.video_preset,
         "-crf",
-        "20",
+        str(settings.video_crf),
         "-c:a",
-        "aac",
+        settings.audio_codec,
         "-b:a",
-        "192k",
+        settings.audio_bitrate,
         "-movflags",
         "+faststart",
-        str(output_path),
+        str(temporary_path),
     ]
 
     result = subprocess.run(
@@ -117,13 +118,16 @@ def process_clip(
     )
 
     if result.returncode != 0:
-        error_message = result.stderr[-3000:]
-
+        temporary_path.unlink(missing_ok=True)
         raise RuntimeError(
-            "FFmpeg failed while processing "
-            f"'{clip.title}'.\n\n{error_message}"
+            f"FFmpeg failed while processing '{clip.title}'.\n\n{result.stderr[-3000:]}"
         )
 
+    if not temporary_path.is_file() or temporary_path.stat().st_size == 0:
+        temporary_path.unlink(missing_ok=True)
+        raise RuntimeError(f"FFmpeg created no usable output for '{clip.title}'.")
+
+    temporary_path.replace(output_path)
     return output_path
 
 
@@ -135,21 +139,9 @@ def process_clips(
     """Process all selected clips sequentially."""
 
     outputs: list[Path] = []
-
     for index, clip in enumerate(clips, start=1):
-        print(
-            f"[{index}] Processing: {clip.title} "
-            f"({clip.duration_seconds}s)"
-        )
-
-        output = process_clip(
-            input_video=input_video,
-            clip=clip,
-            settings=settings,
-            index=index,
-        )
-
+        print(f"[{index}] Processing: {clip.title} ({clip.duration_seconds}s)")
+        output = process_clip(input_video, clip, settings, index)
         outputs.append(output)
-        print(f"    Created: {output}")
-
+        print(f"    Ready: {output}")
     return outputs

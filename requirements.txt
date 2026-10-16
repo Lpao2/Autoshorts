@@ -1,1 +1,2 @@
-﻿python-dotenv
+# Compatibility entry point. Project dependencies are defined in pyproject.toml.
+-e .

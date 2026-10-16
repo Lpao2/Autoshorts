@@ -105,10 +105,10 @@ Create a virtual environment:
 python -m venv .venv
 ```
 
-Install the dependencies:
+Install the project and development dependencies:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
 Create the local configuration file:
@@ -138,16 +138,10 @@ HH:MM:SS
 
 ## Usage
 
-Configure the Python source path:
-
-```powershell
-$env:PYTHONPATH = "$PWD\src"
-```
-
 Run the pipeline:
 
 ```powershell
-.\.venv\Scripts\python.exe -m autoshorts.main `
+.\.venv\Scripts\autoshorts.exe `
   --input "path\to\source-video.mp4" `
   --cuts "samples\cuts.example.txt"
 ```
@@ -155,7 +149,7 @@ Run the pipeline:
 Use a custom output folder:
 
 ```powershell
-.\.venv\Scripts\python.exe -m autoshorts.main `
+.\.venv\Scripts\autoshorts.exe `
   --input "path\to\source-video.mp4" `
   --cuts "samples\cuts.example.txt" `
   --output "path\to\output"

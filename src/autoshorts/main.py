@@ -1,4 +1,4 @@
-﻿"""Command-line entry point for the AutoShorts public pipeline."""
+"""Command-line entry point for the AutoShorts public pipeline."""
 
 from __future__ import annotations
 
