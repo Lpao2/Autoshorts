@@ -2,13 +2,19 @@
 
 ## Product direction
 
-AutoShorts should become a reliable local-first engine for turning long-form
-video into reviewable short-form candidates. Its advantage should be control,
-privacy, reproducibility, and provider choice—not a claim that every clip is
+AutoShorts should become a personal, local-first production library for turning
+different categories of long-form video into reviewable, channel-ready shorts.
+Its advantage should be control, reusable theme configuration, privacy,
+reproducibility, and provider choice—not a claim that every clip is
 automatically viral.
 
 The core must work without AI. Transcription, automatic selection, tracking,
 and publishing should be optional adapters around a deterministic media engine.
+Themes, prompts, render presets, metadata rules, and YouTube channel targets
+must be data-driven rather than implemented as separate code paths.
+
+See [product-vision.md](product-vision.md) for the domain model and intended
+personal workflow.
 
 ## Competitive landscape
 
@@ -50,6 +56,8 @@ Deliverables:
 - Optional SRT/ASS subtitle burn-in with reusable styles.
 - Preview frames or contact sheets before full rendering.
 - Dry-run mode that prints and validates the render plan.
+- Project library with SQLite-backed state and immutable configuration snapshots.
+- Reusable themes, prompt sets, render presets, and metadata presets.
 
 Exit criterion: a user can prepare, preview, render, interrupt, and resume a
 batch without losing work or overwriting outputs unexpectedly.
@@ -65,6 +73,8 @@ Deliverables:
 - Candidate scoring with explicit reasons and confidence.
 - Deduplication and overlap resolution.
 - Human review file or lightweight UI before rendering.
+- Versioned prompt sets selected by theme and content type.
+- Metadata generation for titles, descriptions, tags, and upload checklists.
 
 Exit criterion: automatic suggestions improve speed while every final cut
 remains inspectable and editable.
@@ -85,6 +95,8 @@ Deliverables:
 Deliverables:
 
 - Stable uploader protocol and mock implementation.
+- Ready-to-post export packages as the first publishing milestone.
+- Multiple YouTube channel profiles through the official API.
 - Platform adapters only through supported APIs or explicit export packages.
 - Idempotency, scheduling, retry, audit logs, and approval before publish.
 - Secrets stored through environment or OS credential facilities, never Git.
@@ -98,14 +110,10 @@ Deliverables:
 5. Add an end-to-end synthetic-video test.
 6. Replace the unused JSON/environment split with one documented config path.
 
-## Decision required before Phase 2
+## Theme strategy for Phase 2
 
-The first automatic-selection profile must target one primary content type:
-
-- talking-head, podcast, interview, or educational video; or
-- gameplay and event-driven footage.
-
-Transcription and semantic coherence dominate the first group. Audio peaks,
-motion, game events, OCR, and visual change matter more for the second. The core
-engine can support both, but attempting both selection models in the first
-sprint would weaken validation.
+The engine is intentionally multi-theme, but automatic selection should be
+validated one profile at a time. Talking-head content can prioritize transcript
+coherence while gameplay can combine audio peaks, motion, OCR, and visual
+change. Both use the same candidate interface, review flow, renderer, and
+publication-package model.
