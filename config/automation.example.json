@@ -1,0 +1,15 @@
+{
+  "themes": [
+    {
+      "name": "tecnologia",
+      "prompt": "",
+      "output_subdirectory": "tecnologia",
+      "creators": [
+        {
+          "name": "Nome do criador",
+          "videos_url": "https://www.youtube.com/@criador/videos"
+        }
+      ]
+    }
+  ]
+}
