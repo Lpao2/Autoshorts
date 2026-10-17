@@ -10,9 +10,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 
 from autoshorts.config import Settings
 from autoshorts.media_probe import MediaInfo, probe_media
+from autoshorts.render_events import ProgressCallback, RenderCancelled, check_cancelled
 from autoshorts.render_plan import RenderPlan, build_render_plan
 from autoshorts.timestamp_parser import Clip
 from autoshorts.video_processor import RenderResult, process_render_plan
@@ -66,7 +68,15 @@ def _manifest_payload(
                 "end_seconds": item.clip.end_seconds,
                 "render_duration_seconds": item.duration_seconds,
                 "output_path": str(item.output_path),
-                "status": result.status if result else "planned",
+                "status": result.status
+                if result
+                else (
+                    "cancelled"
+                    if status == "cancelled"
+                    else "not_completed"
+                    if status == "failed"
+                    else "planned"
+                ),
             }
         )
 
@@ -114,10 +124,15 @@ def run_pipeline(
     settings: Settings,
     *,
     dry_run: bool = False,
+    cancel: Event | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> PipelineResult:
     """Probe input, build a plan, render it, and write a run manifest."""
 
+    cancel = cancel if cancel is not None else Event()
+    check_cancelled(cancel)
     source = probe_media(source_path, settings.ffprobe_path)
+    check_cancelled(cancel)
     plan = build_render_plan(source, clips, settings)
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8]
 
@@ -134,9 +149,17 @@ def run_pipeline(
     if dry_run:
         return PipelineResult(plan, renders, manifest_path)
 
+    completed: list[RenderResult] = []
     try:
-        renders = process_render_plan(plan, settings)
+        renders = process_render_plan(
+            plan,
+            settings,
+            cancel=cancel,
+            on_progress=on_progress,
+            on_result=completed.append,
+        )
     except Exception as exc:
+        renders = tuple(sorted(completed, key=lambda item: item.index))
         manifest_path = _write_manifest(
             settings.output_dir,
             _manifest_payload(
@@ -144,11 +167,14 @@ def run_pipeline(
                 renders,
                 settings,
                 run_id=run_id,
-                status="failed",
+                status="cancelled" if isinstance(exc, RenderCancelled) else "failed",
                 error=f"{type(exc).__name__}: {exc}",
             ),
             run_id,
         )
+        if isinstance(exc, RenderCancelled):
+            exc.manifest_path = manifest_path
+            raise
         raise PipelineExecutionError(str(exc), manifest_path) from exc
 
     manifest_path = _write_manifest(

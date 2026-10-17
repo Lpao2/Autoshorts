@@ -56,6 +56,10 @@ def build_render_plan(
 
         filename = f"{index:02d}_{sanitize_filename(clip.title)}.mp4"
         output_path = settings.output_dir / filename
+        if output_path.resolve() == source.path.resolve():
+            raise ValueError(
+                "Output would overwrite the source. Choose another folder."
+            )
         if output_path in seen_outputs:
             raise ValueError(f"Duplicate output path in render plan: {output_path}")
         seen_outputs.add(output_path)

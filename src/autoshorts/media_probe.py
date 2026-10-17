@@ -62,7 +62,12 @@ def probe_media(path: str | Path, ffprobe_path: str = "ffprobe") -> MediaInfo:
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=30,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaProbeError(
+            "FFprobe exceeded its 30-second inspection limit."
+        ) from exc
     except FileNotFoundError as exc:
         raise MediaProbeError(f"FFprobe executable not found: {ffprobe_path}") from exc
 
