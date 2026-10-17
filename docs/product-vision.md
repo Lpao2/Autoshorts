@@ -70,10 +70,14 @@ reproduce.
 
 ## Personal-first interface
 
-A local web interface is the recommended primary UI because the product needs
-library browsing, configuration forms, clip review, previews, queues, and
-publication history. The CLI remains valuable for automation and testing, but
-should call the same application services as the UI.
+The current milestone uses a minimal Tkinter/ttk desktop interface for selecting
+source media, editing cuts, validating, rendering, and cancelling. See
+[the local GUI decision and Linux guide](local-gui.md). Both interfaces share
+the same pipeline; the CLI remains supported.
+
+A local web interface remains an option for the complete library, with browsing,
+configuration forms, previews, queues, and publication history. It is deferred
+until those workflows justify the additional components.
 
 Recommended initial surfaces:
 

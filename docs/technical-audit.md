@@ -2,6 +2,11 @@
 
 Audit date: 2026-10-16
 
+Historical baseline: the findings below describe the repository **before** the
+foundation commits. Packaging, validation, atomic rendering, manifests, and tests
+have since been delivered. The desktop milestone and its verification are
+documented in [local-gui.md](local-gui.md).
+
 ## Current state
 
 The repository contains a small deterministic pipeline:

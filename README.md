@@ -11,6 +11,28 @@ Automated local pipeline for transforming selected moments from long-form videos
 
 ---
 
+## Linux desktop — start here
+
+The minimal local interface lets you choose a video, open or edit cuts, validate,
+render, cancel, and follow overall/per-clip progress without memorizing commands.
+The CLI remains available with its existing arguments.
+
+```bash
+sudo apt install python3-venv python3-tk ffmpeg xdg-utils
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/autoshorts-install-desktop
+.venv/bin/autoshorts-gui
+```
+
+Run those commands from the repository on branch `codex/resume-audit`. After
+installing the shortcut, open **AutoShorts** from the Linux application menu.
+No `.env` is required with FFmpeg/FFprobe on PATH. If you already have `.env`,
+check that its executable paths are Linux paths.
+
+See [the Linux GUI guide](docs/local-gui.md) for updating an existing checkout,
+the interface comparison, usage, cancellation behavior, and test checklist.
+
 ## About the project
 
 AutoShorts receives a source video and a list of selected timestamps, cuts each moment with FFmpeg and exports vertical videos ready for short-form platforms.
@@ -60,7 +82,7 @@ The image below represents a fictional long-form video used as input by the pipe
 | Language | Python |
 | Media processing | FFmpeg |
 | Configuration | python-dotenv |
-| Interface | Command-line interface |
+| Interface | Tkinter/ttk desktop and command-line interface |
 | Data formats | Text and JSON |
 | Version control | Git and GitHub |
 
@@ -178,7 +200,8 @@ Generated files follow this pattern:
 The `.env.example` file documents the available local settings:
 
 ```env
-FFMPEG_PATH=C:\ffmpeg\bin\ffmpeg.exe
+FFMPEG_PATH=ffmpeg
+FFPROBE_PATH=ffprobe
 INPUT_DIR=./data/input
 OUTPUT_DIR=./data/output
 MAX_WORKERS=2
@@ -220,7 +243,7 @@ Current capabilities:
 - Timestamp parsing
 - Input validation
 - Automatic filename sanitization
-- Sequential clip processing
+- Bounded parallel clip processing
 - Vertical video generation
 - Blurred background composition
 - Optional audio preservation
@@ -230,7 +253,7 @@ Current capabilities:
 Possible future improvements:
 
 - Subtitle rendering
-- Progress reporting
+- Persistent project library and queue
 - Optional content-analysis adapters
 - Pluggable uploader interfaces
 

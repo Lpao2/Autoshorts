@@ -45,7 +45,8 @@ cd Autoshorts
 git switch codex/resume-audit
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
-cp .env.example .env
+# Optional: review the example before creating .env; defaults work on Linux.
+# cp .env.example .env
 ```
 
 ## 3. Run the automated checks
@@ -157,3 +158,9 @@ Check:
 
 If a command fails, preserve the terminal output and the generated manifest.
 Do not share source media, credentials, or private paths in a public issue.
+
+
+## 9. Desktop workflow
+
+For the new local GUI, application-menu shortcut, cancellation checks, and
+display-based automated tests, follow [local-gui.md](local-gui.md).

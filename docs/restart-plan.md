@@ -117,3 +117,14 @@ validated one profile at a time. Talking-head content can prioritize transcript
 coherence while gameplay can combine audio peaks, motion, OCR, and visual
 change. Both use the same candidate interface, review flow, renderer, and
 publication-package model.
+
+
+## Current delivery status — 2026-10-17
+
+The foundation is implemented and its initial 20 tests passed on Linux before
+GUI changes. The next delivered milestone is the minimal Tkinter/ttk desktop
+workflow with progress, cancellation, and shared pipeline services. See
+[local-gui.md](local-gui.md) for the decision, setup, limitations, and checks.
+
+Persistent queue, theme library, presets, metadata assistance, channel profiles,
+and publication approval remain future increments.
