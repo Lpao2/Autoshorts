@@ -13,7 +13,7 @@ dependencies = ["python-dotenv>=1.0,<2"]
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.8,<1"]
 automation = ["yt-dlp>=2026.8,<2027", "yt-dlp-ejs>=0.8,<1"]
-transcription = ["faster-whisper>=1.2,<2"]
+transcription = ["faster-whisper>=1.2,<2", "av>=11,<19"]
 
 [project.scripts]
 autoshorts = "autoshorts.main:main"

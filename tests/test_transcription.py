@@ -2,6 +2,7 @@ import importlib
 import json
 import sys
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
 
@@ -182,3 +183,13 @@ def test_optional_provider_module_imports_without_faster_whisper(monkeypatch):
     provider = module.FasterWhisperProvider(model="small")
     with pytest.raises(RuntimeError, match="extra"):
         provider._load_engine()
+
+
+def test_faster_whisper_adapter_filters_zero_duration_words():
+    from autoshorts.faster_whisper_provider import _valid_word
+
+    segment = SimpleNamespace(start=0.0, end=2.0)
+    assert _valid_word(SimpleNamespace(start=0.1, end=0.8, word="olá"), segment)
+    assert not _valid_word(
+        SimpleNamespace(start=1.0, end=1.0, word="."), segment
+    )

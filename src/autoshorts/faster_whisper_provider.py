@@ -56,9 +56,7 @@ class FasterWhisperProvider:
             words = tuple(
                 TranscriptWord(float(word.start), float(word.end), str(word.word))
                 for word in (raw.words or ())
-                if word.start is not None
-                and word.end is not None
-                and str(word.word).strip()
+                if _valid_word(word, raw)
             )
             segments.append(
                 TranscriptSegment(
@@ -105,3 +103,14 @@ class FasterWhisperProvider:
 
 def _optional_float(value) -> float | None:
     return float(value) if value is not None else None
+
+
+def _valid_word(word, segment) -> bool:
+    return bool(
+        word.start is not None
+        and word.end is not None
+        and float(word.start) >= float(segment.start)
+        and float(word.end) <= float(segment.end)
+        and float(word.end) > float(word.start)
+        and str(word.word).strip()
+    )
