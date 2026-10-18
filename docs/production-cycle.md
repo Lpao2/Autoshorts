@@ -43,3 +43,6 @@ Execute `.venv/bin/autoshorts-gui`, abra a aba **Automático** e configure:
 
 Ao concluir, a interface exibe `Render 1/3` a `Render 3/3` e o estado final
 `QUEUED`. Nenhum upload é realizado.
+
+A política para reiniciar jobs interrompidos está em
+[recovery.md](recovery.md).
