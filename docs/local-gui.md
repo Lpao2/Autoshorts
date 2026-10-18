@@ -108,14 +108,28 @@ edite tema, criadores e URLs. Arquivos `config/local*` são ignorados pelo Git.
 
 1. Selecione o JSON e clique em **Recarregar**.
 2. Escolha tema, criadores, quantidade, idade máxima e workspace.
-3. Use **Somente download** para descoberta e coleta reais sem análise.
-4. Para o E2E de desenvolvimento, desmarque **Somente download** e marque
+3. Em **Autenticação YouTube**, mantenha **Sem autenticação** para conteúdo que
+   funcionar anonimamente ou selecione explicitamente **Brave**/**Firefox** para
+   o yt-dlp ler o perfil local. Cookies nunca são exportados para o projeto.
+4. Use **Somente download** para descoberta e coleta reais sem análise.
+5. Para o E2E de desenvolvimento, desmarque **Somente download** e marque
    explicitamente **TEST / DEVELOPMENT ONLY — análise fake**.
-5. Clique em **Executar automação** e acompanhe os itens, bytes, velocidade e ETA.
+6. Clique em **Executar automação** e acompanhe os itens, bytes, velocidade e ETA.
 
 O provider fake cria um único corte curto e previsível, apenas para validar o
 caminho download → Clip → FFmpeg → manifest. Ele nunca é ativado por padrão.
-Não há Gemini real, cookies, sessão autenticada nem publicação nesta etapa.
+Não há Gemini real nem publicação nesta etapa.
+
+O canal é descoberto primeiro em modo flat, sem resolver todos os vídeos. Depois,
+o AutoShorts hidrata individualmente no máximo `min(max(quantidade * 5, 20), 100)`
+candidatos até encontrar a quantidade solicitada. Vídeos indisponíveis, antigos,
+ao vivo, futuros ou que exigem autenticação são registrados e ignorados sem
+derrubar o canal inteiro.
+
+O YouTube atual também pode exigir um runtime JavaScript. Instale o Deno fora do
+Python; o AutoShorts procura primeiro no `PATH` e depois em `~/.deno/bin/deno`,
+passando o caminho encontrado explicitamente ao yt-dlp. `yt-dlp-ejs` é instalado
+por `.[automation]`. Se Deno não existir, a GUI mostra um aviso amigável.
 
 O download usa `progress_hooks` do yt-dlp. Se o tamanho total não estiver
 disponível, a barra fica indeterminada e a interface mostra apenas os bytes já
