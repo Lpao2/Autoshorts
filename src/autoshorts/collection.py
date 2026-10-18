@@ -7,10 +7,17 @@ outside the repository.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from threading import Event
 from typing import Any
+
+from autoshorts.automation_events import (
+    AutomationCancelled,
+    check_automation_cancelled,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +27,21 @@ class VideoCandidate:
     title: str
     upload_date: date | None
     duration_seconds: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadProgress:
+    status: str
+    filename: str | None
+    downloaded_bytes: int | None
+    total_bytes: int | None
+    total_is_estimate: bool
+    speed: float | None
+    eta: int | None
+    percent: float | None
+
+
+ProgressHandler = Callable[[DownloadProgress], None]
 
 
 def _require_yt_dlp() -> Any:
@@ -86,11 +108,19 @@ def download_video(
     destination: str | Path,
     *,
     cookie_file: str | Path | None = None,
+    progress_handler: ProgressHandler | None = None,
+    cancel: Event | None = None,
 ) -> Path:
     """Download one candidate to a deterministic MP4 path."""
     yt_dlp = _require_yt_dlp()
     output_dir = Path(destination)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    def progress_hook(raw: dict[str, object]) -> None:
+        check_automation_cancelled(cancel)
+        if progress_handler is not None:
+            progress_handler(download_progress_from_hook(raw))
+
     options: dict[str, object] = {
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
         "merge_output_format": "mp4",
@@ -98,15 +128,77 @@ def download_video(
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
+        "progress_hooks": [progress_hook],
     }
     if cookie_file is not None:
         options["cookiefile"] = str(cookie_file)
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(candidate.url, download=True)
-        prepared = Path(ydl.prepare_filename(info)).with_suffix(".mp4")
+    check_automation_cancelled(cancel)
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(candidate.url, download=False)
+            prepared = Path(ydl.prepare_filename(info)).with_suffix(".mp4")
+            if prepared.is_file():
+                if progress_handler is not None:
+                    progress_handler(
+                        DownloadProgress(
+                            "reused", str(prepared), None, None, False, None, None, 1.0
+                        )
+                    )
+                return prepared
+            info = ydl.extract_info(candidate.url, download=True)
+            prepared = Path(ydl.prepare_filename(info)).with_suffix(".mp4")
+    except Exception as exc:
+        if isinstance(exc, AutomationCancelled) or (
+            cancel is not None and cancel.is_set()
+        ):
+            _cleanup_partials(output_dir)
+            raise AutomationCancelled("Download cancelado pelo usuário.") from exc
+        raise
     if not prepared.is_file():
         raise RuntimeError(f"yt-dlp did not create the expected file: {prepared}")
     return prepared
+
+
+def download_progress_from_hook(raw: dict[str, object]) -> DownloadProgress:
+    downloaded = _optional_int(raw.get("downloaded_bytes"))
+    exact_total = _optional_int(raw.get("total_bytes"))
+    estimated_total = _optional_int(raw.get("total_bytes_estimate"))
+    total = exact_total or estimated_total
+    percent = None
+    if downloaded is not None and total:
+        percent = min(1.0, max(0.0, downloaded / total))
+    if raw.get("status") == "finished":
+        percent = 1.0
+    return DownloadProgress(
+        status=str(raw.get("status") or "unknown"),
+        filename=str(raw["filename"]) if raw.get("filename") else None,
+        downloaded_bytes=downloaded,
+        total_bytes=total,
+        total_is_estimate=exact_total is None and estimated_total is not None,
+        speed=_optional_float(raw.get("speed")),
+        eta=_optional_int(raw.get("eta")),
+        percent=percent,
+    )
+
+
+def _optional_int(value: object) -> int | None:
+    try:
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: object) -> float | None:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cleanup_partials(directory: Path) -> None:
+    for pattern in ("*.part", "*.part-*", "*.ytdl"):
+        for path in directory.glob(pattern):
+            path.unlink(missing_ok=True)
 
 
 def _parse_upload_date(value: object) -> date | None:
