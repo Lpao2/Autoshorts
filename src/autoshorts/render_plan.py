@@ -54,7 +54,11 @@ def build_render_plan(
         if duration <= 0:
             raise ValueError(f"Clip {index} has no renderable duration.")
 
-        filename = f"{index:02d}_{sanitize_filename(clip.title)}.mp4"
+        filename = (
+            f"{index:02d}.mp4"
+            if settings.exact_index_filenames
+            else f"{index:02d}_{sanitize_filename(clip.title)}.mp4"
+        )
         output_path = settings.output_dir / filename
         if output_path.resolve() == source.path.resolve():
             raise ValueError(

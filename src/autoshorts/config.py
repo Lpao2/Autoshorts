@@ -74,6 +74,7 @@ class Settings:
     video_crf: int
     audio_bitrate: str
     overwrite_policy: OverwritePolicy
+    exact_index_filenames: bool = False
 
 
 def load_settings() -> Settings:

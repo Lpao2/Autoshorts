@@ -14,7 +14,20 @@ def fake_analysis_provider(
     _candidate: VideoCandidate,
     _theme: ThemeProfile,
 ) -> ClipAnalysis:
-    """Return one valid short clip. TEST / DEVELOPMENT ONLY."""
+    """Return exactly three deterministic clips. TEST / DEVELOPMENT ONLY."""
     info = probe_media(source_path)
-    end = max(1, min(5, int(info.duration_seconds)))
-    return ClipAnalysis((Clip(0, end, "Development test clip"),), "FAKE")
+    duration = int(info.duration_seconds)
+    clip_duration = min(5, duration // 3)
+    if clip_duration < 1:
+        raise ValueError(
+            "O vídeo é curto demais para gerar três cortes de desenvolvimento."
+        )
+    clips = tuple(
+        Clip(
+            (index - 1) * clip_duration,
+            index * clip_duration,
+            f"Development clip {index}",
+        )
+        for index in range(1, 4)
+    )
+    return ClipAnalysis(clips, "FAKE / TEST / DEVELOPMENT ONLY")
