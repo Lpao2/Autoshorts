@@ -34,6 +34,7 @@ from autoshorts.distribution import (
     distribute_short_files,
 )
 from autoshorts.pipeline import PipelineResult, run_pipeline
+from autoshorts.production_metadata import rendered_short_records
 from autoshorts.recovery import (
     RecoveryAction,
     inspect_video_state,
@@ -45,12 +46,7 @@ from autoshorts.recovery import (
 from autoshorts.render_events import RenderCancelled
 from autoshorts.reranking import CandidateReranker
 from autoshorts.reranking_service import rerank_analysis
-from autoshorts.state_store import (
-    QueuedShort,
-    RenderedShort,
-    StateStore,
-    VideoStatus,
-)
+from autoshorts.state_store import QueuedShort, RenderedShort, StateStore, VideoStatus
 from autoshorts.transcript_analysis import TranscriptAnalysisProvider, load_analysis
 from autoshorts.transcription import Transcript, TranscriptionProvider, load_transcript
 from autoshorts.transcription_service import transcript_video
@@ -149,6 +145,8 @@ def run_automation(
                 reusable_source: Path | None = None
                 transcript: Transcript | None = None
                 analysis: ClipAnalysis | None = None
+                resolved_analysis = None
+                analysis_path = theme_root / ".work" / youtube_id / "analysis.json"
                 if state_store is not None and youtube_id:
                     state_store.register_video(
                         youtube_id=youtube_id,
@@ -260,7 +258,7 @@ def run_automation(
                         transcript = load_transcript(
                             recovery_plan.reusable_artifacts[1], youtube_id=youtube_id
                         )
-                        resolved = (
+                        resolved_analysis = (
                             reconcile_analysis(state_store, recovery_plan)
                             if recovery_plan.next_action
                             == RecoveryAction.RECONCILE_ANALYSIS
@@ -270,7 +268,7 @@ def run_automation(
                                 youtube_id=youtube_id,
                             )
                         )
-                        analysis = resolved.clips
+                        analysis = resolved_analysis.clips
                         source = (
                             theme_root
                             / "downloads"
@@ -432,7 +430,7 @@ def run_automation(
                                 raise ValueError(
                                     "Análise inteligente exige transcrição válida."
                                 )
-                            resolved = analyze_transcript(
+                            resolved_analysis = analyze_transcript(
                                 youtube_id=youtube_id,
                                 transcript=transcript,
                                 artifact_path=(
@@ -447,7 +445,7 @@ def run_automation(
                                 cancel=cancel,
                                 event_handler=emit,
                             )
-                            analysis = resolved.clips
+                            analysis = resolved_analysis.clips
                         else:
                             state_store.transition_video(
                                 youtube_id, VideoStatus.ANALYZING
@@ -480,9 +478,6 @@ def run_automation(
                     if reranker is not None:
                         if transcript is None:
                             raise ValueError("Rerank exige transcrição válida.")
-                        analysis_path = (
-                            theme_root / ".work" / youtube_id / "analysis.json"
-                        )
                         rerank_analysis(
                             youtube_id=youtube_id,
                             transcript=transcript,
@@ -496,9 +491,10 @@ def run_automation(
                             cancel=cancel,
                             event_handler=emit,
                         )
-                        analysis = load_analysis(
+                        resolved_analysis = load_analysis(
                             analysis_path, transcript, youtube_id=youtube_id
-                        ).clips
+                        )
+                        analysis = resolved_analysis.clips
                     check_automation_cancelled(cancel)
                     stage = "render"
                     emit(
@@ -550,12 +546,26 @@ def run_automation(
                         raise ValueError(
                             "A renderização não produziu exatamente 3 Shorts."
                         )
-                    state_store.record_rendered_shorts(
-                        youtube_id,
-                        tuple(
+                    rendered_records: tuple[RenderedShort, ...]
+                    if analysis_path.is_file() and transcript is not None:
+                        if resolved_analysis is None:
+                            resolved_analysis = load_analysis(
+                                analysis_path, transcript, youtube_id=youtube_id
+                            )
+                        rendered_records = rendered_short_records(
+                            tuple(item.file_path for item in artifacts),
+                            analysis_path,
+                            resolved_analysis,
+                            transcript,
+                        )
+                    else:
+                        rendered_records = tuple(
                             RenderedShort(item.clip_index, item.file_path)
                             for item in artifacts
-                        ),
+                        )
+                    state_store.record_rendered_shorts(
+                        youtube_id,
+                        rendered_records,
                     )
                     emit(
                         _candidate_event(

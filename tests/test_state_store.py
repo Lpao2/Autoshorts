@@ -152,7 +152,19 @@ def test_queue_three_shorts_and_video_atomically(tmp_path):
             path.touch()
         store.record_rendered_shorts(
             "video-1",
-            tuple(RenderedShort(index, path) for index, path in enumerate(masters, 1)),
+            tuple(
+                RenderedShort(
+                    index,
+                    path,
+                    title=f"Title {index}",
+                    headline=f"Headline {index}",
+                    generator_score=0.9 - index / 100,
+                    editorial_score=0.8 - index / 100,
+                    candidate_id=f"candidate-{4 - index}",
+                    duration_seconds=20 + index,
+                )
+                for index, path in enumerate(masters, 1)
+            ),
         )
         rows = store.record_queued_shorts(
             "video-1",
@@ -164,6 +176,15 @@ def test_queue_three_shorts_and_video_atomically(tmp_path):
         assert store.get_video("video-1").status == VideoStatus.QUEUED
         assert [row.account_slot for row in rows] == [1, 2, 3]
         assert [row.queue_path for row in rows] == list(queues)
+        metadata = store.queued_metadata("video-1")
+        assert [item.rank for item in metadata] == [1, 2, 3]
+        assert [item.account_slot for item in metadata] == [1, 2, 3]
+        assert metadata[0].headline == "Headline 1"
+        assert metadata[0].candidate_id == "candidate-3"
+        assert metadata[0].youtube_id == "video-1"
+        assert metadata[0].creator_name == "Arthur"
+        assert metadata[0].theme_name == "LoL"
+        assert metadata[0].duration_seconds == 21
 
 
 def test_queue_database_failure_rolls_back_video_and_shorts(tmp_path):
@@ -290,6 +311,6 @@ def test_migrates_v2_to_v3_without_losing_video_or_shorts(tmp_path):
     )
     connection.close()
     with StateStore(path) as store:
-        assert store.schema_version == 5
+        assert store.schema_version == SCHEMA_VERSION
         assert store.get_video("old").status == VideoStatus.DOWNLOADED
         assert store.get_transcript("old") is None

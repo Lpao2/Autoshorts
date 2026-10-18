@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
 from autoshorts.automation_config import ThemeProfile
+from autoshorts.config import Settings
 from autoshorts.distribution import (
     ShortArtifact,
     assign_shorts_to_accounts,
     distribute_short_files,
 )
 from autoshorts.media_probe import MediaProbeError, probe_media
+from autoshorts.pipeline import PipelineResult, run_pipeline
+from autoshorts.production_metadata import rendered_short_records
 from autoshorts.state_store import QueuedShort, StateStore, VideoStatus
 from autoshorts.transcript_analysis import load_analysis
 from autoshorts.transcription import load_transcript
@@ -44,6 +47,13 @@ class RecoveryPlan:
     reason: str
     reusable_artifacts: tuple[Path, ...] = ()
     cleanup_actions: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionResumeResult:
+    render: PipelineResult
+    queue_paths: tuple[Path, ...]
+    link_methods: tuple[str, ...]
 
 
 def inspect_video_state(
@@ -375,6 +385,79 @@ def resume_rendered_distribution(
             item.queue_path.unlink(missing_ok=True)
         raise
     return tuple(item.queue_path for item in distributed)
+
+
+def resume_analyzed_production(
+    store: StateStore,
+    youtube_id: str,
+    *,
+    theme_root: Path,
+    creator_directory: str,
+    theme: ThemeProfile,
+    settings: Settings,
+    remove_source_after_queue: bool = True,
+) -> ProductionResumeResult:
+    """Resume one known ANALYZED video locally, without discovery or providers."""
+    plan = inspect_video_state(
+        store,
+        youtube_id,
+        theme_root=theme_root,
+        creator_directory=creator_directory,
+        ffprobe_path=settings.ffprobe_path,
+        expected_width=settings.output_width,
+        expected_height=settings.output_height,
+    )
+    if plan.next_action != RecoveryAction.REUSE_ANALYSIS:
+        raise ValueError(f"Expected reusable ANALYZED job, got {plan.next_action}.")
+    analysis_path, transcript_path = plan.reusable_artifacts
+    transcript = load_transcript(transcript_path, youtube_id=youtube_id)
+    analysis = load_analysis(analysis_path, transcript, youtube_id=youtube_id)
+    source_path = theme_root / "downloads" / creator_directory / f"{youtube_id}.mp4"
+    if not _valid_media(source_path, settings.ffprobe_path):
+        raise ValueError("The persisted source is absent or invalid.")
+    output = theme_root / "creators" / creator_directory / youtube_id
+    render_settings = replace(
+        settings,
+        output_dir=output,
+        exact_index_filenames=True,
+        overwrite_policy="error",
+    )
+    store.transition_video(youtube_id, VideoStatus.RENDERING)
+    render = run_pipeline(source_path, list(analysis.clips.clips), render_settings)
+    paths = tuple(item.output_path for item in render.renders)
+    store.record_rendered_shorts(
+        youtube_id,
+        rendered_short_records(paths, analysis_path, analysis, transcript),
+    )
+    artifacts = tuple(ShortArtifact(index, path) for index, path in enumerate(paths, 1))
+    assignments = assign_shorts_to_accounts(artifacts, theme.accounts)
+    distributed = distribute_short_files(
+        assignments, theme_root / "accounts", youtube_id
+    )
+    try:
+        store.record_queued_shorts(
+            youtube_id,
+            tuple(
+                QueuedShort(
+                    item.assignment.clip_index,
+                    item.assignment.account_slot,
+                    item.assignment.account.email,
+                    item.queue_path,
+                )
+                for item in distributed
+            ),
+        )
+    except Exception:
+        for item in distributed:
+            item.queue_path.unlink(missing_ok=True)
+        raise
+    if remove_source_after_queue:
+        source_path.unlink(missing_ok=True)
+    return ProductionResumeResult(
+        render,
+        tuple(item.queue_path for item in distributed),
+        tuple(item.method.value for item in distributed),
+    )
 
 
 def _download_residues(directory: Path, youtube_id: str) -> tuple[Path, ...]:

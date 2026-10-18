@@ -6,6 +6,7 @@ from test_transcript_analysis import candidate_pool, transcript
 
 from autoshorts.analysis_service import analyze_transcript
 from autoshorts.gemini_reranker import GeminiCandidateReranker
+from autoshorts.production_metadata import rendered_short_records
 from autoshorts.reranking import (
     RankedSelection,
     RerankResult,
@@ -135,6 +136,33 @@ def test_rerank_is_persisted_reused_and_preserves_candidate_ranges(tmp_path):
         for x in store.connection.execute("SELECT operation FROM ai_usage ORDER BY id")
     ]
     assert operations == ["generation", "rerank"]
+    store.close()
+
+
+def test_render_metadata_preserves_editorial_order_and_scores(tmp_path):
+    store, path = generated_analysis(tmp_path)
+    rerank_analysis(
+        youtube_id="video",
+        transcript=transcript(),
+        analysis_path=path,
+        reranker=Reranker(),
+        state_store=store,
+        title="title",
+        creator="creator",
+        theme="lol",
+        theme_prompt="humor",
+    )
+    analysis = load_analysis(path, transcript(), youtube_id="video")
+    masters = tuple(tmp_path / f"{index:02d}.mp4" for index in range(1, 4))
+    records = rendered_short_records(masters, path, analysis, transcript())
+    assert [item.clip_index for item in records] == [1, 2, 3]
+    assert [item.candidate_id for item in records] == [
+        "candidate-4",
+        "candidate-2",
+        "candidate-3",
+    ]
+    assert [item.editorial_score for item in records] == [0.94, 0.91, 0.88]
+    assert [item.generator_score for item in records] == [0.79, 0.95, 0.8]
     store.close()
 
 

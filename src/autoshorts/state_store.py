@@ -12,7 +12,7 @@ from pathlib import Path
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class VideoStatus(StrEnum):
@@ -80,6 +80,12 @@ class VideoRecord:
 class RenderedShort:
     clip_index: int
     file_path: Path
+    title: str = ""
+    headline: str = ""
+    generator_score: float | None = None
+    editorial_score: float | None = None
+    candidate_id: str | None = None
+    duration_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +110,30 @@ class ShortRecord:
     updated_at: str
     posted_at: str | None
     error: str | None
+    title: str
+    headline: str
+    generator_score: float | None
+    editorial_score: float | None
+    candidate_id: str | None
+    duration_seconds: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class QueueMetadata:
+    youtube_id: str
+    creator_name: str
+    theme_name: str
+    rank: int
+    account_slot: int
+    account_identifier: str
+    title: str
+    headline: str
+    generator_score: float | None
+    editorial_score: float | None
+    candidate_id: str | None
+    duration_seconds: float | None
+    master_path: Path
+    queue_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,14 +481,21 @@ class StateStore:
                     """
                     INSERT INTO shorts (
                         youtube_id, clip_index, status, file_path,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        title, headline, generator_score, editorial_score,
+                        candidate_id, duration_seconds, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         youtube_id,
                         item.clip_index,
                         ShortStatus.RENDERED,
                         str(item.file_path),
+                        item.title,
+                        item.headline,
+                        item.generator_score,
+                        item.editorial_score,
+                        item.candidate_id,
+                        item.duration_seconds,
                         now,
                         now,
                     ),
@@ -513,6 +550,37 @@ class StateStore:
             (youtube_id,),
         ).fetchall()
         return tuple(_short_record(row) for row in rows)
+
+    def queued_metadata(self, youtube_id: str) -> tuple[QueueMetadata, ...]:
+        """Return complete publication metadata in editorial rank order."""
+        rows = self.connection.execute(
+            """
+            SELECT s.*, v.creator_name, v.theme_name
+            FROM shorts AS s JOIN videos AS v USING (youtube_id)
+            WHERE s.youtube_id = ? AND s.status = ?
+            ORDER BY s.clip_index
+            """,
+            (youtube_id, ShortStatus.QUEUED),
+        ).fetchall()
+        return tuple(
+            QueueMetadata(
+                youtube_id=row["youtube_id"],
+                creator_name=row["creator_name"],
+                theme_name=row["theme_name"],
+                rank=row["clip_index"],
+                account_slot=row["account_slot"],
+                account_identifier=row["account_identifier"],
+                title=row["title"],
+                headline=row["headline"],
+                generator_score=row["generator_score"],
+                editorial_score=row["editorial_score"],
+                candidate_id=row["candidate_id"],
+                duration_seconds=row["duration_seconds"],
+                master_path=Path(row["file_path"]),
+                queue_path=Path(row["queue_path"]),
+            )
+            for row in rows
+        )
 
     def _transition_video(
         self, youtube_id: str, status: VideoStatus, *, error: str | None = None
@@ -571,6 +639,12 @@ class StateStore:
                     updated_at TEXT NOT NULL,
                     posted_at TEXT,
                     error TEXT,
+                    title TEXT NOT NULL DEFAULT '',
+                    headline TEXT NOT NULL DEFAULT '',
+                    generator_score REAL,
+                    editorial_score REAL,
+                    candidate_id TEXT,
+                    duration_seconds REAL,
                     FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
                         ON DELETE CASCADE,
                     UNIQUE (youtube_id, clip_index),
@@ -624,6 +698,9 @@ class StateStore:
             version = 4
         if version == 4:
             self._migrate_v4_to_v5()
+            version = 5
+        if version == 5:
+            self._migrate_v5_to_v6()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -714,6 +791,20 @@ class StateStore:
                 """
             )
 
+    def _migrate_v5_to_v6(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE shorts ADD COLUMN title TEXT NOT NULL DEFAULT '';
+                ALTER TABLE shorts ADD COLUMN headline TEXT NOT NULL DEFAULT '';
+                ALTER TABLE shorts ADD COLUMN generator_score REAL;
+                ALTER TABLE shorts ADD COLUMN editorial_score REAL;
+                ALTER TABLE shorts ADD COLUMN candidate_id TEXT;
+                ALTER TABLE shorts ADD COLUMN duration_seconds REAL;
+                PRAGMA user_version = 6;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -748,6 +839,12 @@ def _short_record(row: sqlite3.Row) -> ShortRecord:
         updated_at=row["updated_at"],
         posted_at=row["posted_at"],
         error=row["error"],
+        title=row["title"],
+        headline=row["headline"],
+        generator_score=row["generator_score"],
+        editorial_score=row["editorial_score"],
+        candidate_id=row["candidate_id"],
+        duration_seconds=row["duration_seconds"],
     )
 
 
