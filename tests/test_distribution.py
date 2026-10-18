@@ -15,13 +15,15 @@ from autoshorts.distribution import (
 
 def accounts():
     return tuple(
-        AccountProfile(f"Account {index}", f"a{index}@example.test")
+        AccountProfile(f"Account {index}", f"a{index}@example.test", index)
         for index in range(1, 4)
     )
 
 
 def test_assigns_three_shorts_to_matching_account_slots():
-    assignments = assign_shorts_to_accounts(("one", "two", "three"), accounts())
+    assignments = assign_shorts_to_accounts(
+        ("one", "two", "three"), tuple(reversed(accounts()))
+    )
     assert [(item.clip, item.account.name) for item in assignments] == [
         ("one", "Account 1"),
         ("two", "Account 2"),
@@ -37,8 +39,8 @@ def test_distribution_requires_exactly_three_shorts(clips):
 
 
 def test_distribution_requires_three_enabled_accounts():
-    disabled = (*accounts()[:2], AccountProfile("Off", "off@example.test", False))
-    with pytest.raises(ValueError, match="3 enabled accounts"):
+    disabled = (*accounts()[:2], AccountProfile("Off", "off@example.test", 3, False))
+    with pytest.raises(ValueError, match="slots 1, 2 and 3"):
         assign_shorts_to_accounts((1, 2, 3), disabled)
 
 
@@ -78,3 +80,29 @@ def test_distributes_files_into_account_queues(tmp_path):
         "video_03.mp4",
     ]
     assert all(item.queue_path.is_file() for item in distributed)
+    assert [item.queue_path.parent.parent.name for item in distributed] == [
+        "slot-1-Account_1",
+        "slot-2-Account_2",
+        "slot-3-Account_3",
+    ]
+
+
+def test_partial_distribution_cleans_created_queue_files(tmp_path, monkeypatch):
+    clips = []
+    for index in range(1, 4):
+        path = tmp_path / "masters" / f"{index:02d}.mp4"
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"video")
+        clips.append(ShortArtifact(index, path))
+    assignments = assign_shorts_to_accounts(clips, accounts())
+    real = link_or_copy
+
+    def fail_third(source, destination):
+        if str(destination).endswith("_03.mp4"):
+            raise OSError("disk full")
+        return real(source, destination)
+
+    monkeypatch.setattr("autoshorts.distribution.link_or_copy", fail_third)
+    with pytest.raises(OSError, match="disk full"):
+        distribute_short_files(assignments, tmp_path / "accounts", "video")
+    assert not list((tmp_path / "accounts").rglob("*.mp4"))

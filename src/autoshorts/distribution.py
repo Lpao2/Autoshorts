@@ -45,17 +45,23 @@ class DistributedShort:
 def assign_shorts_to_accounts(
     clips: Sequence[ClipT], accounts: Sequence[AccountProfile]
 ) -> tuple[ShortAssignment[ClipT], ...]:
-    """Map clip 1→account 1, 2→2 and 3→3, preserving input order."""
+    """Map each clip index to the enabled account with the same persistent slot."""
     if len(clips) != 3:
         raise ValueError("Exactly 3 shorts are required for distribution.")
-    enabled = tuple(account for account in accounts if account.enabled)
-    if len(enabled) != 3:
-        raise ValueError("Exactly 3 enabled accounts are required for distribution.")
-    return tuple(
-        ShortAssignment(index, index, clip, account)
-        for index, (clip, account) in enumerate(
-            zip(clips, enabled, strict=True), start=1
+    enabled_by_slot = {account.slot: account for account in accounts if account.enabled}
+    if set(enabled_by_slot) != {1, 2, 3}:
+        missing = sorted({1, 2, 3} - set(enabled_by_slot))
+        detail = (
+            f" Missing enabled slot(s): {', '.join(map(str, missing))}."
+            if missing
+            else ""
         )
+        raise ValueError(f"Enabled account slots 1, 2 and 3 are required.{detail}")
+    if sum(account.enabled for account in accounts) != 3:
+        raise ValueError("Enabled account slots must be unique.")
+    return tuple(
+        ShortAssignment(index, index, clip, enabled_by_slot[index])
+        for index, clip in enumerate(clips, start=1)
     )
 
 
@@ -91,16 +97,24 @@ def distribute_short_files(
         raise ValueError("Exactly 3 assignments are required.")
     root = Path(accounts_root)
     distributed: list[DistributedShort] = []
-    for assignment in assignments:
-        account_directory = _safe_component(assignment.account.name)
-        destination = (
-            root
-            / account_directory
-            / "queue"
-            / f"{youtube_id}_{assignment.clip_index:02d}.mp4"
-        )
-        method = link_or_copy(assignment.clip.file_path, destination)
-        distributed.append(DistributedShort(assignment, destination, method))
+    try:
+        for assignment in assignments:
+            account_directory = (
+                f"slot-{assignment.account_slot}-"
+                f"{_safe_component(assignment.account.name)}"
+            )
+            destination = (
+                root
+                / account_directory
+                / "queue"
+                / f"{youtube_id}_{assignment.clip_index:02d}.mp4"
+            )
+            method = link_or_copy(assignment.clip.file_path, destination)
+            distributed.append(DistributedShort(assignment, destination, method))
+    except Exception:
+        for item in distributed:
+            item.queue_path.unlink(missing_ok=True)
+        raise
     return tuple(distributed)
 
 
