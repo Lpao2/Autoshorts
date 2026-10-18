@@ -1,5 +1,6 @@
 from datetime import date
 
+import pytest
 from test_render_integration import make_settings
 
 from autoshorts.ai_analysis import ClipAnalysis
@@ -206,11 +207,11 @@ def test_gui_request_passes_selected_youtube_browser(tmp_path):
             return self.value
 
     class Creators:
-        def curselection(self):
-            return (0,)
+        def selection(self):
+            return ("creator-0",)
 
-        def get(self, _index):
-            return "Creator"
+        def item(self, _row, _field):
+            return ("✓", "Creator", "https://example.com/videos")
 
     window = object.__new__(AutoShortsWindow)
     window.auto_creators = Creators()
@@ -218,7 +219,88 @@ def test_gui_request_passes_selected_youtube_browser(tmp_path):
     window.auto_quantity = Variable(1)
     window.auto_age = Variable(30)
     window.auto_theme = Variable("tech")
+    window.automation_config = config()
     window.auto_download_only = Variable(True)
     window.auto_youtube_auth = Variable("Brave")
     request = window._automation_request()
     assert request.youtube_access == YouTubeAccess("brave")
+
+
+def test_disabled_creator_is_not_processed(tmp_path, monkeypatch):
+    from autoshorts import automation_pipeline
+
+    disabled_config = AutomationConfig(
+        (
+            ThemeProfile(
+                "tech",
+                "prompt",
+                (
+                    Creator("Enabled", "https://example.com/enabled"),
+                    Creator("Disabled", "https://example.com/disabled", False),
+                ),
+                "tech",
+            ),
+        )
+    )
+    discovered = []
+
+    def discover(name, *_args, **_kwargs):
+        discovered.append(name)
+        return []
+
+    monkeypatch.setattr(automation_pipeline, "discover_creator_videos", discover)
+    run_automation(
+        AutomationRequest("tech", 1, 30, tmp_path, download_only=True),
+        disabled_config,
+        make_settings(tmp_path),
+    )
+    assert discovered == ["Enabled"]
+
+
+def test_execution_selection_is_independent_from_enabled(tmp_path, monkeypatch):
+    from autoshorts import automation_pipeline
+
+    discovered = []
+    monkeypatch.setattr(
+        automation_pipeline,
+        "discover_creator_videos",
+        lambda name, *_args, **_kwargs: discovered.append(name) or [],
+    )
+    selected_config = AutomationConfig(
+        (
+            ThemeProfile(
+                "tech",
+                "prompt",
+                (
+                    Creator("Arthur", "https://example.com/a"),
+                    Creator("Joao", "https://example.com/j"),
+                ),
+                "tech",
+            ),
+        )
+    )
+    run_automation(
+        AutomationRequest(
+            "tech",
+            1,
+            30,
+            tmp_path,
+            download_only=True,
+            selected_creators=("Joao",),
+        ),
+        selected_config,
+        make_settings(tmp_path),
+    )
+    assert discovered == ["Joao"]
+
+
+def test_disabled_theme_cannot_run(tmp_path):
+    disabled = AutomationConfig(
+        (ThemeProfile("tech", "", (), "tech", enabled=False),)
+    )
+    with pytest.raises(ValueError, match="disabled"):
+        run_automation(
+            AutomationRequest("tech", 1, 30, tmp_path, download_only=True),
+            disabled,
+            make_settings(tmp_path),
+        )

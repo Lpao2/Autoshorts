@@ -6,6 +6,8 @@ import pytest
 from test_render_integration import make_settings, synthetic_video  # noqa: F401
 
 pytest.importorskip("tkinter")
+from autoshorts.automation_config import AutomationConfig, Creator, ThemeProfile  # noqa: E402
+from autoshorts.automation_store import AutomationStore  # noqa: E402
 from autoshorts.gui import AutoShortsWindow  # noqa: E402
 
 
@@ -123,3 +125,32 @@ def test_close_waits_for_worker_after_confirmation(window, monkeypatch):
     assert not app.running
     assert not app.controller.busy
     assert "Cancelado" in app.status.get()
+
+
+def test_automatic_tab_reflects_saved_creators_and_disabled_state(window, tmp_path):
+    app, root, _ = window
+    path = tmp_path / "automation.json"
+    AutomationStore(path).save(
+        AutomationConfig(
+            (
+                ThemeProfile(
+                    "LoL",
+                    "",
+                    (
+                        Creator("Arthur", "https://example.com/arthur"),
+                        Creator("Inactive", "https://example.com/inactive", False),
+                    ),
+                    "lol",
+                ),
+            )
+        )
+    )
+    app.auto_config_path.set(str(path))
+    app.load_automation_config_ui(silent=True)
+    root.update_idletasks()
+    rows = app.auto_creators.get_children()
+    assert [app.auto_creators.item(row, "values")[1] for row in rows] == [
+        "Arthur",
+        "Inactive",
+    ]
+    assert app.auto_creators.selection() == (rows[0],)

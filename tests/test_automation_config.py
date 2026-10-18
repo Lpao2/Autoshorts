@@ -49,8 +49,12 @@ def test_creator_directory_is_safe():
 
 def test_invalid_automation_config_is_rejected(tmp_path):
     path = tmp_path / "invalid.json"
-    path.write_text('{"themes": [{"name": "empty", "creators": []}]}', encoding="utf-8")
-    with pytest.raises(ValueError, match="at least one creator"):
+    path.write_text(
+        '{"themes": [{"name": "bad", "creators": '
+        '[{"name": "creator", "videos_url": "not-a-url"}]}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="HTTP"):
         load_automation_config(path)
 
 
