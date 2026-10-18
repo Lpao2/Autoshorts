@@ -10,7 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class VideoStatus(StrEnum):
@@ -81,9 +81,15 @@ class VideoRecord:
 @dataclass(frozen=True, slots=True)
 class RenderedShort:
     clip_index: int
+    file_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class QueuedShort:
+    clip_index: int
     account_slot: int
     account_identifier: str
-    file_path: Path
+    queue_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,10 +97,11 @@ class ShortRecord:
     id: int
     youtube_id: str
     clip_index: int
-    account_slot: int
-    account_identifier: str
+    account_slot: int | None
+    account_identifier: str | None
     status: ShortStatus
     file_path: Path
+    queue_path: Path | None
     created_at: str
     updated_at: str
     posted_at: str | None
@@ -178,6 +185,15 @@ class StateStore:
         record = self.get_video(youtube_id)
         return bool(record and record.status == VideoStatus.COMPLETED)
 
+    def is_produced(self, youtube_id: str) -> bool:
+        """Return whether production reached a state that must not be duplicated."""
+        record = self.get_video(youtube_id)
+        return bool(
+            record
+            and record.status
+            in {VideoStatus.RENDERED, VideoStatus.QUEUED, VideoStatus.COMPLETED}
+        )
+
     def transition_video(
         self,
         youtube_id: str,
@@ -209,8 +225,6 @@ class StateStore:
             raise ValueError("Exactly 3 rendered shorts are required.")
         if {item.clip_index for item in shorts} != {1, 2, 3}:
             raise ValueError("clip_index values must be 1, 2 and 3.")
-        if {item.account_slot for item in shorts} != {1, 2, 3}:
-            raise ValueError("account_slot values must be 1, 2 and 3.")
         missing = [
             str(item.file_path) for item in shorts if not item.file_path.is_file()
         ]
@@ -222,15 +236,13 @@ class StateStore:
                 self.connection.execute(
                     """
                     INSERT INTO shorts (
-                        youtube_id, clip_index, account_slot, account_identifier,
-                        status, file_path, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        youtube_id, clip_index, status, file_path,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         youtube_id,
                         item.clip_index,
-                        item.account_slot,
-                        item.account_identifier,
                         ShortStatus.RENDERED,
                         str(item.file_path),
                         now,
@@ -238,6 +250,47 @@ class StateStore:
                     ),
                 )
             self._transition_video(youtube_id, VideoStatus.RENDERED)
+        return self.shorts_for_video(youtube_id)
+
+    def record_queued_shorts(
+        self, youtube_id: str, shorts: tuple[QueuedShort, ...]
+    ) -> tuple[ShortRecord, ...]:
+        if len(shorts) != 3 or {item.clip_index for item in shorts} != {1, 2, 3}:
+            raise ValueError("Exactly clips 1, 2 and 3 are required for queueing.")
+        if {item.account_slot for item in shorts} != {1, 2, 3}:
+            raise ValueError("Account slots 1, 2 and 3 are required for queueing.")
+        missing = [
+            str(item.queue_path) for item in shorts if not item.queue_path.is_file()
+        ]
+        if missing:
+            raise ValueError(f"Queued short does not exist: {missing[0]}")
+        now = _now()
+        with self.connection:
+            current = self.get_video(youtube_id)
+            if current is None or current.status != VideoStatus.RENDERED:
+                raise ValueError("Video must be RENDERED before queueing.")
+            for item in shorts:
+                cursor = self.connection.execute(
+                    """
+                    UPDATE shorts
+                    SET account_slot = ?, account_identifier = ?, status = ?,
+                        queue_path = ?, updated_at = ?
+                    WHERE youtube_id = ? AND clip_index = ? AND status = ?
+                    """,
+                    (
+                        item.account_slot,
+                        item.account_identifier,
+                        ShortStatus.QUEUED,
+                        str(item.queue_path),
+                        now,
+                        youtube_id,
+                        item.clip_index,
+                        ShortStatus.RENDERED,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError(f"Rendered Short {item.clip_index} was not found.")
+            self._transition_video(youtube_id, VideoStatus.QUEUED)
         return self.shorts_for_video(youtube_id)
 
     def shorts_for_video(self, youtube_id: str) -> tuple[ShortRecord, ...]:
@@ -271,8 +324,12 @@ class StateStore:
         )
 
     def _initialize(self) -> None:
-        with self.connection:
-            self.connection.executescript(
+        version = self.schema_version
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(f"Unsupported state schema version: {version}")
+        if version == 0:
+            with self.connection:
+                self.connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS videos (
                     youtube_id TEXT PRIMARY KEY,
@@ -291,10 +348,11 @@ class StateStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     youtube_id TEXT NOT NULL,
                     clip_index INTEGER NOT NULL CHECK (clip_index BETWEEN 1 AND 3),
-                    account_slot INTEGER NOT NULL CHECK (account_slot BETWEEN 1 AND 3),
-                    account_identifier TEXT NOT NULL,
+                    account_slot INTEGER CHECK (account_slot BETWEEN 1 AND 3),
+                    account_identifier TEXT,
                     status TEXT NOT NULL,
                     file_path TEXT NOT NULL,
+                    queue_path TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     posted_at TEXT,
@@ -308,8 +366,47 @@ class StateStore:
                 CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
                 CREATE INDEX IF NOT EXISTS idx_shorts_status ON shorts(status);
                 """
+                )
+                self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            return
+        if version == 1:
+            self._migrate_v1_to_v2()
+
+    def _migrate_v1_to_v2(self) -> None:
+        """Separate rendered masters from queue assignment while preserving rows."""
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE shorts RENAME TO shorts_v1;
+                CREATE TABLE shorts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    youtube_id TEXT NOT NULL,
+                    clip_index INTEGER NOT NULL CHECK (clip_index BETWEEN 1 AND 3),
+                    account_slot INTEGER CHECK (account_slot BETWEEN 1 AND 3),
+                    account_identifier TEXT,
+                    status TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    queue_path TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    posted_at TEXT,
+                    error TEXT,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE,
+                    UNIQUE (youtube_id, clip_index),
+                    UNIQUE (youtube_id, account_slot)
+                );
+                INSERT INTO shorts (
+                    id, youtube_id, clip_index, account_slot, account_identifier,
+                    status, file_path, created_at, updated_at, posted_at, error
+                ) SELECT id, youtube_id, clip_index, account_slot, account_identifier,
+                    status, file_path, created_at, updated_at, posted_at, error
+                  FROM shorts_v1;
+                DROP TABLE shorts_v1;
+                CREATE INDEX idx_shorts_status ON shorts(status);
+                PRAGMA user_version = 2;
+                """
             )
-            self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _now() -> str:
@@ -340,6 +437,7 @@ def _short_record(row: sqlite3.Row) -> ShortRecord:
         account_identifier=row["account_identifier"],
         status=ShortStatus(row["status"]),
         file_path=Path(row["file_path"]),
+        queue_path=Path(row["queue_path"]) if row["queue_path"] else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         posted_at=row["posted_at"],

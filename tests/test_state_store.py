@@ -4,6 +4,7 @@ import pytest
 
 from autoshorts.state_store import (
     SCHEMA_VERSION,
+    QueuedShort,
     RenderedShort,
     StateStore,
     VideoStatus,
@@ -89,10 +90,7 @@ def test_three_shorts_and_rendered_transition_are_atomic(tmp_path):
             files.append(path)
         rows = store.record_rendered_shorts(
             "video-1",
-            tuple(
-                RenderedShort(index, index, f"account-{index}", files[index - 1])
-                for index in range(1, 4)
-            ),
+            tuple(RenderedShort(index, files[index - 1]) for index in range(1, 4)),
         )
         assert [row.clip_index for row in rows] == [1, 2, 3]
         assert store.get_video("video-1").status == VideoStatus.RENDERED
@@ -108,9 +106,15 @@ def test_short_transaction_rolls_back_on_insert_failure(tmp_path):
             path.touch()
             files.append(path)
         records = (
-            RenderedShort(1, 1, "account-1", files[0]),
-            RenderedShort(2, 2, None, files[1]),  # type: ignore[arg-type]
-            RenderedShort(3, 3, "account-3", files[2]),
+            RenderedShort(1, files[0]),
+            RenderedShort(2, files[1]),
+            RenderedShort(3, files[2]),
+        )
+        store.connection.execute(
+            """
+            CREATE TRIGGER fail_second_short BEFORE INSERT ON shorts
+            WHEN NEW.clip_index = 2 BEGIN SELECT RAISE(ABORT, 'short 2 failed'); END
+            """
         )
         with pytest.raises(sqlite3.IntegrityError):
             store.record_rendered_shorts("video-1", records)
@@ -135,3 +139,80 @@ def test_default_db_path_can_be_overridden(tmp_path, monkeypatch):
     selected = tmp_path / "server.db"
     monkeypatch.setenv("AUTOSHORTS_STATE_DB", str(selected))
     assert default_state_db_path(tmp_path) == selected.resolve()
+
+
+def test_queue_three_shorts_and_video_atomically(tmp_path):
+    with StateStore(tmp_path / "state.db") as store:
+        register(store)
+        advance_to_rendering(store)
+        masters = tuple(tmp_path / f"{index:02d}.mp4" for index in range(1, 4))
+        queues = tuple(tmp_path / f"queue-{index}.mp4" for index in range(1, 4))
+        for path in (*masters, *queues):
+            path.touch()
+        store.record_rendered_shorts(
+            "video-1",
+            tuple(RenderedShort(index, path) for index, path in enumerate(masters, 1)),
+        )
+        rows = store.record_queued_shorts(
+            "video-1",
+            tuple(
+                QueuedShort(index, index, f"a{index}@example.test", path)
+                for index, path in enumerate(queues, 1)
+            ),
+        )
+        assert store.get_video("video-1").status == VideoStatus.QUEUED
+        assert [row.account_slot for row in rows] == [1, 2, 3]
+        assert [row.queue_path for row in rows] == list(queues)
+
+
+@pytest.mark.parametrize(
+    "status", [VideoStatus.RENDERED, VideoStatus.QUEUED, VideoStatus.COMPLETED]
+)
+def test_produced_states_are_deduplicated(tmp_path, status):
+    with StateStore(tmp_path / "state.db") as store:
+        register(store)
+        store.connection.execute(
+            "UPDATE videos SET status = ? WHERE youtube_id = 'video-1'", (status,)
+        )
+        store.connection.commit()
+        assert store.is_produced("video-1")
+
+
+def test_migrates_v1_database_and_preserves_data(tmp_path):
+    path = tmp_path / "v1.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE videos (
+            youtube_id TEXT PRIMARY KEY, source_url TEXT NOT NULL,
+            creator_name TEXT NOT NULL, theme_name TEXT NOT NULL, title TEXT NOT NULL,
+            status TEXT NOT NULL, discovered_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            processed_at TEXT, error TEXT
+        );
+        CREATE TABLE shorts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, youtube_id TEXT NOT NULL,
+            clip_index INTEGER NOT NULL, account_slot INTEGER NOT NULL,
+            account_identifier TEXT NOT NULL, status TEXT NOT NULL,
+            file_path TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            posted_at TEXT, error TEXT
+        );
+        INSERT INTO videos VALUES (
+            'old', 'url', 'creator', 'theme', 'title', 'RENDERED',
+            'created', 'updated', NULL, NULL
+        );
+        INSERT INTO shorts VALUES (
+            1, 'old', 1, 1, 'account', 'RENDERED', '/tmp/01.mp4',
+            'created', 'updated', NULL, NULL
+        );
+        PRAGMA user_version = 1;
+        """
+    )
+    connection.close()
+    with StateStore(path) as store:
+        assert store.schema_version == SCHEMA_VERSION
+        assert store.get_video("old").title == "title"
+        assert store.shorts_for_video("old")[0].account_identifier == "account"
+        columns = {
+            row[1] for row in store.connection.execute("PRAGMA table_info(shorts)")
+        }
+        assert "queue_path" in columns
