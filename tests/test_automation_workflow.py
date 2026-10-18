@@ -304,3 +304,42 @@ def test_disabled_theme_cannot_run(tmp_path):
             disabled,
             make_settings(tmp_path),
         )
+
+
+def test_completed_youtube_id_is_skipped_globally(tmp_path, monkeypatch):
+    from autoshorts import automation_pipeline
+
+    completed = VideoCandidate(
+        "Creator",
+        "https://youtube.com/watch?v=global-id",
+        "Already done",
+        date.today(),
+        10,
+        "global-id",
+    )
+    monkeypatch.setattr(
+        automation_pipeline,
+        "discover_creator_videos",
+        lambda *args, **kwargs: [completed],
+    )
+    monkeypatch.setattr(
+        automation_pipeline,
+        "download_video",
+        lambda *args, **kwargs: pytest.fail("completed video must not download"),
+    )
+
+    class CompletedStore:
+        def is_completed(self, youtube_id):
+            return youtube_id == "global-id"
+
+    events = []
+    result = run_automation(
+        AutomationRequest("tech", 1, 30, tmp_path, download_only=True),
+        config(),
+        make_settings(tmp_path),
+        state_store=CompletedStore(),
+        event_handler=events.append,
+    )
+    assert result == ()
+    skipped = next(event for event in events if event.kind == "candidate_skipped")
+    assert skipped.message == "already_processed"
