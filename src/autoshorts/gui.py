@@ -1449,6 +1449,21 @@ class AutoShortsWindow:
                     "Autenticação YouTube."
                 )
             return
+        if event.kind == "recovery_started":
+            self.auto_status.set(f"Retomando vídeo em {event.message}")
+            self.auto_log(
+                f"Retomada: {event.title} | {event.message} | "
+                f"{event.data.get('reason', '')}"
+            )
+            return
+        if event.kind == "source_reused":
+            self.auto_status.set("Source validado e reutilizado na retomada")
+            self.auto_log(f"Retomada sem novo download: {event.path}")
+            return
+        if event.kind == "recovery_failed":
+            self.auto_status.set("Retomada exige intervenção")
+            self.auto_log(f"Retomada bloqueada: {event.message}")
+            return
         if event.kind == "discovery_started":
             self.auto_status.set(f"Descobrindo vídeos de {event.creator}...")
             self.auto_log(f"Descobrindo vídeos de {event.creator}")

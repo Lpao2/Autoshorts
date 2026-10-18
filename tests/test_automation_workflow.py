@@ -376,18 +376,26 @@ def test_completed_youtube_id_is_skipped_globally(tmp_path, monkeypatch):
         lambda *args, **kwargs: pytest.fail("completed video must not download"),
     )
 
-    class CompletedStore:
-        def is_produced(self, youtube_id):
-            return youtube_id == "global-id"
-
     events = []
-    result = run_automation(
-        AutomationRequest("tech", 1, 30, tmp_path, download_only=True),
-        config(),
-        make_settings(tmp_path),
-        state_store=CompletedStore(),
-        event_handler=events.append,
-    )
+    with StateStore(tmp_path / "completed.db") as state_store:
+        state_store.register_video(
+            youtube_id="global-id",
+            source_url=completed.url,
+            creator_name=completed.creator,
+            theme_name="tech",
+            title=completed.title,
+        )
+        state_store.connection.execute(
+            "UPDATE videos SET status = 'COMPLETED' WHERE youtube_id = 'global-id'"
+        )
+        state_store.connection.commit()
+        result = run_automation(
+            AutomationRequest("tech", 1, 30, tmp_path, download_only=True),
+            config(),
+            make_settings(tmp_path),
+            state_store=state_store,
+            event_handler=events.append,
+        )
     assert result == ()
     skipped = next(event for event in events if event.kind == "candidate_skipped")
     assert skipped.message == "already_produced"

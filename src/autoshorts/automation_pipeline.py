@@ -33,6 +33,12 @@ from autoshorts.distribution import (
     distribute_short_files,
 )
 from autoshorts.pipeline import PipelineResult, run_pipeline
+from autoshorts.recovery import (
+    RecoveryAction,
+    inspect_video_state,
+    prepare_recovery,
+    resume_rendered_distribution,
+)
 from autoshorts.render_events import RenderCancelled
 from autoshorts.state_store import (
     QueuedShort,
@@ -127,8 +133,27 @@ def run_automation(
                 stage = "download"
                 check_automation_cancelled(cancel)
                 youtube_id = candidate_youtube_id(candidate)
+                recovery_plan = None
+                reusable_source: Path | None = None
                 if state_store is not None and youtube_id:
-                    if state_store.is_produced(youtube_id):
+                    state_store.register_video(
+                        youtube_id=youtube_id,
+                        source_url=candidate.url,
+                        creator_name=candidate.creator,
+                        theme_name=theme.name,
+                        title=candidate.title,
+                    )
+                    creator_directory = _safe_creator_directory(candidate.creator)
+                    recovery_plan = inspect_video_state(
+                        state_store,
+                        youtube_id,
+                        theme_root=theme_root,
+                        creator_directory=creator_directory,
+                        ffprobe_path=settings.ffprobe_path,
+                        expected_width=settings.output_width,
+                        expected_height=settings.output_height,
+                    )
+                    if recovery_plan.next_action == RecoveryAction.NOOP:
                         emit(
                             AutomationEvent(
                                 "candidate_skipped",
@@ -139,59 +164,136 @@ def run_automation(
                             )
                         )
                         continue
-                    state_store.register_video(
-                        youtube_id=youtube_id,
-                        source_url=candidate.url,
-                        creator_name=candidate.creator,
-                        theme_name=theme.name,
-                        title=candidate.title,
-                    )
-                    record = state_store.get_video(youtube_id)
-                    if record and record.status == VideoStatus.FAILED:
-                        state_store.transition_video(youtube_id, VideoStatus.DISCOVERED)
+                    if recovery_plan.current_state != VideoStatus.DISCOVERED:
+                        emit(
+                            AutomationEvent(
+                                "recovery_started",
+                                creator=candidate.creator,
+                                title=candidate.title,
+                                url=candidate.url,
+                                message=(
+                                    f"{recovery_plan.current_state} → "
+                                    f"{recovery_plan.next_action}"
+                                ),
+                                data={"reason": recovery_plan.reason},
+                            )
+                        )
+                    if recovery_plan.next_action == RecoveryAction.DISTRIBUTE:
+                        emit(
+                            _candidate_event(
+                                "candidate_found", candidate, index, len(candidates)
+                            )
+                        )
+                        resume_rendered_distribution(
+                            state_store,
+                            recovery_plan,
+                            theme,
+                            theme_root / "accounts",
+                        )
+                        source = (
+                            theme_root
+                            / "downloads"
+                            / creator_directory
+                            / f"{youtube_id}.mp4"
+                        )
+                        if source.exists():
+                            _remove_queued_source(source, candidate, emit)
+                        emit(
+                            _candidate_event(
+                                "queue_finished", candidate, index, len(candidates)
+                            )
+                        )
+                        results.append(
+                            AutomationItemResult(candidate, None, None, None)
+                        )
+                        emit(
+                            _candidate_event(
+                                "item_finished", candidate, index, len(candidates)
+                            )
+                        )
+                        continue
+                    if recovery_plan.next_action in {
+                        RecoveryAction.INCONSISTENT,
+                        RecoveryAction.UNSUPPORTED,
+                        RecoveryAction.MANUAL_RETRY,
+                    }:
+                        emit(
+                            AutomationEvent(
+                                "recovery_failed",
+                                creator=candidate.creator,
+                                title=candidate.title,
+                                url=candidate.url,
+                                message=recovery_plan.reason,
+                            )
+                        )
+                        results.append(
+                            AutomationItemResult(
+                                candidate, None, None, None, recovery_plan.reason
+                            )
+                        )
+                        continue
+                    prepare_recovery(state_store, recovery_plan)
+                    if recovery_plan.next_action in {
+                        RecoveryAction.REUSE_SOURCE,
+                        RecoveryAction.RERENDER,
+                    }:
+                        reusable_source = recovery_plan.reusable_artifacts[0]
                 emit(
                     _candidate_event(
                         "candidate_found", candidate, index, len(candidates)
                     )
                 )
-                emit(
-                    _candidate_event(
-                        "download_started", candidate, index, len(candidates)
-                    )
-                )
                 try:
-                    if state_store is not None and youtube_id:
-                        record = state_store.get_video(youtube_id)
-                        if record and record.status == VideoStatus.DISCOVERED:
-                            state_store.transition_video(
-                                youtube_id, VideoStatus.DOWNLOADING
+                    if reusable_source is None:
+                        emit(
+                            _candidate_event(
+                                "download_started", candidate, index, len(candidates)
                             )
-                    source_path = download_video(
-                        candidate,
-                        theme_root
-                        / "downloads"
-                        / _safe_creator_directory(candidate.creator),
-                        access=request.youtube_access,
-                        cancel=cancel,
-                        progress_handler=lambda progress, item=candidate: emit(
+                        )
+                        if state_store is not None and youtube_id:
+                            record = state_store.get_video(youtube_id)
+                            if record and record.status == VideoStatus.DISCOVERED:
+                                state_store.transition_video(
+                                    youtube_id, VideoStatus.DOWNLOADING
+                                )
+                        source_path = download_video(
+                            candidate,
+                            theme_root
+                            / "downloads"
+                            / _safe_creator_directory(candidate.creator),
+                            access=request.youtube_access,
+                            cancel=cancel,
+                            progress_handler=lambda progress, item=candidate: emit(
+                                AutomationEvent(
+                                    "download_progress",
+                                    creator=item.creator,
+                                    title=item.title,
+                                    url=item.url,
+                                    path=Path(progress.filename)
+                                    if progress.filename
+                                    else None,
+                                    progress=progress.percent,
+                                    downloaded_bytes=progress.downloaded_bytes,
+                                    total_bytes=progress.total_bytes,
+                                    total_is_estimate=progress.total_is_estimate,
+                                    speed=progress.speed,
+                                    eta=progress.eta,
+                                    message=progress.status,
+                                )
+                            ),
+                        )
+                    else:
+                        source_path = reusable_source
+                        emit(
                             AutomationEvent(
-                                "download_progress",
-                                creator=item.creator,
-                                title=item.title,
-                                url=item.url,
-                                path=Path(progress.filename)
-                                if progress.filename
-                                else None,
-                                progress=progress.percent,
-                                downloaded_bytes=progress.downloaded_bytes,
-                                total_bytes=progress.total_bytes,
-                                total_is_estimate=progress.total_is_estimate,
-                                speed=progress.speed,
-                                eta=progress.eta,
-                                message=progress.status,
+                                "source_reused",
+                                creator=candidate.creator,
+                                title=candidate.title,
+                                url=candidate.url,
+                                path=source_path,
+                                message="recovery",
                             )
-                        ),
-                    )
+                        )
                     emit(
                         AutomationEvent(
                             "download_finished",
@@ -256,7 +358,15 @@ def run_automation(
                         / youtube_id
                     )
                     render_settings = replace(
-                        settings, output_dir=output, exact_index_filenames=True
+                        settings,
+                        output_dir=output,
+                        exact_index_filenames=True,
+                        overwrite_policy=(
+                            "skip"
+                            if recovery_plan
+                            and recovery_plan.next_action == RecoveryAction.RERENDER
+                            else settings.overwrite_policy
+                        ),
                     )
                     state_store.transition_video(youtube_id, VideoStatus.RENDERING)
                     render = run_pipeline(
