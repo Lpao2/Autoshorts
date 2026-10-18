@@ -10,7 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class VideoStatus(StrEnum):
@@ -102,6 +102,16 @@ class ShortRecord:
     updated_at: str
     posted_at: str | None
     error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptRecord:
+    youtube_id: str
+    file_path: Path
+    provider: str
+    model: str
+    language: str
+    created_at: str
 
 
 def default_state_db_path(project_root: Path | None = None) -> Path:
@@ -236,6 +246,10 @@ class StateStore:
             (VideoStatus.DOWNLOADED, VideoStatus.DISCOVERED),
             (VideoStatus.RENDERING, VideoStatus.DISCOVERED),
             (VideoStatus.RENDERING, VideoStatus.DOWNLOADED),
+            (VideoStatus.TRANSCRIBING, VideoStatus.DOWNLOADED),
+            (VideoStatus.TRANSCRIBED, VideoStatus.DOWNLOADED),
+            (VideoStatus.TRANSCRIBING, VideoStatus.DISCOVERED),
+            (VideoStatus.TRANSCRIBED, VideoStatus.DISCOVERED),
             (VideoStatus.FAILED, VideoStatus.DISCOVERED),
         }
         with self.connection:
@@ -252,6 +266,53 @@ class StateStore:
         updated = self.get_video(youtube_id)
         assert updated is not None
         return updated
+
+    def get_transcript(self, youtube_id: str) -> TranscriptRecord | None:
+        row = self.connection.execute(
+            "SELECT * FROM transcripts WHERE youtube_id = ?", (youtube_id,)
+        ).fetchone()
+        return _transcript_record(row) if row else None
+
+    def record_transcript(
+        self,
+        youtube_id: str,
+        *,
+        file_path: Path,
+        provider: str,
+        model: str,
+        language: str,
+    ) -> TranscriptRecord:
+        if not file_path.is_file():
+            raise ValueError(f"Transcript artifact does not exist: {file_path}")
+        now = _now()
+        with self.connection:
+            current = self.get_video(youtube_id)
+            if current is None or current.status != VideoStatus.TRANSCRIBING:
+                raise ValueError("Video must be TRANSCRIBING before persistence.")
+            self.connection.execute(
+                """
+                INSERT INTO transcripts (
+                    youtube_id, file_path, provider, model, language, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(youtube_id) DO UPDATE SET
+                    file_path = excluded.file_path,
+                    provider = excluded.provider,
+                    model = excluded.model,
+                    language = excluded.language,
+                    created_at = excluded.created_at
+                """,
+                (youtube_id, str(file_path), provider, model, language, now),
+            )
+            self._transition_video(youtube_id, VideoStatus.TRANSCRIBED)
+        record = self.get_transcript(youtube_id)
+        assert record is not None
+        return record
+
+    def clear_transcript(self, youtube_id: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM transcripts WHERE youtube_id = ?", (youtube_id,)
+            )
 
     def record_rendered_shorts(
         self, youtube_id: str, shorts: tuple[RenderedShort, ...]
@@ -400,12 +461,26 @@ class StateStore:
 
                 CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
                 CREATE INDEX IF NOT EXISTS idx_shorts_status ON shorts(status);
+
+                CREATE TABLE IF NOT EXISTS transcripts (
+                    youtube_id TEXT PRIMARY KEY,
+                    file_path TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         if version == 1:
             self._migrate_v1_to_v2()
+            version = 2
+        if version == 2:
+            self._migrate_v2_to_v3()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -443,6 +518,24 @@ class StateStore:
                 """
             )
 
+    def _migrate_v2_to_v3(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE transcripts (
+                    youtube_id TEXT PRIMARY KEY,
+                    file_path TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
+                PRAGMA user_version = 3;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -477,4 +570,15 @@ def _short_record(row: sqlite3.Row) -> ShortRecord:
         updated_at=row["updated_at"],
         posted_at=row["posted_at"],
         error=row["error"],
+    )
+
+
+def _transcript_record(row: sqlite3.Row) -> TranscriptRecord:
+    return TranscriptRecord(
+        youtube_id=row["youtube_id"],
+        file_path=Path(row["file_path"]),
+        provider=row["provider"],
+        model=row["model"],
+        language=row["language"],
+        created_at=row["created_at"],
     )
