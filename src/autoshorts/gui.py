@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import importlib.util
 import subprocess
 import sys
 import tkinter as tk
@@ -24,6 +25,7 @@ from autoshorts.automation_store import (
 from autoshorts.collection import YouTubeAccess, resolve_deno
 from autoshorts.config import OverwritePolicy, Settings, load_settings
 from autoshorts.fake_analysis import fake_analysis_provider
+from autoshorts.faster_whisper_provider import FasterWhisperProvider
 from autoshorts.gui_jobs import JobController, JobRequest
 from autoshorts.pipeline import PipelineResult
 from autoshorts.render_events import RenderEvent
@@ -468,6 +470,7 @@ class AutoShortsWindow:
         )
         self.auto_download_only = tk.BooleanVar(master=self.root, value=True)
         self.auto_fake = tk.BooleanVar(master=self.root, value=False)
+        self.auto_transcription = tk.BooleanVar(master=self.root, value=False)
         self.auto_status = tk.StringVar(
             master=self.root, value="Carregue uma configuração."
         )
@@ -602,6 +605,14 @@ class AutoShortsWindow:
             variable=self.auto_fake,
         )
         self.fake_check.pack(side="left", padx=14)
+        transcription_available = importlib.util.find_spec("faster_whisper") is not None
+        self.transcription_check = ttk.Checkbutton(
+            modes,
+            text="Transcrição local (Whisper)",
+            variable=self.auto_transcription,
+            state="normal" if transcription_available else "disabled",
+        )
+        self.transcription_check.pack(side="left")
         actions = ttk.Frame(frame)
         actions.grid(row=8, column=0, columnspan=3, sticky="ew", pady=8)
         ttk.Button(
@@ -672,6 +683,10 @@ class AutoShortsWindow:
         self.fake_check.configure(
             state="disabled" if self.auto_download_only.get() else "normal"
         )
+        if importlib.util.find_spec("faster_whisper") is not None:
+            self.transcription_check.configure(
+                state="disabled" if self.auto_download_only.get() else "normal"
+            )
 
     def _configure_style(self) -> None:
         style = ttk.Style(self.root)
@@ -1177,6 +1192,7 @@ class AutoShortsWindow:
             messagebox.showerror("Automação", str(exc))
             return
         analyze = None
+        transcribe = None
         if resolve_deno() is None:
             warning = (
                 "Runtime JavaScript Deno não encontrado. "
@@ -1194,6 +1210,8 @@ class AutoShortsWindow:
                 )
                 return
             analyze = fake_analysis_provider
+            if self.auto_transcription.get():
+                transcribe = FasterWhisperProvider()
         self.automation_rows.clear()
         self.automation_found = 0
         self.automation_completed = 0
@@ -1205,7 +1223,10 @@ class AutoShortsWindow:
         self.auto_cancel_button.configure(state="normal")
         self.auto_status.set("Iniciando automação...")
         self.automation_controller.start(
-            request, self.automation_config, analyze=analyze
+            request,
+            self.automation_config,
+            analyze=analyze,
+            transcribe=transcribe,
         )
 
     def cancel_automation(self) -> None:
@@ -1498,6 +1519,27 @@ class AutoShortsWindow:
             detail = _download_detail(event)
             self.auto_status.set(f"Baixando {event.title or ''} — {detail}")
             return
+        if event.kind == "transcription_started":
+            self.auto_status.set("Transcrevendo...")
+            self.auto_log(f"Transcrição local iniciada: {event.title}")
+            return
+        if event.kind == "transcription_progress":
+            if event.progress is None:
+                self.auto_status.set("Transcrevendo...")
+            else:
+                self.auto_progress.stop()
+                self.auto_progress.configure(
+                    mode="determinate", value=event.progress * 100
+                )
+                self.auto_status.set(f"Transcrevendo {event.progress:.0%}")
+            return
+        if event.kind == "transcription_finished":
+            self.auto_status.set("Transcrição concluída")
+            self.auto_log(
+                f"Transcrição concluída ({event.data.get('language', '?')}): "
+                f"{event.path}"
+            )
+            return
         if event.kind == "render_progress":
             progress = event.progress or 0.0
             clip = event.index or 0
@@ -1633,6 +1675,7 @@ class AutoShortsWindow:
         self.auto_age = None
         self.auto_download_only = None
         self.auto_fake = None
+        self.auto_transcription = None
         self.auto_status = None
         # Finalize Tk variables while Tcl is still alive, never from a later
         # worker/finalizer phase after root.destroy().

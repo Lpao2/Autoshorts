@@ -37,6 +37,7 @@ from autoshorts.recovery import (
     RecoveryAction,
     inspect_video_state,
     prepare_recovery,
+    reconcile_transcript,
     resume_rendered_distribution,
 )
 from autoshorts.render_events import RenderCancelled
@@ -46,6 +47,8 @@ from autoshorts.state_store import (
     StateStore,
     VideoStatus,
 )
+from autoshorts.transcription import Transcript, TranscriptionProvider, load_transcript
+from autoshorts.transcription_service import transcript_video
 
 AnalysisProvider = Callable[[Path, VideoCandidate, ThemeProfile], ClipAnalysis]
 EventHandler = Callable[[AutomationEvent], None]
@@ -69,6 +72,7 @@ class AutomationItemResult:
     analysis: ClipAnalysis | None
     render: PipelineResult | None
     error: str | None = None
+    transcript: Transcript | None = None
 
 
 def run_automation(
@@ -77,6 +81,7 @@ def run_automation(
     settings: Settings,
     *,
     analyze: AnalysisProvider | None = None,
+    transcribe: TranscriptionProvider | None = None,
     event_handler: EventHandler | None = None,
     cancel: Event | None = None,
     state_store: StateStore | None = None,
@@ -135,6 +140,7 @@ def run_automation(
                 youtube_id = candidate_youtube_id(candidate)
                 recovery_plan = None
                 reusable_source: Path | None = None
+                transcript: Transcript | None = None
                 if state_store is not None and youtube_id:
                     state_store.register_video(
                         youtube_id=youtube_id,
@@ -212,6 +218,28 @@ def run_automation(
                             )
                         )
                         continue
+                    if recovery_plan.next_action == RecoveryAction.RECONCILE_TRANSCRIPT:
+                        transcript = reconcile_transcript(state_store, recovery_plan)
+                        source = (
+                            theme_root
+                            / "downloads"
+                            / creator_directory
+                            / f"{youtube_id}.mp4"
+                        )
+                        if source.is_file():
+                            reusable_source = source
+                    elif recovery_plan.next_action == RecoveryAction.REUSE_TRANSCRIPT:
+                        transcript = load_transcript(
+                            recovery_plan.reusable_artifacts[0], youtube_id=youtube_id
+                        )
+                        source = (
+                            theme_root
+                            / "downloads"
+                            / creator_directory
+                            / f"{youtube_id}.mp4"
+                        )
+                        if source.is_file():
+                            reusable_source = source
                     if recovery_plan.next_action in {
                         RecoveryAction.INCONSISTENT,
                         RecoveryAction.UNSUPPORTED,
@@ -236,6 +264,7 @@ def run_automation(
                     if recovery_plan.next_action in {
                         RecoveryAction.REUSE_SOURCE,
                         RecoveryAction.RERENDER,
+                        RecoveryAction.RETRANSCRIBE,
                     }:
                         reusable_source = recovery_plan.reusable_artifacts[0]
                 emit(
@@ -319,6 +348,26 @@ def run_automation(
                             )
                         )
                         continue
+                    if transcribe is not None and transcript is None:
+                        if state_store is None or not youtube_id:
+                            raise ValueError(
+                                "Transcrição requer SQLite e um youtube_id."
+                            )
+                        stage = "transcription"
+                        transcript = transcript_video(
+                            youtube_id=youtube_id,
+                            source_path=source_path,
+                            artifact_path=(
+                                theme_root / ".work" / youtube_id / "transcript.json"
+                            ),
+                            provider=transcribe,
+                            state_store=state_store,
+                            creator=candidate.creator,
+                            title=candidate.title,
+                            url=candidate.url,
+                            cancel=cancel,
+                            event_handler=emit,
+                        )
                     assert analyze is not None
                     stage = "analysis"
                     check_automation_cancelled(cancel)
@@ -437,7 +486,13 @@ def run_automation(
                     )
                     _remove_queued_source(source_path, candidate, emit)
                     results.append(
-                        AutomationItemResult(candidate, source_path, analysis, render)
+                        AutomationItemResult(
+                            candidate,
+                            source_path,
+                            analysis,
+                            render,
+                            transcript=transcript,
+                        )
                     )
                     emit(
                         _candidate_event(
