@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import cast
 
-from autoshorts.automation_config import AutomationConfig
+from autoshorts.automation_config import AutomationConfig, ThemePolicy
 from autoshorts.automation_events import AutomationEvent
 from autoshorts.automation_jobs import AutomationController
 from autoshorts.automation_pipeline import AutomationRequest
@@ -28,6 +28,7 @@ from autoshorts.gui_jobs import JobController, JobRequest
 from autoshorts.pipeline import PipelineResult
 from autoshorts.render_events import RenderEvent
 from autoshorts.render_plan import RenderPlan
+from autoshorts.state_store import default_state_db_path
 
 LABELS = {
     "rendering": "Renderizando",
@@ -56,6 +57,7 @@ SKIP_REASONS = {
     "live": "Transmissão ao vivo",
     "upcoming": "Estreia futura",
     "metadata_error": "Erro de metadados",
+    "already_processed": "Já processado anteriormente",
 }
 
 
@@ -127,12 +129,28 @@ class _EntityDialog:
 
 
 class _ThemeDialog(_EntityDialog):
-    def __init__(self, parent, *, name="", output="", prompt="", enabled=True):
+    def __init__(
+        self,
+        parent,
+        *,
+        name="",
+        output="",
+        prompt="",
+        enabled=True,
+        videos_per_creator=1,
+        maximum_age_days=3650,
+    ):
         super().__init__(parent, "Tema")
         self.name = tk.StringVar(master=self.window, value=name)
         self.output = tk.StringVar(master=self.window, value=output)
         self.prompt = tk.StringVar(master=self.window, value=prompt)
         self.enabled = tk.BooleanVar(master=self.window, value=enabled)
+        self.videos_per_creator = tk.IntVar(
+            master=self.window, value=videos_per_creator
+        )
+        self.maximum_age_days = tk.IntVar(
+            master=self.window, value=maximum_age_days
+        )
         self._output_is_suggested = not bool(output)
         for row, (label, variable) in enumerate(
             (
@@ -154,6 +172,16 @@ class _ThemeDialog(_EntityDialog):
         ttk.Checkbutton(self.body, text="Ativo", variable=self.enabled).grid(
             row=3, column=1, sticky="w", pady=4
         )
+        policy = ttk.Frame(self.body)
+        policy.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(policy, text="Vídeos por criador").pack(side="left")
+        ttk.Spinbox(
+            policy, from_=1, to=100, textvariable=self.videos_per_creator, width=6
+        ).pack(side="left", padx=(5, 14))
+        ttk.Label(policy, text="Últimos dias").pack(side="left")
+        ttk.Spinbox(
+            policy, from_=0, to=3650, textvariable=self.maximum_age_days, width=7
+        ).pack(side="left", padx=5)
         self.name.trace_add("write", self._suggest_output)
         self.actions(self._save)
 
@@ -167,6 +195,8 @@ class _ThemeDialog(_EntityDialog):
             self.output.get(),
             self.prompt.get(),
             "1" if self.enabled.get() else "0",
+            str(self.videos_per_creator.get()),
+            str(self.maximum_age_days.get()),
         )
         self.window.destroy()
 
@@ -198,11 +228,44 @@ class _CreatorDialog(_EntityDialog):
         self.window.destroy()
 
 
+class _AccountDialog(_EntityDialog):
+    def __init__(self, parent, *, name="", email="", enabled=True):
+        super().__init__(parent, "Conta de destino")
+        self.name = tk.StringVar(master=self.window, value=name)
+        self.email = tk.StringVar(master=self.window, value=email)
+        self.enabled = tk.BooleanVar(master=self.window, value=enabled)
+        for row, (label, variable) in enumerate(
+            (("Nome", self.name), ("Email identificador", self.email))
+        ):
+            ttk.Label(self.body, text=label).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Entry(self.body, textvariable=variable, width=52).grid(
+                row=row, column=1, sticky="ew", pady=4
+            )
+        ttk.Checkbutton(self.body, text="Ativa", variable=self.enabled).grid(
+            row=2, column=1, sticky="w", pady=4
+        )
+        ttk.Label(
+            self.body,
+            text="O slot define a associação: Short 1→Conta 1, 2→2, 3→3.",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.actions(self._save)
+
+    def _save(self) -> None:
+        self.result = (
+            self.name.get(),
+            self.email.get(),
+            "1" if self.enabled.get() else "0",
+        )
+        self.window.destroy()
+
+
 class AutoShortsWindow:
     def __init__(self, root: tk.Tk, settings: Settings) -> None:
         self.root = root
         self.controller = JobController(settings)
-        self.automation_controller = AutomationController(settings)
+        self.automation_controller = AutomationController(
+            settings, state_db_path=default_state_db_path()
+        )
         self.automation_config: AutomationConfig | None = None
         self.automation_running = False
         self.automation_finishing = False
@@ -376,8 +439,8 @@ class AutoShortsWindow:
 
     def _build_automatic_tab(self, frame: ttk.Frame, settings: Settings) -> None:
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(9, weight=1)
-        frame.rowconfigure(12, weight=2)
+        frame.rowconfigure(11, weight=1)
+        frame.rowconfigure(14, weight=2)
         ttk.Label(frame, text="Automação", style="Title.TLabel").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 12)
         )
@@ -421,7 +484,7 @@ class AutoShortsWindow:
         )
         self.auto_theme_combo.grid(row=0, column=0, sticky="ew")
         self.auto_theme_combo.bind(
-            "<<ComboboxSelected>>", lambda _event: self.refresh_creators()
+            "<<ComboboxSelected>>", lambda _event: self.refresh_theme_details()
         )
         ttk.Button(theme_row, text="Novo", command=self.add_theme_ui).grid(
             row=0, column=1, padx=(6, 0)
@@ -441,7 +504,7 @@ class AutoShortsWindow:
             creators_panel,
             columns=("enabled", "name", "url"),
             show="headings",
-            height=4,
+            height=3,
             selectmode="extended",
         )
         for column, label, width in (
@@ -463,8 +526,42 @@ class AutoShortsWindow:
         ttk.Button(
             creator_actions, text="Remover", command=self.remove_creator_ui
         ).pack(side="left")
+        ttk.Label(frame, text="Contas").grid(row=4, column=0, sticky="nw", pady=4)
+        accounts_panel = ttk.Frame(frame)
+        accounts_panel.grid(row=4, column=1, columnspan=2, sticky="nsew", pady=4)
+        accounts_panel.columnconfigure(0, weight=1)
+        self.auto_accounts = ttk.Treeview(
+            accounts_panel,
+            columns=("slot", "enabled", "name", "email"),
+            show="headings",
+            height=3,
+            selectmode="browse",
+        )
+        for column, label, width in (
+            ("slot", "Slot", 48),
+            ("enabled", "Ativo", 55),
+            ("name", "Conta", 180),
+            ("email", "Email", 360),
+        ):
+            self.auto_accounts.heading(column, text=label)
+            self.auto_accounts.column(column, width=width, stretch=column == "email")
+        self.auto_accounts.grid(row=0, column=0, sticky="nsew")
+        account_actions = ttk.Frame(accounts_panel)
+        account_actions.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+        ttk.Button(account_actions, text="Adicionar", command=self.add_account_ui).pack(
+            side="left"
+        )
+        ttk.Button(account_actions, text="Editar", command=self.edit_account_ui).pack(
+            side="left", padx=6
+        )
+        ttk.Button(
+            account_actions, text="Remover", command=self.remove_account_ui
+        ).pack(side="left")
+        ttk.Label(
+            account_actions, text="Short 1→Slot 1  •  Short 2→Slot 2  •  Short 3→Slot 3"
+        ).pack(side="right")
         limits = ttk.Frame(frame)
-        limits.grid(row=4, column=0, columnspan=3, sticky="ew", pady=5)
+        limits.grid(row=5, column=0, columnspan=3, sticky="ew", pady=5)
         ttk.Label(limits, text="Vídeos por criador:").pack(side="left")
         ttk.Spinbox(
             limits, from_=1, to=100, textvariable=self.auto_quantity, width=6
@@ -483,10 +580,10 @@ class AutoShortsWindow:
         )
         self.auto_auth_combo.pack(side="left")
         self._automation_path_row(
-            frame, 5, "Workspace", self.auto_workspace, self.choose_automation_workspace
+            frame, 6, "Workspace", self.auto_workspace, self.choose_automation_workspace
         )
         modes = ttk.Frame(frame)
-        modes.grid(row=6, column=0, columnspan=3, sticky="ew", pady=6)
+        modes.grid(row=7, column=0, columnspan=3, sticky="ew", pady=6)
         ttk.Checkbutton(
             modes,
             text="Somente download",
@@ -500,7 +597,7 @@ class AutoShortsWindow:
         )
         self.fake_check.pack(side="left", padx=14)
         actions = ttk.Frame(frame)
-        actions.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
+        actions.grid(row=8, column=0, columnspan=3, sticky="ew", pady=8)
         ttk.Button(
             actions, text="Validar configuração", command=self.validate_automation
         ).pack(side="left")
@@ -516,17 +613,19 @@ class AutoShortsWindow:
             actions, text="Abrir workspace", command=self.open_automation_workspace
         ).pack(side="right")
         ttk.Label(frame, textvariable=self.auto_status).grid(
-            row=8, column=0, columnspan=3, sticky="w"
+            row=9, column=0, columnspan=3, sticky="w"
         )
         self.auto_progress = ttk.Progressbar(
             frame, maximum=100, style="Accent.Horizontal.TProgressbar"
         )
-        self.auto_progress.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(4, 8))
+        self.auto_progress.grid(
+            row=10, column=0, columnspan=3, sticky="ew", pady=(4, 8)
+        )
         self.auto_tree = ttk.Treeview(
             frame,
             columns=("creator", "video", "stage", "progress", "status"),
             show="headings",
-            height=8,
+            height=6,
         )
         for name, label, width in (
             ("creator", "Criador", 130),
@@ -537,20 +636,20 @@ class AutoShortsWindow:
         ):
             self.auto_tree.heading(name, text=label)
             self.auto_tree.column(name, width=width, stretch=name == "video")
-        self.auto_tree.grid(row=10, column=0, columnspan=3, sticky="nsew")
+        self.auto_tree.grid(row=11, column=0, columnspan=3, sticky="nsew")
         ttk.Label(frame, text="Logs da automação", style="Section.TLabel").grid(
-            row=11, column=0, columnspan=3, sticky="w", pady=(8, 3)
+            row=12, column=0, columnspan=3, sticky="w", pady=(8, 3)
         )
         self.auto_logs = ScrolledText(
             frame,
-            height=8,
+            height=5,
             state="disabled",
             wrap="word",
             background="#0a101c",
             foreground="#cbd5e1",
             font=("TkFixedFont", 10),
         )
-        self.auto_logs.grid(row=12, column=0, columnspan=3, sticky="nsew")
+        self.auto_logs.grid(row=14, column=0, columnspan=3, sticky="nsew")
         self._sync_analysis_mode()
         self.load_automation_config_ui(silent=True)
 
@@ -704,7 +803,7 @@ class AutoShortsWindow:
             names = [theme.name for theme in self.automation_config.themes]
             selected = current if current in names else (names[0] if names else "")
             self._set_theme(selected)
-            self.refresh_creators()
+            self.refresh_theme_details()
             self.auto_status.set(f"Configuração pronta: {len(names)} tema(s).")
             if not silent:
                 self.auto_log(f"Configuração carregada: {self.auto_config_path.get()}")
@@ -712,7 +811,9 @@ class AutoShortsWindow:
             self.automation_config = None
             self.auto_theme_combo.configure(values=[])
             self.auto_theme.set("")
-            self.auto_creators.delete(0, "end")
+            for tree in (self.auto_creators, self.auto_accounts):
+                for row in tree.get_children():
+                    tree.delete(row)
             self.auto_status.set(f"Configuração inválida: {exc}")
             if not silent:
                 messagebox.showerror("Configuração inválida", str(exc))
@@ -740,6 +841,36 @@ class AutoShortsWindow:
                 self.auto_creators.selection_add(iid)
         self.auto_creators.tag_configure("disabled", foreground=MUTED)
 
+    def refresh_accounts(self) -> None:
+        for row in self.auto_accounts.get_children():
+            self.auto_accounts.delete(row)
+        if self.automation_config is None or not self.auto_theme.get():
+            return
+        theme = self.automation_config.theme(self._current_theme_name())
+        for slot, account in enumerate(theme.accounts, start=1):
+            self.auto_accounts.insert(
+                "",
+                "end",
+                iid=f"account-{slot}",
+                values=(
+                    slot,
+                    "✓" if account.enabled else "—",
+                    account.name,
+                    account.email,
+                ),
+                tags=("enabled" if account.enabled else "disabled",),
+            )
+        self.auto_accounts.tag_configure("disabled", foreground=MUTED)
+
+    def refresh_theme_details(self) -> None:
+        self.refresh_creators()
+        self.refresh_accounts()
+        if self.automation_config is None or not self._current_theme_name():
+            return
+        policy = self.automation_config.theme(self._current_theme_name()).policy
+        self.auto_quantity.set(policy.videos_per_creator)
+        self.auto_age.set(policy.maximum_age_days)
+
     def _current_theme_name(self) -> str:
         return self.auto_theme.get().removesuffix(" (inativo)")
 
@@ -754,7 +885,7 @@ class AutoShortsWindow:
         result = _ThemeDialog(self.root).show()
         if not result:
             return
-        name, output, prompt, enabled = result
+        name, output, prompt, enabled, quantity, age = result
         try:
             config = self.automation_config or self.automation_store.load()
             self.automation_config = self.automation_store.add_theme(
@@ -763,13 +894,14 @@ class AutoShortsWindow:
                 output_subdirectory=output,
                 prompt=prompt,
                 enabled=enabled == "1",
+                policy=ThemePolicy(int(quantity), int(age)),
             )
         except (OSError, ValueError) as exc:
             messagebox.showerror("Tema inválido", str(exc))
             return
         self.load_automation_config_ui(silent=True)
         self._set_theme(name.strip())
-        self.refresh_creators()
+        self.refresh_theme_details()
 
     def edit_theme_ui(self) -> None:
         if self.automation_config is None or not self._current_theme_name():
@@ -783,10 +915,12 @@ class AutoShortsWindow:
             output=theme.output_subdirectory,
             prompt=theme.prompt,
             enabled=theme.enabled,
+            videos_per_creator=theme.policy.videos_per_creator,
+            maximum_age_days=theme.policy.maximum_age_days,
         ).show()
         if not result:
             return
-        name, output, prompt, enabled = result
+        name, output, prompt, enabled, quantity, age = result
         try:
             self.automation_config = self.automation_store.edit_theme(
                 self.automation_config,
@@ -795,13 +929,14 @@ class AutoShortsWindow:
                 output_subdirectory=output,
                 prompt=prompt,
                 enabled=enabled == "1",
+                policy=ThemePolicy(int(quantity), int(age)),
             )
         except (OSError, ValueError) as exc:
             messagebox.showerror("Tema inválido", str(exc))
             return
         self.load_automation_config_ui(silent=True)
         self._set_theme(name.strip())
-        self.refresh_creators()
+        self.refresh_theme_details()
 
     def remove_theme_ui(self) -> None:
         name = self._current_theme_name()
@@ -843,7 +978,7 @@ class AutoShortsWindow:
             return
         self.load_automation_config_ui(silent=True)
         self._set_theme(theme_name)
-        self.refresh_creators()
+        self.refresh_theme_details()
 
     def edit_creator_ui(self) -> None:
         theme_name = self._current_theme_name()
@@ -876,7 +1011,7 @@ class AutoShortsWindow:
             return
         self.load_automation_config_ui(silent=True)
         self._set_theme(theme_name)
-        self.refresh_creators()
+        self.refresh_theme_details()
 
     def remove_creator_ui(self) -> None:
         theme_name = self._current_theme_name()
@@ -892,10 +1027,94 @@ class AutoShortsWindow:
         )
         self.load_automation_config_ui(silent=True)
         self._set_theme(theme_name)
-        self.refresh_creators()
+        self.refresh_theme_details()
+
+    def _selected_account_name(self) -> str | None:
+        selected = self.auto_accounts.selection()
+        if not selected:
+            return None
+        values = self.auto_accounts.item(selected[0], "values")
+        return str(values[2]) if values else None
+
+    def add_account_ui(self) -> None:
+        theme_name = self._current_theme_name()
+        if self.automation_config is None or not theme_name:
+            messagebox.showinfo("Conta", "Crie ou selecione um tema primeiro.")
+            return
+        result = _AccountDialog(self.root).show()
+        if not result:
+            return
+        name, email, enabled = result
+        try:
+            self.automation_config = self.automation_store.add_account(
+                self.automation_config,
+                theme_name,
+                name=name,
+                email=email,
+                enabled=enabled == "1",
+            )
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Conta inválida", str(exc))
+            return
+        self.load_automation_config_ui(silent=True)
+        self._set_theme(theme_name)
+        self.refresh_theme_details()
+
+    def edit_account_ui(self) -> None:
+        theme_name = self._current_theme_name()
+        account_name = self._selected_account_name()
+        if self.automation_config is None or not theme_name or not account_name:
+            messagebox.showinfo("Conta", "Selecione uma conta para editar.")
+            return
+        theme = self.automation_config.theme(theme_name)
+        account = next(item for item in theme.accounts if item.name == account_name)
+        result = _AccountDialog(
+            self.root,
+            name=account.name,
+            email=account.email,
+            enabled=account.enabled,
+        ).show()
+        if not result:
+            return
+        name, email, enabled = result
+        try:
+            self.automation_config = self.automation_store.edit_account(
+                self.automation_config,
+                theme_name,
+                account_name,
+                name=name,
+                email=email,
+                enabled=enabled == "1",
+            )
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Conta inválida", str(exc))
+            return
+        self.load_automation_config_ui(silent=True)
+        self._set_theme(theme_name)
+        self.refresh_theme_details()
+
+    def remove_account_ui(self) -> None:
+        theme_name = self._current_theme_name()
+        account_name = self._selected_account_name()
+        if self.automation_config is None or not theme_name or not account_name:
+            return
+        if not messagebox.askyesno(
+            "Remover conta", f"Remover '{account_name}' do tema '{theme_name}'?"
+        ):
+            return
+        self.automation_config = self.automation_store.remove_account(
+            self.automation_config, theme_name, account_name
+        )
+        self.load_automation_config_ui(silent=True)
+        self._set_theme(theme_name)
+        self.refresh_theme_details()
 
     def validate_automation(self) -> None:
+        quantity = self.auto_quantity.get()
+        age = self.auto_age.get()
         self.load_automation_config_ui(silent=True)
+        self.auto_quantity.set(quantity)
+        self.auto_age.set(age)
         if self.automation_config is None:
             messagebox.showerror("Automação", self.auto_status.get())
             return
