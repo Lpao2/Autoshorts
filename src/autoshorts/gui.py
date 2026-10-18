@@ -12,7 +12,12 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import cast
 
+from autoshorts.automation_config import AutomationConfig, load_automation_config
+from autoshorts.automation_events import AutomationEvent
+from autoshorts.automation_jobs import AutomationController
+from autoshorts.automation_pipeline import AutomationRequest
 from autoshorts.config import OverwritePolicy, Settings, load_settings
+from autoshorts.fake_analysis import fake_analysis_provider
 from autoshorts.gui_jobs import JobController, JobRequest
 from autoshorts.pipeline import PipelineResult
 from autoshorts.render_events import RenderEvent
@@ -45,8 +50,6 @@ class _StatusSnapshot:
         return self._value
 
 
-
-
 BG = "#0b1220"
 PANEL = "#111827"
 FIELD = "#182235"
@@ -56,10 +59,35 @@ MUTED = "#aab7c8"
 ACCENT = "#60a5fa"
 
 
+def _download_detail(event: AutomationEvent) -> str:
+    parts: list[str] = []
+    if event.downloaded_bytes is not None:
+        downloaded = event.downloaded_bytes / 1024 / 1024
+        if event.total_bytes is not None:
+            total = event.total_bytes / 1024 / 1024
+            suffix = " estimados" if event.total_is_estimate else ""
+            parts.append(f"{downloaded:.1f}/{total:.1f} MB{suffix}")
+        else:
+            parts.append(f"{downloaded:.1f} MB")
+    if event.speed:
+        parts.append(f"{event.speed / 1024 / 1024:.1f} MB/s")
+    if event.eta is not None:
+        minutes, seconds = divmod(event.eta, 60)
+        parts.append(f"ETA {minutes:02d}:{seconds:02d}")
+    return " | ".join(parts) or "tamanho desconhecido"
+
+
 class AutoShortsWindow:
     def __init__(self, root: tk.Tk, settings: Settings) -> None:
         self.root = root
         self.controller = JobController(settings)
+        self.automation_controller = AutomationController(settings)
+        self.automation_config: AutomationConfig | None = None
+        self.automation_running = False
+        self.automation_finishing = False
+        self.automation_rows: dict[tuple[str, str], str] = {}
+        self.automation_found = 0
+        self.automation_completed = 0
         self.running = False
         self.closing = False
         self.finishing = False
@@ -70,8 +98,12 @@ class AutoShortsWindow:
         self.root.minsize(820, 680)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self._configure_style()
-        frame = ttk.Frame(root, padding=16)
-        frame.pack(fill="both", expand=True)
+        notebook = ttk.Notebook(root)
+        notebook.pack(fill="both", expand=True)
+        frame = ttk.Frame(notebook, padding=16)
+        automatic = ttk.Frame(notebook, padding=16)
+        notebook.add(frame, text="Manual")
+        notebook.add(automatic, text="Automático")
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(9, weight=1)
         frame.rowconfigure(10, weight=1)
@@ -218,7 +250,162 @@ class AutoShortsWindow:
             frame, text="Abrir pasta gerada", command=self.open_output, state="disabled"
         )
         self.folder_button.grid(row=13, column=0, columnspan=3, sticky="e", pady=(8, 0))
+        self._build_automatic_tab(automatic, settings)
         self.poll_id = self.root.after(75, self.poll)
+
+    def _build_automatic_tab(self, frame: ttk.Frame, settings: Settings) -> None:
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(9, weight=1)
+        frame.rowconfigure(12, weight=2)
+        ttk.Label(frame, text="Automação", style="Title.TLabel").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 12)
+        )
+        default_config = (
+            Path(settings.output_dir).parents[1] / "config" / "automation.example.json"
+        )
+        project_config = (
+            Path(__file__).resolve().parents[2] / "config" / "automation.example.json"
+        )
+        self.auto_config_path = tk.StringVar(
+            master=self.root,
+            value=str(project_config if project_config.exists() else default_config),
+        )
+        self.auto_workspace = tk.StringVar(
+            master=self.root, value=str(Path(settings.output_dir).parent / "automation")
+        )
+        self.auto_theme = tk.StringVar(master=self.root)
+        self.auto_quantity = tk.IntVar(master=self.root, value=1)
+        self.auto_age = tk.IntVar(master=self.root, value=3650)
+        self.auto_download_only = tk.BooleanVar(master=self.root, value=True)
+        self.auto_fake = tk.BooleanVar(master=self.root, value=False)
+        self.auto_status = tk.StringVar(
+            master=self.root, value="Carregue uma configuração."
+        )
+        self._automation_path_row(
+            frame,
+            1,
+            "Configuração",
+            self.auto_config_path,
+            self.choose_automation_config,
+        )
+        ttk.Button(
+            frame, text="Recarregar", command=self.load_automation_config_ui
+        ).grid(row=2, column=2, sticky="e")
+        ttk.Label(frame, text="Tema").grid(row=2, column=0, sticky="w")
+        self.auto_theme_combo = ttk.Combobox(
+            frame, textvariable=self.auto_theme, state="readonly"
+        )
+        self.auto_theme_combo.grid(row=2, column=1, sticky="ew", pady=4)
+        self.auto_theme_combo.bind(
+            "<<ComboboxSelected>>", lambda _event: self.refresh_creators()
+        )
+        ttk.Label(frame, text="Criadores").grid(row=3, column=0, sticky="nw", pady=4)
+        self.auto_creators = tk.Listbox(
+            frame,
+            selectmode="multiple",
+            exportselection=False,
+            height=4,
+            background=FIELD,
+            foreground=TEXT,
+            selectbackground="#2563eb",
+            borderwidth=0,
+        )
+        self.auto_creators.grid(row=3, column=1, columnspan=2, sticky="nsew", pady=4)
+        limits = ttk.Frame(frame)
+        limits.grid(row=4, column=0, columnspan=3, sticky="ew", pady=5)
+        ttk.Label(limits, text="Vídeos por criador:").pack(side="left")
+        ttk.Spinbox(
+            limits, from_=1, to=100, textvariable=self.auto_quantity, width=6
+        ).pack(side="left", padx=(5, 18))
+        ttk.Label(limits, text="Idade máxima (dias):").pack(side="left")
+        ttk.Spinbox(limits, from_=0, to=3650, textvariable=self.auto_age, width=7).pack(
+            side="left", padx=5
+        )
+        self._automation_path_row(
+            frame, 5, "Workspace", self.auto_workspace, self.choose_automation_workspace
+        )
+        modes = ttk.Frame(frame)
+        modes.grid(row=6, column=0, columnspan=3, sticky="ew", pady=6)
+        ttk.Checkbutton(
+            modes,
+            text="Somente download",
+            variable=self.auto_download_only,
+            command=self._sync_analysis_mode,
+        ).pack(side="left")
+        self.fake_check = ttk.Checkbutton(
+            modes,
+            text="TEST / DEVELOPMENT ONLY — análise fake",
+            variable=self.auto_fake,
+        )
+        self.fake_check.pack(side="left", padx=14)
+        actions = ttk.Frame(frame)
+        actions.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
+        ttk.Button(
+            actions, text="Validar configuração", command=self.validate_automation
+        ).pack(side="left")
+        self.auto_run_button = ttk.Button(
+            actions, text="Executar automação", command=self.start_automation
+        )
+        self.auto_run_button.pack(side="left", padx=6)
+        self.auto_cancel_button = ttk.Button(
+            actions, text="Cancelar", command=self.cancel_automation, state="disabled"
+        )
+        self.auto_cancel_button.pack(side="left")
+        ttk.Button(
+            actions, text="Abrir workspace", command=self.open_automation_workspace
+        ).pack(side="right")
+        ttk.Label(frame, textvariable=self.auto_status).grid(
+            row=8, column=0, columnspan=3, sticky="w"
+        )
+        self.auto_progress = ttk.Progressbar(
+            frame, maximum=100, style="Accent.Horizontal.TProgressbar"
+        )
+        self.auto_progress.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(4, 8))
+        self.auto_tree = ttk.Treeview(
+            frame,
+            columns=("creator", "video", "stage", "progress", "status"),
+            show="headings",
+            height=8,
+        )
+        for name, label, width in (
+            ("creator", "Criador", 130),
+            ("video", "Vídeo", 330),
+            ("stage", "Etapa", 110),
+            ("progress", "Progresso", 90),
+            ("status", "Status", 170),
+        ):
+            self.auto_tree.heading(name, text=label)
+            self.auto_tree.column(name, width=width, stretch=name == "video")
+        self.auto_tree.grid(row=10, column=0, columnspan=3, sticky="nsew")
+        ttk.Label(frame, text="Logs da automação", style="Section.TLabel").grid(
+            row=11, column=0, columnspan=3, sticky="w", pady=(8, 3)
+        )
+        self.auto_logs = ScrolledText(
+            frame,
+            height=8,
+            state="disabled",
+            wrap="word",
+            background="#0a101c",
+            foreground="#cbd5e1",
+            font=("TkFixedFont", 10),
+        )
+        self.auto_logs.grid(row=12, column=0, columnspan=3, sticky="nsew")
+        self._sync_analysis_mode()
+        self.load_automation_config_ui(silent=True)
+
+    def _automation_path_row(self, parent, row, label, variable, command) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(parent, textvariable=variable).grid(
+            row=row, column=1, sticky="ew", pady=4
+        )
+        ttk.Button(parent, text="Selecionar...", command=command).grid(
+            row=row, column=2, padx=(8, 0)
+        )
+
+    def _sync_analysis_mode(self) -> None:
+        self.fake_check.configure(
+            state="disabled" if self.auto_download_only.get() else "normal"
+        )
 
     def _configure_style(self) -> None:
         style = ttk.Style(self.root)
@@ -327,6 +514,142 @@ class AutoShortsWindow:
         path = filedialog.askopenfilename(title="Selecionar vídeo")
         if path:
             self.source.set(path)
+
+    def choose_automation_config(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Configuração da automação",
+            filetypes=[("JSON", "*.json"), ("Todos", "*")],
+        )
+        if path:
+            self.auto_config_path.set(path)
+            self.load_automation_config_ui()
+
+    def choose_automation_workspace(self) -> None:
+        path = filedialog.askdirectory(title="Workspace da automação", mustexist=False)
+        if path:
+            self.auto_workspace.set(path)
+
+    def load_automation_config_ui(self, *, silent: bool = False) -> None:
+        try:
+            self.automation_config = load_automation_config(self.auto_config_path.get())
+            names = [theme.name for theme in self.automation_config.themes]
+            self.auto_theme_combo.configure(values=names)
+            self.auto_theme.set(names[0])
+            self.refresh_creators()
+            self.auto_status.set(f"Configuração válida: {len(names)} tema(s).")
+            if not silent:
+                self.auto_log(f"Configuração carregada: {self.auto_config_path.get()}")
+        except Exception as exc:
+            self.automation_config = None
+            self.auto_theme_combo.configure(values=[])
+            self.auto_theme.set("")
+            self.auto_creators.delete(0, "end")
+            self.auto_status.set(f"Configuração inválida: {exc}")
+            if not silent:
+                messagebox.showerror("Configuração inválida", str(exc))
+
+    def refresh_creators(self) -> None:
+        self.auto_creators.delete(0, "end")
+        if self.automation_config is None or not self.auto_theme.get():
+            return
+        theme = self.automation_config.theme(self.auto_theme.get())
+        for creator in theme.creators:
+            self.auto_creators.insert("end", creator.name)
+        self.auto_creators.selection_set(0, "end")
+
+    def validate_automation(self) -> None:
+        self.load_automation_config_ui(silent=True)
+        if self.automation_config is None:
+            messagebox.showerror("Automação", self.auto_status.get())
+            return
+        try:
+            self._automation_request()
+        except (ValueError, tk.TclError) as exc:
+            messagebox.showerror("Automação", str(exc))
+            return
+        self.auto_status.set("Configuração pronta para execução.")
+        self.auto_log(f"Tema selecionado: {self.auto_theme.get()}")
+
+    def _automation_request(self) -> AutomationRequest:
+        selected = tuple(
+            self.auto_creators.get(index) for index in self.auto_creators.curselection()
+        )
+        if not selected:
+            raise ValueError("Selecione pelo menos um criador.")
+        workspace = Path(self.auto_workspace.get()).expanduser()
+        if workspace.exists() and not workspace.is_dir():
+            raise ValueError("O workspace precisa ser uma pasta.")
+        quantity = int(self.auto_quantity.get())
+        age = int(self.auto_age.get())
+        if quantity < 1:
+            raise ValueError("A quantidade deve ser pelo menos 1.")
+        if not 0 <= age <= 3650:
+            raise ValueError("A idade máxima deve ficar entre 0 e 3650 dias.")
+        return AutomationRequest(
+            self.auto_theme.get(),
+            quantity,
+            age,
+            workspace,
+            download_only=self.auto_download_only.get(),
+            selected_creators=selected,
+        )
+
+    def start_automation(self) -> None:
+        if self.automation_controller.busy:
+            return
+        self.validate_automation()
+        if self.automation_config is None:
+            return
+        try:
+            request = self._automation_request()
+        except (ValueError, tk.TclError) as exc:
+            messagebox.showerror("Automação", str(exc))
+            return
+        analyze = None
+        if not request.download_only:
+            if not self.auto_fake.get():
+                messagebox.showerror(
+                    "Provider ausente",
+                    "Ative explicitamente o provider TEST / DEVELOPMENT ONLY "
+                    "ou use Somente download.",
+                )
+                return
+            analyze = fake_analysis_provider
+        self.automation_rows.clear()
+        self.automation_found = 0
+        self.automation_completed = 0
+        for row in self.auto_tree.get_children():
+            self.auto_tree.delete(row)
+        self.auto_progress.configure(mode="determinate", value=0)
+        self.automation_running = True
+        self.auto_run_button.configure(state="disabled")
+        self.auto_cancel_button.configure(state="normal")
+        self.auto_status.set("Iniciando automação...")
+        self.automation_controller.start(
+            request, self.automation_config, analyze=analyze
+        )
+
+    def cancel_automation(self) -> None:
+        self.automation_controller.cancel()
+        self.auto_cancel_button.configure(state="disabled")
+        self.auto_status.set("Cancelando automação...")
+        self.auto_log("Cancelamento solicitado.")
+
+    def auto_log(self, text: str) -> None:
+        from datetime import datetime
+
+        self.auto_logs.configure(state="normal")
+        self.auto_logs.insert("end", f"[{datetime.now():%H:%M:%S}] {text}\n")
+        self.auto_logs.see("end")
+        self.auto_logs.configure(state="disabled")
+
+    def open_automation_workspace(self) -> None:
+        path = Path(self.auto_workspace.get()).expanduser()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            subprocess.Popen(["xdg-open", str(path)])
+        except OSError as exc:
+            messagebox.showerror("Não foi possível abrir o workspace", str(exc))
 
     def choose_output(self) -> None:
         path = filedialog.askdirectory(title="Pasta de saída", mustexist=False)
@@ -505,6 +828,110 @@ class AutoShortsWindow:
         if self.pipeline.exists(stage):
             self.pipeline.item(stage, values=(stage, state, detail))
 
+    def handle_automation_event(self, event: AutomationEvent) -> None:
+        labels = {
+            "discovery_started": "Descobrindo",
+            "download_started": "Baixando",
+            "analysis_started": "Analisando",
+            "render_started": "Renderizando",
+            "automation_completed": "Concluído",
+        }
+        if event.kind == "candidate_found":
+            self.automation_found += 1
+            key = (event.creator or "", event.url or event.title or "")
+            row = f"auto-{len(self.automation_rows) + 1}"
+            self.automation_rows[key] = row
+            self.auto_tree.insert(
+                "",
+                "end",
+                iid=row,
+                values=(event.creator, event.title, "Encontrado", "-", "Na fila"),
+            )
+            self.auto_log(f"Encontrado: {event.title}")
+            return
+        if event.kind == "discovery_started":
+            self.auto_status.set(f"Descobrindo vídeos de {event.creator}...")
+            self.auto_log(f"Descobrindo vídeos de {event.creator}")
+            return
+        if event.kind == "discovery_finished":
+            self.auto_log(f"{event.creator}: {event.total or 0} vídeo(s) encontrado(s)")
+            return
+        key = (event.creator or "", event.url or event.title or "")
+        row = self.automation_rows.get(key)
+        if row is None and event.creator and event.title:
+            for candidate_key, candidate_row in self.automation_rows.items():
+                if candidate_key[0] == event.creator:
+                    values = self.auto_tree.item(candidate_row, "values")
+                    if values and values[1] == event.title:
+                        row = candidate_row
+                        break
+        if event.kind == "download_progress":
+            if event.progress is None:
+                self.auto_progress.configure(mode="indeterminate")
+                self.auto_progress.start(12)
+                progress_text = "-"
+            else:
+                self.auto_progress.stop()
+                self.auto_progress.configure(
+                    mode="determinate", value=event.progress * 100
+                )
+                progress_text = f"{event.progress:.0%}"
+            if row:
+                values = list(self.auto_tree.item(row, "values"))
+                values[2:] = ["Download", progress_text, "Baixando"]
+                self.auto_tree.item(row, values=values)
+            detail = _download_detail(event)
+            self.auto_status.set(f"Baixando {event.title or ''} — {detail}")
+            return
+        if event.kind in labels:
+            self.auto_status.set(labels[event.kind])
+        if row:
+            values = list(self.auto_tree.item(row, "values"))
+            stage = event.kind.replace("_started", "").replace("_finished", "")
+            status = (
+                "Concluído"
+                if event.kind.endswith("finished")
+                else labels.get(event.kind, event.kind)
+            )
+            progress_text = "100%" if event.kind == "item_finished" else values[3]
+            values[2:] = [stage.title(), progress_text, status]
+            self.auto_tree.item(row, values=values)
+        if event.kind == "item_finished":
+            self.automation_completed += 1
+            total = max(self.automation_found, 1)
+            self.auto_progress.configure(
+                mode="determinate", value=100 * self.automation_completed / total
+            )
+            self.auto_status.set(
+                f"{self.automation_completed} / {self.automation_found} "
+                "vídeos concluídos"
+            )
+        elif event.kind.endswith("_failed"):
+            self.auto_log(f"Erro em {event.title or event.creator}: {event.message}")
+        elif event.kind not in {"download_progress", "automation_started"}:
+            subject = event.title or event.creator or ""
+            self.auto_log(f"{labels.get(event.kind, event.kind)}: {subject}")
+
+    def handle_automation_message(self, kind: str, payload: object) -> None:
+        if kind == "event":
+            self.handle_automation_event(cast(AutomationEvent, payload))
+        elif kind == "completed":
+            results = cast(tuple, payload)
+            failures = sum(bool(getattr(item, "error", None)) for item in results)
+            successes = len(results) - failures
+            self.auto_status.set(
+                f"Automação concluída: {successes} sucesso(s), {failures} falha(s)."
+            )
+            self.auto_log(self.auto_status.get())
+        elif kind == "cancelled":
+            self.auto_status.set("Automação cancelada.")
+            self.auto_log(str(payload))
+        elif kind == "failed":
+            self.auto_status.set(f"Automação falhou: {payload}")
+            self.auto_log(self.auto_status.get())
+        elif kind == "finished":
+            self.automation_finishing = True
+
     def poll(self) -> None:
         for _ in range(200):
             try:
@@ -512,36 +939,66 @@ class AutoShortsWindow:
             except Empty:
                 break
             self.handle(kind, payload)
+        for _ in range(300):
+            try:
+                kind, payload = self.automation_controller.messages.get_nowait()
+            except Empty:
+                break
+            self.handle_automation_message(kind, payload)
         if self.finishing and not self.controller.busy:
             self.finishing = False
             self.set_busy(False)
-        if self.closing and not self.running and not self.controller.busy:
+        if self.automation_finishing and not self.automation_controller.busy:
+            self.automation_finishing = False
+            self.automation_running = False
+            self.auto_run_button.configure(state="normal")
+            self.auto_cancel_button.configure(state="disabled")
+        if (
+            self.closing
+            and not self.running
+            and not self.controller.busy
+            and not self.automation_running
+            and not self.automation_controller.busy
+        ):
             self.destroy()
             return
         self.poll_id = self.root.after(75, self.poll)
 
     def close(self) -> None:
-        if self.running:
+        if self.running or self.automation_running:
             if not messagebox.askyesno(
                 "Fechar AutoShorts",
                 "Cancelar o processamento e fechar após encerrar com segurança?",
             ):
                 return
             self.closing = True
-            self.cancel()
+            if self.running:
+                self.cancel()
+            if self.automation_running:
+                self.cancel_automation()
         else:
             self.destroy()
 
     def destroy(self) -> None:
         self.root.after_cancel(self.poll_id)
         status_value = self.status.get()
+        auto_status_value = self.auto_status.get()
         self.source = None
         self.output = None
         self.status = None
+        self.auto_config_path = None
+        self.auto_workspace = None
+        self.auto_theme = None
+        self.auto_quantity = None
+        self.auto_age = None
+        self.auto_download_only = None
+        self.auto_fake = None
+        self.auto_status = None
         # Finalize Tk variables while Tcl is still alive, never from a later
         # worker/finalizer phase after root.destroy().
         gc.collect()
         self.status = _StatusSnapshot(status_value)
+        self.auto_status = _StatusSnapshot(auto_status_value)
         self.root.destroy()
 
     def open_output(self) -> None:
