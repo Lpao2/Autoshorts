@@ -148,9 +148,7 @@ def run_automation(
                     )
                     record = state_store.get_video(youtube_id)
                     if record and record.status == VideoStatus.FAILED:
-                        state_store.transition_video(
-                            youtube_id, VideoStatus.DISCOVERED
-                        )
+                        state_store.transition_video(youtube_id, VideoStatus.DISCOVERED)
                 emit(
                     _candidate_event(
                         "candidate_found", candidate, index, len(candidates)
@@ -327,26 +325,7 @@ def run_automation(
                             "queue_finished", candidate, index, len(candidates)
                         )
                     )
-                    try:
-                        source_path.unlink()
-                        emit(
-                            AutomationEvent(
-                                "source_removed",
-                                creator=candidate.creator,
-                                title=candidate.title,
-                                path=source_path,
-                            )
-                        )
-                    except OSError as exc:
-                        emit(
-                            AutomationEvent(
-                                "cleanup_warning",
-                                creator=candidate.creator,
-                                title=candidate.title,
-                                path=source_path,
-                                message=str(exc),
-                            )
-                        )
+                    _remove_queued_source(source_path, candidate, emit)
                     results.append(
                         AutomationItemResult(candidate, source_path, analysis, render)
                     )
@@ -419,3 +398,29 @@ def _candidate_skipped_event(skipped: CandidateSkip) -> AutomationEvent:
 def _safe_creator_directory(name: str) -> str:
     cleaned = "".join(char if char.isalnum() or char in "-_" else "_" for char in name)
     return cleaned.strip("._") or "creator"
+
+
+def _remove_queued_source(
+    source_path: Path, candidate: VideoCandidate, emit: EventHandler
+) -> None:
+    """Best-effort cleanup called only after the QUEUED transaction commits."""
+    try:
+        source_path.unlink()
+        emit(
+            AutomationEvent(
+                "source_removed",
+                creator=candidate.creator,
+                title=candidate.title,
+                path=source_path,
+            )
+        )
+    except OSError as exc:
+        emit(
+            AutomationEvent(
+                "cleanup_warning",
+                creator=candidate.creator,
+                title=candidate.title,
+                path=source_path,
+                message=str(exc),
+            )
+        )

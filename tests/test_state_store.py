@@ -165,6 +165,37 @@ def test_queue_three_shorts_and_video_atomically(tmp_path):
         assert [row.queue_path for row in rows] == list(queues)
 
 
+def test_queue_database_failure_rolls_back_video_and_shorts(tmp_path):
+    with StateStore(tmp_path / "state.db") as store:
+        register(store)
+        advance_to_rendering(store)
+        masters = tuple(tmp_path / f"{index:02d}.mp4" for index in range(1, 4))
+        queues = tuple(tmp_path / f"queue-{index}.mp4" for index in range(1, 4))
+        for path in (*masters, *queues):
+            path.touch()
+        store.record_rendered_shorts(
+            "video-1",
+            tuple(RenderedShort(index, path) for index, path in enumerate(masters, 1)),
+        )
+        store.connection.execute(
+            """
+            CREATE TRIGGER fail_queue_two BEFORE UPDATE ON shorts
+            WHEN NEW.clip_index = 2 AND NEW.status = 'QUEUED'
+            BEGIN SELECT RAISE(ABORT, 'queue 2 failed'); END
+            """
+        )
+        queued = tuple(
+            QueuedShort(index, index, f"a{index}@example.test", path)
+            for index, path in enumerate(queues, 1)
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="queue 2 failed"):
+            store.record_queued_shorts("video-1", queued)
+        assert store.get_video("video-1").status == VideoStatus.RENDERED
+        assert all(
+            row.status.value == "RENDERED" for row in store.shorts_for_video("video-1")
+        )
+
+
 @pytest.mark.parametrize(
     "status", [VideoStatus.RENDERED, VideoStatus.QUEUED, VideoStatus.COMPLETED]
 )

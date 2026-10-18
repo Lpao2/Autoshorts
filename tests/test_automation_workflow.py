@@ -141,7 +141,26 @@ def test_fake_provider_path_delegates_to_existing_pipeline(tmp_path, monkeypatch
             ),
             state_store=state_store,
         )
+        assert state_store.get_video("1").status.value == "QUEUED"
     assert result[0].render is render_sentinel
+    assert not source.exists()
+
+
+def test_source_cleanup_failure_only_emits_warning(tmp_path, monkeypatch):
+    from autoshorts.automation_pipeline import _remove_queued_source
+
+    source = tmp_path / "source.mp4"
+    source.touch()
+
+    def fail_unlink(*_args, **_kwargs):
+        raise OSError("busy")
+
+    monkeypatch.setattr(source.__class__, "unlink", fail_unlink)
+    events = []
+    _remove_queued_source(source, candidate(), events.append)
+    assert source.exists()
+    assert events[0].kind == "cleanup_warning"
+    assert events[0].message == "busy"
 
 
 def test_partial_failure_continues_with_next_candidate(tmp_path, monkeypatch):
@@ -326,9 +345,7 @@ def test_execution_selection_is_independent_from_enabled(tmp_path, monkeypatch):
 
 
 def test_disabled_theme_cannot_run(tmp_path):
-    disabled = AutomationConfig(
-        (ThemeProfile("tech", "", (), "tech", enabled=False),)
-    )
+    disabled = AutomationConfig((ThemeProfile("tech", "", (), "tech", enabled=False),))
     with pytest.raises(ValueError, match="disabled"):
         run_automation(
             AutomationRequest("tech", 1, 30, tmp_path, download_only=True),
