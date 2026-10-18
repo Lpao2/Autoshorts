@@ -156,6 +156,36 @@ disponível, a barra fica indeterminada e a interface mostra apenas os bytes já
 baixados. Arquivos determinísticos já completos são reutilizados. Cancelar é
 cooperativo e remove temporários `.part`/`.ytdl` quando seguro.
 
+## Contas, política e estado operacional
+
+Cada tema pode manter até três contas de destino identificadas apenas por nome e
+email. Não há senha, cookie, OAuth ou sessão no JSON. A ordem persistida define os
+slots: Short 1 vai para a conta 1, Short 2 para a conta 2 e Short 3 para a conta 3.
+Uma distribuição de produção só é válida com exatamente três Shorts e três contas
+ativas. A política do tema salva os defaults `videos_per_creator`,
+`maximum_age_days` e `shorts_per_video=3`; a tela ainda permite sobrescrever N/M
+na execução de desenvolvimento.
+
+O histórico operacional usa SQLite em `data/autoshorts.db`, ou no caminho definido
+por `AUTOSHORTS_STATE_DB`. O schema v1 contém `videos` (chave primária global
+`youtube_id`) e `shorts` (três slots por vídeo). `PRAGMA foreign_keys=ON` protege
+as relações e WAL permite que um futuro worker conviva com leitores sem adicionar
+um ORM. O lifecycle é explícito, de `DISCOVERED` até `COMPLETED`, com `FAILED` e
+timestamps. Estados não terminais podem ser consultados após restart.
+
+Registrar os três Shorts e promover o vídeo a `RENDERED` acontece em uma única
+transação e somente depois de conferir que os três arquivos existem. `COMPLETED`
+é a referência para deduplicação global: um ID concluído não deve voltar ao fluxo,
+mesmo em outro tema. O pipeline fake atual continua sendo uma ferramenta de teste
+e não marca produção como concluída.
+
+A distribuição de arquivos usa masters no sentido futuro
+`data/<tema>/creators/<criador>/<youtube-id>/01.mp4` e filas em
+`data/<tema>/accounts/<conta>/queue/`. O helper tenta hard link primeiro e faz
+fallback para cópia quando os filesystems são diferentes. Nenhum arquivo antigo é
+movido ou apagado. Cleanup, recuperação automática e `posting_jobs` foram adiados
+até existir publicação transacional e scheduler.
+
 ## Cancelar e fechar
 
 - Cancelar sinaliza as tarefas em segundo plano. Cada FFmpeg ativo recebe término;
@@ -183,6 +213,8 @@ cooperativo e remove temporários `.part`/`.ytdl` quando seguro.
 - `gui.py`: widgets atualizados exclusivamente na thread principal por `after()`.
   O worker e os renderizadores apenas colocam mensagens numa `Queue`.
 - `desktop.py`: instalação opcional do atalho no menu do usuário.
+- `state_store.py`: schema SQLite, lifecycle, deduplicação e transações.
+- `distribution.py`: associação determinística e hard link/cópia para filas.
 
 ```bash
 .venv/bin/ruff check .

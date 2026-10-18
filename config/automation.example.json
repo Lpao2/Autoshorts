@@ -5,10 +5,32 @@
       "enabled": true,
       "prompt": "",
       "output_subdirectory": "tecnologia",
+      "policy": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
       "creators": [
         {
           "name": "Nome do criador",
           "videos_url": "https://www.youtube.com/@criador/videos",
+          "enabled": true
+        }
+      ],
+      "accounts": [
+        {
+          "name": "Conta A",
+          "email": "a@example.test",
+          "enabled": true
+        },
+        {
+          "name": "Conta B",
+          "email": "b@example.test",
+          "enabled": true
+        },
+        {
+          "name": "Conta C",
+          "email": "c@example.test",
           "enabled": true
         }
       ]
