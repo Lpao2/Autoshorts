@@ -11,6 +11,7 @@ from autoshorts.state_store import StateStore, VideoStatus
 from autoshorts.transcript_analysis import (
     ResolvedAnalysis,
     TranscriptAnalysisProvider,
+    analysis_policy_from_env,
     make_resolved_analysis,
     write_analysis_atomic,
 )
@@ -46,6 +47,7 @@ def analyze_transcript(
             creator=creator,
             theme=theme,
             theme_prompt=theme_prompt,
+            youtube_id=youtube_id,
             cancel=cancel,
         )
     except Exception as exc:
@@ -64,6 +66,8 @@ def analyze_transcript(
         theme_prompt=theme_prompt,
         transcript=transcript,
         result=result,
+        policy=analysis_policy_from_env(),
+        prompt_hash_value=provider.prompt_hash(theme_prompt),
     )
     write_analysis_atomic(artifact_path, resolved)
     state_store.record_analysis(

@@ -13,6 +13,7 @@ from autoshorts.transcript_analysis import (
     AnalysisResult,
     AnalysisUsage,
     ClipSelection,
+    prompt_fingerprint,
 )
 from autoshorts.transcription import Transcript
 
@@ -26,22 +27,27 @@ class GeminiAnalysisError(ValueError):
 
 
 BASE_PROMPT = """Você seleciona momentos de vídeos para Shorts.
-Escolha exatamente 3 momentos pelos IDs dos segmentos. Priorize retenção, clareza
-isolada e diversidade. Evite introduções lentas, dependência excessiva de contexto
-e três cortes parecidos. Cada trecho deve durar 20–60 segundos; prefira 30–50
-segundos sem alongamento artificial. A headline deve usar o idioma predominante,
-ser natural, honesta e curiosa (idealmente 30–70 caracteres), sem hashtags, emojis,
-clickbait falso, spoiler completo ou fatos ausentes. Não invente timestamps."""
+Escolha exatamente 5 candidatos ranqueáveis pelos IDs dos segmentos. Priorize
+retenção, clareza isolada e diversidade; quando o conteúdo permitir, combine tipos
+diferentes de momento. Evite introduções lentas, dependência excessiva de contexto,
+cortes parecidos ou o mesmo acontecimento dividido artificialmente. Cada trecho
+deve durar 20–60 segundos; prefira 30–50 sem alongamento artificial.
+
+A headline não é resumo acadêmico: deve ser curta, natural, curiosa e honesta no
+idioma predominante, idealmente com 30–70 caracteres. Não use hashtags, emojis,
+clickbait falso, spoiler completo ou fatos ausentes. A transcrição pode errar nomes:
+use contexto para compreender internamente, mas não exponha entidade incerta em
+título ou headline. Não invente timestamps."""
 
 RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["selections"],
+    "required": ["candidates"],
     "properties": {
-        "selections": {
+        "candidates": {
             "type": "array",
-            "minItems": 3,
-            "maxItems": 3,
+            "minItems": 5,
+            "maxItems": 5,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -95,11 +101,14 @@ class GeminiAnalysisProvider:
         creator: str,
         theme: str,
         theme_prompt: str,
+        youtube_id: str,
         cancel: Event | None = None,
     ) -> AnalysisResult:
         check_automation_cancelled(cancel)
         estimate_cost_usd(self.model, 0, 0)
-        prompt = _build_prompt(transcript, title, creator, theme, theme_prompt)
+        prompt = _build_prompt(
+            transcript, title, creator, theme, theme_prompt, youtube_id
+        )
         started = time.monotonic()
         response = self._client.models.generate_content(
             model=self.model,
@@ -118,10 +127,10 @@ class GeminiAnalysisProvider:
             parsed = response.parsed
             if not isinstance(parsed, dict):
                 raise ValueError("Gemini retornou structured output inválido.")
-            raw = parsed.get("selections")
+            raw = parsed.get("candidates")
             if not isinstance(raw, list):
-                raise ValueError("Gemini não retornou a lista selections.")
-            selections = tuple(
+                raise ValueError("Gemini não retornou a lista candidates.")
+            candidates = tuple(
                 ClipSelection(
                     item["start_segment"],
                     item["end_segment"],
@@ -134,11 +143,25 @@ class GeminiAnalysisProvider:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise GeminiAnalysisError(str(exc), usage) from exc
-        return AnalysisResult(selections, self.provider_name, self.model, usage)
+        if len(candidates) != 5:
+            raise GeminiAnalysisError(
+                "Gemini deve retornar exatamente 5 candidatos.", usage
+            )
+        return AnalysisResult((), self.provider_name, self.model, usage, candidates)
+
+    def prompt_hash(self, theme_prompt: str) -> str:
+        return prompt_fingerprint(
+            f"gemini-analysis-v2\n{BASE_PROMPT}\n{theme_prompt.strip()}"
+        )
 
 
 def _build_prompt(
-    transcript: Transcript, title: str, creator: str, theme: str, theme_prompt: str
+    transcript: Transcript,
+    title: str,
+    creator: str,
+    theme: str,
+    theme_prompt: str,
+    youtube_id: str = "",
 ) -> str:
     guidance = theme_prompt.strip() or "(sem orientação adicional)"
     segments = "\n".join(
@@ -146,7 +169,8 @@ def _build_prompt(
         for index, segment in enumerate(transcript.segments)
     )
     return (
-        f"VIDEO\ntitle: {title}\ncreator: {creator}\ntheme: {theme}\n"
+        f"VIDEO\nyoutube_id: {youtube_id}\ntitle: {title}\ncreator: {creator}\n"
+        f"theme: {theme}\n"
         f"duration: {transcript.duration_seconds:.2f}s\n\nTHEME GUIDANCE\n{guidance}"
         f"\n\nTRANSCRIPT\n{segments}"
     )

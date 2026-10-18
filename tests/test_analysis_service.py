@@ -14,15 +14,20 @@ class Provider:
 
     def __init__(self):
         self.calls = 0
+        self.kwargs = None
 
-    def analyze(self, *_args, **_kwargs):
+    def analyze(self, *_args, **kwargs):
         self.calls += 1
+        self.kwargs = kwargs
         return AnalysisResult(
             selections(),
             self.provider_name,
             self.model,
             AnalysisUsage(1000, 100, 50, 1150, 1.2, 0.0013125),
         )
+
+    def prompt_hash(self, theme_prompt):
+        return f"hash:{theme_prompt}"
 
 
 class BilledFailure(Exception):
@@ -80,10 +85,25 @@ def test_analysis_persists_usage_and_recovery_reuses_without_new_call(tmp_path):
     assert store.get_video("video").status == VideoStatus.ANALYZED
     assert store.monthly_ai_cost("gemini") == pytest.approx(0.0013125)
     plan = inspect_video_state(
-        store, "video", theme_root=tmp_path / "lol", creator_directory="creator"
+        store,
+        "video",
+        theme_root=tmp_path / "lol",
+        creator_directory="creator",
+        expected_analysis_prompt_hash="hash:humor",
     )
     assert plan.next_action == RecoveryAction.REUSE_ANALYSIS
     assert provider.calls == 1
+    assert provider.kwargs["title"] == "title"
+    assert provider.kwargs["creator"] == "creator"
+    assert provider.kwargs["youtube_id"] == "video"
+    stale = inspect_video_state(
+        store,
+        "video",
+        theme_root=tmp_path / "lol",
+        creator_directory="creator",
+        expected_analysis_prompt_hash="hash:novo",
+    )
+    assert stale.next_action == RecoveryAction.REANALYZE
     store.close()
 
 

@@ -163,6 +163,11 @@ def run_automation(
                         ffprobe_path=settings.ffprobe_path,
                         expected_width=settings.output_width,
                         expected_height=settings.output_height,
+                        expected_analysis_prompt_hash=(
+                            analyze.prompt_hash(theme.prompt)
+                            if analyze is not None and hasattr(analyze, "prompt_hash")
+                            else None
+                        ),
                     )
                     if recovery_plan.next_action == RecoveryAction.NOOP:
                         emit(

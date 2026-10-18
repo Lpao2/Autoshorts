@@ -53,6 +53,7 @@ def test_global_deduplication_uses_only_youtube_id(tmp_path):
             title="Changed title",
         )
         assert store.get_video("video-1").theme_name == "LoL"
+        assert store.get_video("video-1").title == "Changed title"
 
 
 def test_lifecycle_error_and_invalid_transition(tmp_path):

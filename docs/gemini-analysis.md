@@ -1,9 +1,9 @@
 # Análise inteligente com Gemini
 
 O modo real usa somente o transcript local. Cada segmento é enviado com um ID e o
-Gemini escolhe três intervalos contínuos. O AutoShorts resolve os segundos a partir
-dos segmentos, valida duração (20–60 s), sobreposição, ranking, headline e score,
-e só então permite o render.
+Gemini propõe cinco intervalos contínuos. O AutoShorts valida duração (20–60 s),
+score, diversidade, sobreposição e headline, ordena por score e resolve os três
+melhores em timestamps vindos exclusivamente do transcript.
 
 ## Instalação e configuração
 
@@ -13,6 +13,7 @@ cd /home/lpao/Documents/ChatGPT/Autoshorts
 export GEMINI_API_KEY='sua-chave'
 export AUTOSHORTS_GEMINI_MODEL='gemini-3.8-flash'       # opcional
 export AUTOSHORTS_GEMINI_MONTHLY_BUDGET_USD='8.00'     # opcional
+export AUTOSHORTS_ANALYSIS_MIN_SCORE='0.75'             # opcional
 .venv/bin/autoshorts-gui
 ```
 
@@ -26,9 +27,10 @@ logs ou na interface. Não coloque a chave no repositório.
 ## Artefatos, custo e retomada
 
 Cada vídeo produz `<tema>/.work/<youtube-id>/analysis.json` no workspace, com
-schema versionado, três seleções, clips resolvidos, headlines, hash do prompt e
-usage retornado pela API. O SQLite v4 guarda metadados e uma linha de custo por
-chamada faturável conhecida.
+schema versionado, cinco candidatos, três seleções finais, clips resolvidos,
+headlines, hash do prompt e usage retornado pela API. O SQLite v4 guarda metadados
+e uma linha de custo por chamada faturável conhecida. Em `ANALYZED`, mudança no
+hash do prompt permite reanálise; conteúdo já `QUEUED`/`COMPLETED` continua imune.
 
 O preço local para `gemini-3.8-flash` é US$ 0,75 por milhão de tokens de entrada e
 US$ 3,75 por milhão de tokens de saída (thinking incluído), vigente até

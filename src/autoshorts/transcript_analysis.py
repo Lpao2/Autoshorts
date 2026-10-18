@@ -16,7 +16,7 @@ from autoshorts.ai_analysis import ClipAnalysis
 from autoshorts.timestamp_parser import Clip
 from autoshorts.transcription import Transcript
 
-ANALYSIS_SCHEMA_VERSION = 1
+ANALYSIS_SCHEMA_VERSION = 2
 MAX_HEADLINE_LENGTH = 100
 
 
@@ -46,12 +46,14 @@ class AnalysisResult:
     provider: str
     model: str
     usage: AnalysisUsage = AnalysisUsage()
+    candidates: tuple[ClipSelection, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ClipPolicy:
     min_duration_seconds: float = 20
     max_duration_seconds: float = 60
+    min_score: float = 0.75
 
 
 DEFAULT_CLIP_POLICY = ClipPolicy()
@@ -71,6 +73,8 @@ class TranscriptAnalysisProvider(Protocol):
     provider_name: str
     model: str
 
+    def prompt_hash(self, theme_prompt: str) -> str: ...
+
     def analyze(
         self,
         transcript: Transcript,
@@ -79,12 +83,63 @@ class TranscriptAnalysisProvider(Protocol):
         creator: str,
         theme: str,
         theme_prompt: str,
+        youtube_id: str,
         cancel: Event | None = None,
     ) -> AnalysisResult: ...
 
 
 def prompt_fingerprint(theme_prompt: str) -> str:
     return hashlib.sha256(theme_prompt.encode("utf-8")).hexdigest()
+
+
+def analysis_policy_from_env() -> ClipPolicy:
+    raw = os.environ.get("AUTOSHORTS_ANALYSIS_MIN_SCORE", "0.75")
+    try:
+        score = float(raw)
+    except ValueError as exc:
+        raise ValueError("AUTOSHORTS_ANALYSIS_MIN_SCORE deve ser numérico.") from exc
+    if not 0 <= score <= 1:
+        raise ValueError("AUTOSHORTS_ANALYSIS_MIN_SCORE deve estar entre 0 e 1.")
+    return ClipPolicy(min_score=score)
+
+
+def select_top_candidates(
+    transcript: Transcript,
+    candidates: tuple[ClipSelection, ...],
+    policy: ClipPolicy = DEFAULT_CLIP_POLICY,
+) -> tuple[ClipSelection, ...]:
+    if len(candidates) != 5:
+        raise ValueError("A análise Gemini deve conter exatamente 5 candidatos.")
+    selected: list[ClipSelection] = []
+    ranges: list[tuple[float, float]] = []
+    headlines: set[str] = set()
+    for candidate in sorted(candidates, key=lambda item: item.score, reverse=True):
+        try:
+            start, end = _validate_candidate(transcript, candidate, policy)
+        except ValueError:
+            continue
+        headline_key = " ".join(candidate.headline.casefold().split())
+        if headline_key in headlines:
+            continue
+        if any(
+            start < other_end and end > other_start for other_start, other_end in ranges
+        ):
+            continue
+        if any(
+            candidate.start_segment == prior.start_segment
+            and candidate.end_segment == prior.end_segment
+            for prior in selected
+        ):
+            continue
+        selected.append(candidate)
+        headlines.add(headline_key)
+        ranges.append((start, end))
+        if len(selected) == 3:
+            return tuple(selected)
+    raise ValueError(
+        "Qualidade insuficiente: menos de 3 candidatos válidos, diversos e com "
+        f"score mínimo {policy.min_score:.2f}."
+    )
 
 
 def resolve_clip_selections(
@@ -95,52 +150,19 @@ def resolve_clip_selections(
     if len(result.selections) != 3:
         raise ValueError("A análise deve conter exatamente 3 seleções.")
     ranked = tuple(sorted(result.selections, key=lambda item: item.score, reverse=True))
-    ranges: list[tuple[float, float]] = []
     clips: list[Clip] = []
-    seen: set[tuple[int, int]] = set()
+    ranges: list[tuple[float, float]] = []
+    headlines: set[str] = set()
     for selection in ranked:
-        if (
-            not isinstance(selection.start_segment, int)
-            or isinstance(selection.start_segment, bool)
-            or not isinstance(selection.end_segment, int)
-            or isinstance(selection.end_segment, bool)
-        ):
-            raise ValueError("Índices de segmento devem ser inteiros.")
-        if not (
-            0
-            <= selection.start_segment
-            <= selection.end_segment
-            < len(transcript.segments)
-        ):
-            raise ValueError("Seleção contém índice de segmento inválido.")
-        key = (selection.start_segment, selection.end_segment)
-        if key in seen:
-            raise ValueError("As três seleções devem usar ranges diferentes.")
-        seen.add(key)
-        if not selection.title.strip():
-            raise ValueError("Título da seleção não pode ficar vazio.")
-        if not selection.reason.strip():
-            raise ValueError("Motivo da seleção não pode ficar vazio.")
-        headline = selection.headline.strip()
-        if not headline:
-            raise ValueError("Headline da seleção não pode ficar vazia.")
-        if len(headline) > MAX_HEADLINE_LENGTH:
-            raise ValueError(f"Headline excede {MAX_HEADLINE_LENGTH} caracteres.")
-        if not 0 <= selection.score <= 1:
-            raise ValueError("Score da seleção deve estar entre 0 e 1.")
-        start = transcript.segments[selection.start_segment].start
-        end = transcript.segments[selection.end_segment].end
-        duration = end - start
-        if not policy.min_duration_seconds <= duration <= policy.max_duration_seconds:
-            raise ValueError(
-                f"Seleção '{selection.title}' dura {duration:.2f}s; esperado entre "
-                f"{policy.min_duration_seconds:.0f}s e "
-                f"{policy.max_duration_seconds:.0f}s."
-            )
+        start, end = _validate_candidate(transcript, selection, policy)
+        headline_key = " ".join(selection.headline.casefold().split())
+        if headline_key in headlines:
+            raise ValueError("As três headlines devem ser diferentes.")
         if any(
             start < other_end and end > other_start for other_start, other_end in ranges
         ):
             raise ValueError("As seleções não podem se sobrepor.")
+        headlines.add(headline_key)
         ranges.append((start, end))
         clips.append(Clip(start, end, selection.title.strip()))
     return ClipAnalysis(tuple(clips), "structured transcript analysis")
@@ -154,13 +176,22 @@ def make_resolved_analysis(
     transcript: Transcript,
     result: AnalysisResult,
     policy: ClipPolicy = DEFAULT_CLIP_POLICY,
+    prompt_hash_value: str | None = None,
 ) -> ResolvedAnalysis:
+    if result.candidates:
+        result = AnalysisResult(
+            select_top_candidates(transcript, result.candidates, policy),
+            result.provider,
+            result.model,
+            result.usage,
+            result.candidates,
+        )
     return ResolvedAnalysis(
         result=result,
         clips=resolve_clip_selections(transcript, result, policy),
         youtube_id=youtube_id,
         theme=theme,
-        prompt_hash=prompt_fingerprint(theme_prompt),
+        prompt_hash=prompt_hash_value or prompt_fingerprint(theme_prompt),
         created_at=datetime.now(UTC).isoformat(),
     )
 
@@ -200,6 +231,7 @@ def analysis_to_dict(analysis: ResolvedAnalysis) -> dict[str, object]:
         "prompt_hash": analysis.prompt_hash,
         "created_at": analysis.created_at,
         "selections": selections,
+        "candidates": [_selection_to_dict(item) for item in analysis.result.candidates],
         "usage": {
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
@@ -214,10 +246,10 @@ def analysis_to_dict(analysis: ResolvedAnalysis) -> dict[str, object]:
 def analysis_from_dict(
     data: object, transcript: Transcript, *, youtube_id: str | None = None
 ) -> ResolvedAnalysis:
-    if (
-        not isinstance(data, dict)
-        or data.get("schema_version") != ANALYSIS_SCHEMA_VERSION
-    ):
+    if not isinstance(data, dict) or data.get("schema_version") not in {
+        1,
+        ANALYSIS_SCHEMA_VERSION,
+    }:
         raise ValueError("Unsupported or invalid analysis schema.")
     if youtube_id is not None and data.get("youtube_id") != youtube_id:
         raise ValueError("Analysis youtube_id does not match the requested video.")
@@ -243,7 +275,21 @@ def analysis_from_dict(
             float(raw_usage.get("estimated_cost_usd", 0)),
         )
         result = AnalysisResult(
-            selections, str(data["provider"]), str(data["model"]), usage
+            selections,
+            str(data["provider"]),
+            str(data["model"]),
+            usage,
+            tuple(
+                ClipSelection(
+                    int(item["start_segment"]),
+                    int(item["end_segment"]),
+                    str(item["title"]),
+                    str(item["headline"]),
+                    str(item["reason"]),
+                    float(item["score"]),
+                )
+                for item in data.get("candidates", [])
+            ),
         )
         resolved = ResolvedAnalysis(
             result,
@@ -282,3 +328,50 @@ def load_analysis(
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"Invalid analysis JSON: {exc}") from exc
     return analysis_from_dict(data, transcript, youtube_id=youtube_id)
+
+
+def _validate_candidate(
+    transcript: Transcript, selection: ClipSelection, policy: ClipPolicy
+) -> tuple[float, float]:
+    if (
+        not isinstance(selection.start_segment, int)
+        or isinstance(selection.start_segment, bool)
+        or not isinstance(selection.end_segment, int)
+        or isinstance(selection.end_segment, bool)
+    ):
+        raise ValueError("Índices de segmento devem ser inteiros.")
+    if not (
+        0 <= selection.start_segment <= selection.end_segment < len(transcript.segments)
+    ):
+        raise ValueError("Seleção contém índice de segmento inválido.")
+    if not selection.title.strip() or not selection.reason.strip():
+        raise ValueError("Título e motivo da seleção não podem ficar vazios.")
+    headline = selection.headline.strip()
+    if not headline:
+        raise ValueError("Headline da seleção não pode ficar vazia.")
+    if len(headline) > MAX_HEADLINE_LENGTH:
+        raise ValueError(f"Headline excede {MAX_HEADLINE_LENGTH} caracteres.")
+    if not 0 <= selection.score <= 1:
+        raise ValueError("Score da seleção deve estar entre 0 e 1.")
+    if selection.score < policy.min_score:
+        raise ValueError("Score abaixo do mínimo configurado.")
+    start = transcript.segments[selection.start_segment].start
+    end = transcript.segments[selection.end_segment].end
+    duration = end - start
+    if not policy.min_duration_seconds <= duration <= policy.max_duration_seconds:
+        raise ValueError(
+            f"Seleção '{selection.title}' dura {duration:.2f}s; esperado entre "
+            f"{policy.min_duration_seconds:.0f}s e {policy.max_duration_seconds:.0f}s."
+        )
+    return start, end
+
+
+def _selection_to_dict(selection: ClipSelection) -> dict[str, object]:
+    return {
+        "start_segment": selection.start_segment,
+        "end_segment": selection.end_segment,
+        "title": selection.title,
+        "headline": selection.headline,
+        "reason": selection.reason,
+        "score": selection.score,
+    }

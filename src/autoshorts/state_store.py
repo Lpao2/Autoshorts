@@ -172,13 +172,18 @@ class StateStore:
         if not youtube_id:
             raise ValueError("youtube_id cannot be empty")
         now = _now()
+        existed = self.get_video(youtube_id) is not None
         with self.connection:
-            cursor = self.connection.execute(
+            self.connection.execute(
                 """
-                INSERT OR IGNORE INTO videos (
+                INSERT INTO videos (
                     youtube_id, source_url, creator_name, theme_name, title,
                     status, discovered_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(youtube_id) DO UPDATE SET
+                    source_url = excluded.source_url,
+                    creator_name = excluded.creator_name,
+                    title = excluded.title
                 """,
                 (
                     youtube_id,
@@ -191,7 +196,7 @@ class StateStore:
                     now,
                 ),
             )
-        return cursor.rowcount == 1
+        return not existed
 
     def get_video(self, youtube_id: str) -> VideoRecord | None:
         row = self.connection.execute(

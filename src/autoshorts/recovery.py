@@ -55,6 +55,7 @@ def inspect_video_state(
     ffprobe_path: str = "ffprobe",
     expected_width: int | None = None,
     expected_height: int | None = None,
+    expected_analysis_prompt_hash: str | None = None,
 ) -> RecoveryPlan:
     """Inspect SQLite and filesystem without changing either one."""
     record = store.get_video(youtube_id)
@@ -143,9 +144,19 @@ def inspect_video_state(
             transcript_record.file_path if transcript_record else transcript_path
         )
         transcript = _valid_transcript(transcript_file, youtube_id)
-        if transcript is not None and _valid_analysis(
-            analysis_path, transcript, youtube_id
-        ):
+        analysis = (
+            _valid_analysis(analysis_path, transcript, youtube_id)
+            if transcript is not None
+            else None
+        )
+        prompt_matches = bool(
+            analysis
+            and (
+                expected_analysis_prompt_hash is None
+                or analysis.prompt_hash == expected_analysis_prompt_hash
+            )
+        )
+        if transcript is not None and prompt_matches:
             action = (
                 RecoveryAction.RECONCILE_ANALYSIS
                 if record.status == VideoStatus.ANALYZING
@@ -393,12 +404,11 @@ def _valid_transcript(path: Path, youtube_id: str):
         return None
 
 
-def _valid_analysis(path: Path, transcript, youtube_id: str) -> bool:
+def _valid_analysis(path: Path, transcript, youtube_id: str):
     try:
-        load_analysis(path, transcript, youtube_id=youtube_id)
-        return True
+        return load_analysis(path, transcript, youtube_id=youtube_id)
     except (ValueError, OSError):
-        return False
+        return None
 
 
 def _inspect_masters(
