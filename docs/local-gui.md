@@ -94,6 +94,34 @@ seu comportamento: grava o manifest do plano. A CLI continua com os mesmos argum
 O progresso geral é a média dos percentuais dos clipes, não uma previsão de tempo.
 100% por clipe significa vídeo validado e promovido ao nome final.
 
+## Fluxo automático experimental
+
+A aba **Automático** usa `config/automation.example.json` por padrão e mantém o
+fluxo manual intacto. Instale o adaptador de coleta explicitamente:
+
+```bash
+.venv/bin/python -m pip install -e '.[automation]'
+```
+
+Para testes locais, copie o exemplo para `config/local-automation-test.json` e
+edite tema, criadores e URLs. Arquivos `config/local*` são ignorados pelo Git.
+
+1. Selecione o JSON e clique em **Recarregar**.
+2. Escolha tema, criadores, quantidade, idade máxima e workspace.
+3. Use **Somente download** para descoberta e coleta reais sem análise.
+4. Para o E2E de desenvolvimento, desmarque **Somente download** e marque
+   explicitamente **TEST / DEVELOPMENT ONLY — análise fake**.
+5. Clique em **Executar automação** e acompanhe os itens, bytes, velocidade e ETA.
+
+O provider fake cria um único corte curto e previsível, apenas para validar o
+caminho download → Clip → FFmpeg → manifest. Ele nunca é ativado por padrão.
+Não há Gemini real, cookies, sessão autenticada nem publicação nesta etapa.
+
+O download usa `progress_hooks` do yt-dlp. Se o tamanho total não estiver
+disponível, a barra fica indeterminada e a interface mostra apenas os bytes já
+baixados. Arquivos determinísticos já completos são reutilizados. Cancelar é
+cooperativo e remove temporários `.part`/`.ytdl` quando seguro.
+
 ## Cancelar e fechar
 
 - Cancelar sinaliza as tarefas em segundo plano. Cada FFmpeg ativo recebe término;
