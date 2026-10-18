@@ -290,6 +290,6 @@ def test_migrates_v2_to_v3_without_losing_video_or_shorts(tmp_path):
     )
     connection.close()
     with StateStore(path) as store:
-        assert store.schema_version == 4
+        assert store.schema_version == 5
         assert store.get_video("old").status == VideoStatus.DOWNLOADED
         assert store.get_transcript("old") is None

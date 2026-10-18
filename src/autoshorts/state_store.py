@@ -12,7 +12,7 @@ from pathlib import Path
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class VideoStatus(StrEnum):
@@ -372,13 +372,14 @@ class StateStore:
             )
             self.connection.execute(
                 """INSERT INTO ai_usage
-                   (youtube_id, provider, model, input_tokens, output_tokens,
+                   (youtube_id, provider, model, operation, input_tokens, output_tokens,
                     thinking_tokens, total_tokens, estimated_cost_usd, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     youtube_id,
                     provider,
                     model,
+                    "generation",
                     usage.input_tokens,
                     usage.output_tokens,
                     usage.thinking_tokens,
@@ -402,19 +403,26 @@ class StateStore:
         return float(row[0])
 
     def record_ai_usage(
-        self, youtube_id: str, *, provider: str, model: str, usage: AnalysisUsage
+        self,
+        youtube_id: str,
+        *,
+        provider: str,
+        model: str,
+        usage: AnalysisUsage,
+        operation: str = "generation",
     ) -> None:
         """Record a billed call that did not produce a reusable analysis."""
         with self.connection:
             self.connection.execute(
                 """INSERT INTO ai_usage
-                   (youtube_id, provider, model, input_tokens, output_tokens,
+                   (youtube_id, provider, model, operation, input_tokens, output_tokens,
                     thinking_tokens, total_tokens, estimated_cost_usd, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     youtube_id,
                     provider,
                     model,
+                    operation,
                     usage.input_tokens,
                     usage.output_tokens,
                     usage.thinking_tokens,
@@ -593,6 +601,7 @@ class StateStore:
                 CREATE TABLE IF NOT EXISTS ai_usage (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, youtube_id TEXT NOT NULL,
                     provider TEXT NOT NULL, model TEXT NOT NULL,
+                    operation TEXT NOT NULL,
                     input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
                     thinking_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
                     estimated_cost_usd REAL NOT NULL, created_at TEXT NOT NULL,
@@ -612,6 +621,9 @@ class StateStore:
             version = 3
         if version == 3:
             self._migrate_v3_to_v4()
+            version = 4
+        if version == 4:
+            self._migrate_v4_to_v5()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -689,6 +701,16 @@ class StateStore:
                 );
                 CREATE INDEX idx_ai_usage_created ON ai_usage(created_at);
                 PRAGMA user_version = 4;
+                """
+            )
+
+    def _migrate_v4_to_v5(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE ai_usage ADD COLUMN operation TEXT NOT NULL
+                    DEFAULT 'generation';
+                PRAGMA user_version = 5;
                 """
             )
 

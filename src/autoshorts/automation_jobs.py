@@ -14,6 +14,7 @@ from autoshorts.automation_pipeline import (
     run_automation,
 )
 from autoshorts.config import Settings
+from autoshorts.reranking import CandidateReranker
 from autoshorts.state_store import StateStore
 from autoshorts.transcription import TranscriptionProvider
 
@@ -39,13 +40,14 @@ class AutomationController:
         *,
         analyze: AnalysisProvider | None = None,
         transcribe: TranscriptionProvider | None = None,
+        reranker: CandidateReranker | None = None,
     ) -> None:
         if self.busy:
             raise RuntimeError("Já existe uma automação ativa.")
         self.cancel_event = Event()
         self.thread = Thread(
             target=self._work,
-            args=(request, config, analyze, transcribe),
+            args=(request, config, analyze, transcribe, reranker),
             name="autoshorts-automation",
             daemon=False,
         )
@@ -60,14 +62,15 @@ class AutomationController:
         config: AutomationConfig,
         analyze: AnalysisProvider | None,
         transcribe: TranscriptionProvider | None,
+        reranker: CandidateReranker | None,
     ) -> None:
         try:
             if self.state_db_path is None:
-                result = self._run(request, config, analyze, transcribe, None)
+                result = self._run(request, config, analyze, transcribe, reranker, None)
             else:
                 with StateStore(self.state_db_path) as state_store:
                     result = self._run(
-                        request, config, analyze, transcribe, state_store
+                        request, config, analyze, transcribe, reranker, state_store
                     )
             self.messages.put(("completed", result))
         except AutomationCancelled as exc:
@@ -77,13 +80,14 @@ class AutomationController:
         finally:
             self.messages.put(("finished", None))
 
-    def _run(self, request, config, analyze, transcribe, state_store):
+    def _run(self, request, config, analyze, transcribe, reranker, state_store):
         return run_automation(
             request,
             config,
             self.settings,
             analyze=analyze,
             transcribe=transcribe,
+            reranker=reranker,
             cancel=self.cancel_event,
             state_store=state_store,
             event_handler=lambda event: self.messages.put(("event", event)),

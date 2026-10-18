@@ -146,10 +146,15 @@ def resolve_clip_selections(
     transcript: Transcript,
     result: AnalysisResult,
     policy: ClipPolicy = DEFAULT_CLIP_POLICY,
+    preserve_order: bool = False,
 ) -> ClipAnalysis:
     if len(result.selections) != 3:
         raise ValueError("A análise deve conter exatamente 3 seleções.")
-    ranked = tuple(sorted(result.selections, key=lambda item: item.score, reverse=True))
+    ranked = (
+        result.selections
+        if preserve_order
+        else tuple(sorted(result.selections, key=lambda item: item.score, reverse=True))
+    )
     clips: list[Clip] = []
     ranges: list[tuple[float, float]] = []
     headlines: set[str] = set()
@@ -249,6 +254,7 @@ def analysis_from_dict(
     if not isinstance(data, dict) or data.get("schema_version") not in {
         1,
         ANALYSIS_SCHEMA_VERSION,
+        3,
     }:
         raise ValueError("Unsupported or invalid analysis schema.")
     if youtube_id is not None and data.get("youtube_id") != youtube_id:
@@ -293,7 +299,9 @@ def analysis_from_dict(
         )
         resolved = ResolvedAnalysis(
             result,
-            resolve_clip_selections(transcript, result),
+            resolve_clip_selections(
+                transcript, result, preserve_order=isinstance(data.get("rerank"), dict)
+            ),
             str(data["youtube_id"]),
             str(data["theme"]),
             str(data["prompt_hash"]),

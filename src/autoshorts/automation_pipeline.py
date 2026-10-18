@@ -43,6 +43,8 @@ from autoshorts.recovery import (
     resume_rendered_distribution,
 )
 from autoshorts.render_events import RenderCancelled
+from autoshorts.reranking import CandidateReranker
+from autoshorts.reranking_service import rerank_analysis
 from autoshorts.state_store import (
     QueuedShort,
     RenderedShort,
@@ -85,6 +87,7 @@ def run_automation(
     settings: Settings,
     *,
     analyze: AnalysisProvider | None = None,
+    reranker: CandidateReranker | None = None,
     transcribe: TranscriptionProvider | None = None,
     event_handler: EventHandler | None = None,
     cancel: Event | None = None,
@@ -474,6 +477,28 @@ def run_automation(
                                     len(candidates),
                                 )
                             )
+                    if reranker is not None:
+                        if transcript is None:
+                            raise ValueError("Rerank exige transcrição válida.")
+                        analysis_path = (
+                            theme_root / ".work" / youtube_id / "analysis.json"
+                        )
+                        rerank_analysis(
+                            youtube_id=youtube_id,
+                            transcript=transcript,
+                            analysis_path=analysis_path,
+                            reranker=reranker,
+                            state_store=state_store,
+                            title=candidate.title,
+                            creator=candidate.creator,
+                            theme=theme.name,
+                            theme_prompt=theme.prompt,
+                            cancel=cancel,
+                            event_handler=emit,
+                        )
+                        analysis = load_analysis(
+                            analysis_path, transcript, youtube_id=youtube_id
+                        ).clips
                     check_automation_cancelled(cancel)
                     stage = "render"
                     emit(

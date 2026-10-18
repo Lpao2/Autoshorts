@@ -5,6 +5,11 @@ Gemini propõe cinco intervalos contínuos. O AutoShorts valida duração (20–
 score, diversidade, sobreposição e headline, ordena por score e resolve os três
 melhores em timestamps vindos exclusivamente do transcript.
 
+Um segundo estágio recebe somente esses cinco trechos, sem scores originais nem o
+transcript completo do vídeo. O reranker Gemini compara hook, clareza, payoff,
+energia, retenção, inteligibilidade e diversidade, escolhendo e ordenando os três
+Shorts finais. Ele não pode alterar ranges ou criar candidatos.
+
 ## Instalação e configuração
 
 ```bash
@@ -27,10 +32,13 @@ logs ou na interface. Não coloque a chave no repositório.
 ## Artefatos, custo e retomada
 
 Cada vídeo produz `<tema>/.work/<youtube-id>/analysis.json` no workspace, com
-schema versionado, cinco candidatos, três seleções finais, clips resolvidos,
-headlines, hash do prompt e usage retornado pela API. O SQLite v4 guarda metadados
-e uma linha de custo por chamada faturável conhecida. Em `ANALYZED`, mudança no
+schema versionado, cinco candidatos, ranking editorial, três seleções finais,
+clips resolvidos, headlines, hashes e usage de cada chamada. O SQLite v5 distingue
+custos `generation` e `rerank`. Em `ANALYZED`, mudança no
 hash do prompt permite reanálise; conteúdo já `QUEUED`/`COMPLETED` continua imune.
+
+Se os candidatos já estiverem íntegros e o rerank faltar, somente o reranker é
+chamado. Se o rerank e seu hash estiverem válidos, ele é reutilizado sem cobrança.
 
 O preço local para `gemini-3.8-flash` é US$ 0,75 por milhão de tokens de entrada e
 US$ 3,75 por milhão de tokens de saída (thinking incluído), vigente até

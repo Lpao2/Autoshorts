@@ -27,6 +27,7 @@ from autoshorts.config import OverwritePolicy, Settings, load_settings
 from autoshorts.fake_analysis import fake_analysis_provider
 from autoshorts.faster_whisper_provider import FasterWhisperProvider
 from autoshorts.gemini_analysis_provider import GeminiAnalysisProvider
+from autoshorts.gemini_reranker import GeminiCandidateReranker
 from autoshorts.gui_jobs import JobController, JobRequest
 from autoshorts.pipeline import PipelineResult
 from autoshorts.render_events import RenderEvent
@@ -1203,6 +1204,7 @@ class AutoShortsWindow:
             messagebox.showerror("Automação", str(exc))
             return
         analyze = None
+        reranker = None
         transcribe = None
         if resolve_deno() is None:
             warning = (
@@ -1227,6 +1229,7 @@ class AutoShortsWindow:
                     return
                 try:
                     analyze = GeminiAnalysisProvider()
+                    reranker = GeminiCandidateReranker.configured(model=analyze.model)
                 except RuntimeError as exc:
                     messagebox.showerror("Gemini", str(exc))
                     return
@@ -1256,6 +1259,7 @@ class AutoShortsWindow:
             self.automation_config,
             analyze=analyze,
             transcribe=transcribe,
+            reranker=reranker,
         )
 
     def cancel_automation(self) -> None:
