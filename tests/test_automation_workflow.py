@@ -22,6 +22,7 @@ from autoshorts.collection import (
 )
 from autoshorts.state_store import RenderedShort, StateStore, VideoStatus
 from autoshorts.timestamp_parser import Clip
+from autoshorts.transcription import Transcript, TranscriptSegment
 from autoshorts.video_processor import RenderResult
 
 
@@ -131,6 +132,22 @@ def test_fake_provider_path_delegates_to_existing_pipeline(tmp_path, monkeypatch
     monkeypatch.setattr(
         automation_pipeline, "run_pipeline", lambda *args, **kwargs: render_sentinel
     )
+    transcript = Transcript(
+        "pt",
+        0.9,
+        3,
+        "teste",
+        (TranscriptSegment(0, 1, "teste"),),
+        "mock",
+        "test",
+    )
+
+    class Transcriber:
+        def transcribe(self, *_args, progress_handler=None, **_kwargs):
+            progress_handler(0.5)
+            return transcript
+
+    events = []
     with StateStore(tmp_path / "state.db") as state_store:
         result = run_automation(
             AutomationRequest("tech", 1, 30, tmp_path),
@@ -140,11 +157,15 @@ def test_fake_provider_path_delegates_to_existing_pipeline(tmp_path, monkeypatch
                 tuple(Clip(index, index + 1, f"Fake {index}") for index in range(3)),
                 "FAKE",
             ),
+            transcribe=Transcriber(),
             state_store=state_store,
+            event_handler=events.append,
         )
         assert state_store.get_video("1").status.value == "QUEUED"
     assert result[0].render is render_sentinel
+    assert result[0].transcript == transcript
     assert not source.exists()
+    assert "transcription_progress" in [event.kind for event in events]
 
 
 def test_source_cleanup_failure_only_emits_warning(tmp_path, monkeypatch):

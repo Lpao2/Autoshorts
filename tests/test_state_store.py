@@ -247,3 +247,41 @@ def test_migrates_v1_database_and_preserves_data(tmp_path):
             row[1] for row in store.connection.execute("PRAGMA table_info(shorts)")
         }
         assert "queue_path" in columns
+        assert "transcripts" in {
+            row[0]
+            for row in store.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+
+
+def test_migrates_v2_to_v3_without_losing_video_or_shorts(tmp_path):
+    path = tmp_path / "v2.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE videos (
+            youtube_id TEXT PRIMARY KEY, source_url TEXT NOT NULL,
+            creator_name TEXT NOT NULL, theme_name TEXT NOT NULL, title TEXT NOT NULL,
+            status TEXT NOT NULL, discovered_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            processed_at TEXT, error TEXT
+        );
+        CREATE TABLE shorts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, youtube_id TEXT NOT NULL,
+            clip_index INTEGER NOT NULL, account_slot INTEGER,
+            account_identifier TEXT, status TEXT NOT NULL, file_path TEXT NOT NULL,
+            queue_path TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            posted_at TEXT, error TEXT
+        );
+        INSERT INTO videos VALUES (
+            'old', 'url', 'creator', 'theme', 'title', 'DOWNLOADED',
+            'created', 'updated', NULL, NULL
+        );
+        PRAGMA user_version = 2;
+        """
+    )
+    connection.close()
+    with StateStore(path) as store:
+        assert store.schema_version == 3
+        assert store.get_video("old").status == VideoStatus.DOWNLOADED
+        assert store.get_transcript("old") is None

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from test_transcription import sample_transcript
 
 from autoshorts.automation_config import AccountProfile, ThemeProfile
 from autoshorts.media_probe import MediaInfo, MediaProbeError
@@ -8,9 +9,11 @@ from autoshorts.recovery import (
     RecoveryAction,
     inspect_video_state,
     prepare_recovery,
+    reconcile_transcript,
     resume_rendered_distribution,
 )
 from autoshorts.state_store import RenderedShort, StateStore, VideoStatus
+from autoshorts.transcription import write_transcript_atomic
 
 
 def register(store, status):
@@ -190,3 +193,69 @@ def test_future_and_failed_states_are_explicit(tmp_path, media_probe):
         )
         store.connection.commit()
         assert inspect(store, tmp_path).next_action == RecoveryAction.MANUAL_RETRY
+
+
+def test_transcribing_valid_artifact_reconciles_after_restart(tmp_path, media_probe):
+    db = tmp_path / "state.db"
+    artifact = tmp_path / ".work" / "video-1" / "transcript.json"
+    with StateStore(db) as store:
+        register(store, VideoStatus.TRANSCRIBING)
+        write_transcript_atomic(artifact, sample_transcript(), "video-1")
+    with StateStore(db) as reopened:
+        plan = inspect(reopened, tmp_path)
+        assert plan.next_action == RecoveryAction.RECONCILE_TRANSCRIPT
+        assert reconcile_transcript(reopened, plan) == sample_transcript()
+        assert reopened.get_video("video-1").status == VideoStatus.TRANSCRIBED
+
+
+def test_transcribing_invalid_artifact_retranscribes(tmp_path, media_probe):
+    with StateStore(tmp_path / "state.db") as store:
+        register(store, VideoStatus.TRANSCRIBING)
+        source = tmp_path / "downloads" / "Creator" / "video-1.mp4"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"valid")
+        artifact = tmp_path / ".work" / "video-1" / "transcript.json"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("broken")
+        plan = inspect(store, tmp_path)
+        assert plan.next_action == RecoveryAction.RETRANSCRIBE
+        prepare_recovery(store, plan)
+        assert store.get_video("video-1").status == VideoStatus.DOWNLOADED
+        assert not artifact.exists()
+
+
+def test_transcribed_valid_artifact_is_reusable(tmp_path, media_probe):
+    with StateStore(tmp_path / "state.db") as store:
+        register(store, VideoStatus.TRANSCRIBING)
+        artifact = tmp_path / ".work" / "video-1" / "transcript.json"
+        write_transcript_atomic(artifact, sample_transcript(), "video-1")
+        store.record_transcript(
+            "video-1",
+            file_path=artifact,
+            provider="mock",
+            model="test",
+            language="pt",
+        )
+        plan = inspect(store, tmp_path)
+        assert plan.next_action == RecoveryAction.REUSE_TRANSCRIPT
+        assert plan.reusable_artifacts == (artifact,)
+
+
+@pytest.mark.parametrize("contents", [None, "broken"])
+def test_transcribed_missing_or_corrupt_artifact_requires_retranscription(
+    tmp_path, media_probe, contents
+):
+    with StateStore(tmp_path / "state.db") as store:
+        register(store, VideoStatus.TRANSCRIBING)
+        source = tmp_path / "downloads" / "Creator" / "video-1.mp4"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"valid")
+        artifact = tmp_path / ".work" / "video-1" / "transcript.json"
+        if contents is not None:
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text(contents)
+        store.connection.execute(
+            "UPDATE videos SET status = 'TRANSCRIBED' WHERE youtube_id = 'video-1'"
+        )
+        store.connection.commit()
+        assert inspect(store, tmp_path).next_action == RecoveryAction.RETRANSCRIBE
