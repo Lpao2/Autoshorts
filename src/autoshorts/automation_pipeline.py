@@ -63,11 +63,13 @@ def run_automation(
     cancel: Event | None = None,
 ) -> tuple[AutomationItemResult, ...]:
     """Run collection and optional analysis/rendering for one configured theme."""
-    theme = config.theme(request.theme)
     if request.videos_per_creator < 1:
         raise ValueError("videos_per_creator must be positive.")
     if request.maximum_age_days < 0 or request.maximum_age_days > 3650:
         raise ValueError("maximum_age_days must be between 0 and 3650.")
+    theme = config.theme(request.theme)
+    if not theme.enabled:
+        raise ValueError(f"Theme '{theme.name}' is disabled.")
     workspace = request.workspace.expanduser().resolve()
     if not request.download_only and analyze is None:
         raise ValueError("An analysis provider is required before rendering.")
@@ -76,8 +78,11 @@ def run_automation(
     creators = tuple(
         creator
         for creator in theme.creators
-        if request.selected_creators is None
-        or creator.name in request.selected_creators
+        if creator.enabled
+        and (
+            request.selected_creators is None
+            or creator.name in request.selected_creators
+        )
     )
     if not creators:
         raise ValueError("Select at least one creator.")
@@ -121,7 +126,9 @@ def run_automation(
                 try:
                     source_path = download_video(
                         candidate,
-                        theme_root / "downloads",
+                        theme_root
+                        / "downloads"
+                        / _safe_creator_directory(candidate.creator),
                         access=request.youtube_access,
                         cancel=cancel,
                         progress_handler=lambda progress, item=candidate: emit(
