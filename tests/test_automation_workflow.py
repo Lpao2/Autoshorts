@@ -7,7 +7,12 @@ from autoshorts.automation_config import AutomationConfig, Creator, ThemeProfile
 from autoshorts.automation_events import AutomationCancelled
 from autoshorts.automation_jobs import AutomationController
 from autoshorts.automation_pipeline import AutomationRequest, run_automation
-from autoshorts.collection import VideoCandidate, download_progress_from_hook
+from autoshorts.collection import (
+    CandidateSkip,
+    VideoCandidate,
+    YouTubeAccess,
+    download_progress_from_hook,
+)
 from autoshorts.timestamp_parser import Clip
 
 
@@ -146,3 +151,74 @@ def test_controller_reports_cancelled_without_touching_tk(tmp_path, monkeypatch)
         "cancelled",
         "finished",
     ]
+
+
+def test_pipeline_emits_candidate_skipped_and_passes_auth(tmp_path, monkeypatch):
+    from autoshorts import automation_pipeline
+
+    source = tmp_path / "video.mp4"
+    source.touch()
+    received = {}
+
+    def discover(*args, **kwargs):
+        received["discovery_access"] = kwargs["access"]
+        kwargs["skip_handler"](
+            CandidateSkip(
+                "Creator",
+                "Blocked",
+                "https://example.com/blocked",
+                "requires_authentication",
+                "technical detail",
+            )
+        )
+        return [candidate()]
+
+    def download(*args, **kwargs):
+        received["download_access"] = kwargs["access"]
+        return source
+
+    monkeypatch.setattr(automation_pipeline, "discover_creator_videos", discover)
+    monkeypatch.setattr(automation_pipeline, "download_video", download)
+    events = []
+    access = YouTubeAccess("brave")
+    run_automation(
+        AutomationRequest(
+            "tech", 1, 30, tmp_path, download_only=True, youtube_access=access
+        ),
+        config(),
+        make_settings(tmp_path),
+        event_handler=events.append,
+    )
+    skipped = next(event for event in events if event.kind == "candidate_skipped")
+    assert skipped.message == "requires_authentication"
+    assert skipped.data["technical_detail"] == "technical detail"
+    assert received == {"discovery_access": access, "download_access": access}
+
+
+def test_gui_request_passes_selected_youtube_browser(tmp_path):
+    from autoshorts.gui import AutoShortsWindow
+
+    class Variable:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    class Creators:
+        def curselection(self):
+            return (0,)
+
+        def get(self, _index):
+            return "Creator"
+
+    window = object.__new__(AutoShortsWindow)
+    window.auto_creators = Creators()
+    window.auto_workspace = Variable(str(tmp_path))
+    window.auto_quantity = Variable(1)
+    window.auto_age = Variable(30)
+    window.auto_theme = Variable("tech")
+    window.auto_download_only = Variable(True)
+    window.auto_youtube_auth = Variable("Brave")
+    request = window._automation_request()
+    assert request.youtube_access == YouTubeAccess("brave")
