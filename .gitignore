@@ -27,6 +27,8 @@ user_data/
 
 # Private configurations
 config/local*
+config/automation.local.json
+config/automation.local.json.tmp
 config/private*
 *.private.py
 keys.txt

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from urllib.parse import urlparse
 
 
@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 class Creator:
     name: str
     videos_url: str
+    enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +21,7 @@ class ThemeProfile:
     prompt: str
     creators: tuple[Creator, ...]
     output_subdirectory: str
+    enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,35 +36,90 @@ class AutomationConfig:
 
 
 def load_automation_config(path: str | Path) -> AutomationConfig:
-    """Load public configuration; credentials and browser sessions are excluded."""
+    """Load configuration while retaining compatibility with pre-enabled JSON."""
     config_path = Path(path)
     data = json.loads(config_path.read_text(encoding="utf-8"))
-    themes: list[ThemeProfile] = []
+    return automation_config_from_dict(data)
+
+
+def automation_config_from_dict(data: object) -> AutomationConfig:
+    if not isinstance(data, dict):
+        raise ValueError("Automation configuration must be an object.")
     raw_themes = data.get("themes")
     if not isinstance(raw_themes, list):
         raise ValueError("Automation configuration must contain a themes list.")
+    themes: list[ThemeProfile] = []
+    seen: set[str] = set()
     for raw_theme in raw_themes:
         if not isinstance(raw_theme, dict):
             raise ValueError("Each theme must be an object.")
         name = _required_text(raw_theme, "name", "theme")
-        creators_data = raw_theme.get("creators")
-        if not isinstance(creators_data, list) or not creators_data:
-            raise ValueError(f"Theme '{name}' must contain at least one creator.")
+        key = name.casefold()
+        if key in seen:
+            raise ValueError(f"Duplicate theme name: {name}")
+        seen.add(key)
+        creators_data = raw_theme.get("creators", [])
+        if not isinstance(creators_data, list):
+            raise ValueError(f"Theme '{name}' creators must be a list.")
         creators = tuple(_load_creator(item, name) for item in creators_data)
-        output_subdirectory = str(raw_theme.get("output_subdirectory", name)).strip()
-        if not output_subdirectory:
-            raise ValueError(f"Theme '{name}' has an empty output_subdirectory.")
+        creator_names = [creator.name.casefold() for creator in creators]
+        if len(creator_names) != len(set(creator_names)):
+            raise ValueError(f"Theme '{name}' has duplicate creator names.")
+        output = str(raw_theme.get("output_subdirectory", name)).strip()
+        validate_output_subdirectory(output, name)
         themes.append(
             ThemeProfile(
                 name=name,
                 prompt=str(raw_theme.get("prompt", "")),
                 creators=creators,
-                output_subdirectory=output_subdirectory,
+                output_subdirectory=output,
+                enabled=_boolean(raw_theme, "enabled", True, f"theme '{name}'"),
             )
         )
-    if not themes:
-        raise ValueError("Automation configuration must contain at least one theme.")
     return AutomationConfig(tuple(themes))
+
+
+def automation_config_to_dict(config: AutomationConfig) -> dict[str, object]:
+    return {
+        "themes": [
+            {
+                "name": theme.name,
+                "enabled": theme.enabled,
+                "prompt": theme.prompt,
+                "output_subdirectory": theme.output_subdirectory,
+                "creators": [
+                    {
+                        "name": creator.name,
+                        "videos_url": creator.videos_url,
+                        "enabled": creator.enabled,
+                    }
+                    for creator in theme.creators
+                ],
+            }
+            for theme in config.themes
+        ]
+    }
+
+
+def validate_output_subdirectory(value: str, theme_name: str = "theme") -> None:
+    if not value:
+        raise ValueError(f"Theme '{theme_name}' has an empty output_subdirectory.")
+    path = PurePath(value)
+    if path.is_absolute() or ".." in path.parts or len(path.parts) != 1:
+        raise ValueError("A pasta de saída deve ser um nome simples, sem '/' ou '..'.")
+    if value in {".", ".."}:
+        raise ValueError("A pasta de saída informada é inválida.")
+
+
+def validate_creator(name: str, videos_url: str) -> tuple[str, str]:
+    clean_name = name.strip()
+    clean_url = videos_url.strip()
+    if not clean_name:
+        raise ValueError("O nome do criador não pode ficar vazio.")
+    parsed = urlparse(clean_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Creator '{clean_name}' must have an HTTP(S) videos_url.")
+    return clean_name, clean_url
 
 
 def _required_text(data: dict[str, object], key: str, context: str) -> str:
@@ -72,12 +129,23 @@ def _required_text(data: dict[str, object], key: str, context: str) -> str:
     return value.strip()
 
 
+def _boolean(
+    data: dict[str, object], key: str, default: bool, context: str
+) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{context} field '{key}' must be boolean.")
+    return value
+
+
 def _load_creator(data: object, theme_name: str) -> Creator:
     if not isinstance(data, dict):
         raise ValueError(f"Creators in theme '{theme_name}' must be objects.")
     name = _required_text(data, "name", "creator")
     videos_url = _required_text(data, "videos_url", f"creator '{name}'")
-    parsed = urlparse(videos_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError(f"Creator '{name}' must have an HTTP(S) videos_url.")
-    return Creator(name, videos_url)
+    name, videos_url = validate_creator(name, videos_url)
+    return Creator(
+        name,
+        videos_url,
+        _boolean(data, "enabled", True, f"creator '{name}'"),
+    )
