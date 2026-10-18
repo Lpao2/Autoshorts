@@ -9,12 +9,15 @@ from dataclasses import replace
 from pathlib import Path
 
 from autoshorts.automation_config import (
+    AccountProfile,
     AutomationConfig,
     Creator,
+    ThemePolicy,
     ThemeProfile,
     automation_config_from_dict,
     automation_config_to_dict,
     load_automation_config,
+    validate_account,
     validate_creator,
     validate_output_subdirectory,
 )
@@ -69,6 +72,7 @@ class AutomationStore:
         output_subdirectory: str,
         prompt: str = "",
         enabled: bool = True,
+        policy: ThemePolicy | None = None,
     ) -> AutomationConfig:
         clean_name = name.strip()
         if not clean_name:
@@ -81,6 +85,8 @@ class AutomationStore:
             (),
             output_subdirectory.strip(),
             enabled,
+            (),
+            policy or ThemePolicy(),
         )
         return self.save(replace(config, themes=(*config.themes, theme)))
 
@@ -93,6 +99,7 @@ class AutomationStore:
         output_subdirectory: str,
         prompt: str,
         enabled: bool,
+        policy: ThemePolicy | None = None,
     ) -> AutomationConfig:
         current = config.theme(original_name)
         clean_name = name.strip()
@@ -106,6 +113,7 @@ class AutomationStore:
             output_subdirectory=output_subdirectory.strip(),
             prompt=prompt,
             enabled=enabled,
+            policy=policy or current.policy,
         )
         return self.save(self._replace_theme(config, original_name, updated))
 
@@ -203,6 +211,74 @@ class AutomationStore:
             self._replace_theme(config, theme_name, replace(theme, creators=creators))
         )
 
+    def set_theme_policy(
+        self, config: AutomationConfig, theme_name: str, policy: ThemePolicy
+    ) -> AutomationConfig:
+        theme = config.theme(theme_name)
+        return self.save(
+            self._replace_theme(config, theme_name, replace(theme, policy=policy))
+        )
+
+    def add_account(
+        self,
+        config: AutomationConfig,
+        theme_name: str,
+        *,
+        name: str,
+        email: str,
+        enabled: bool = True,
+    ) -> AutomationConfig:
+        theme = config.theme(theme_name)
+        if len(theme.accounts) >= 3:
+            raise ValueError("Um tema pode ter no máximo 3 contas.")
+        clean_name, clean_email = validate_account(name, email)
+        self._ensure_unique_account(theme, clean_name)
+        accounts = (*theme.accounts, AccountProfile(clean_name, clean_email, enabled))
+        self._validate_enabled_accounts(accounts)
+        return self.save(
+            self._replace_theme(config, theme_name, replace(theme, accounts=accounts))
+        )
+
+    def edit_account(
+        self,
+        config: AutomationConfig,
+        theme_name: str,
+        original_name: str,
+        *,
+        name: str,
+        email: str,
+        enabled: bool,
+    ) -> AutomationConfig:
+        theme = config.theme(theme_name)
+        current = next(
+            (item for item in theme.accounts if item.name == original_name), None
+        )
+        if current is None:
+            raise KeyError(f"Account not found: {original_name}")
+        clean_name, clean_email = validate_account(name, email)
+        self._ensure_unique_account(theme, clean_name, excluding=original_name)
+        updated = replace(
+            current, name=clean_name, email=clean_email, enabled=enabled
+        )
+        accounts = tuple(
+            updated if item.name == original_name else item for item in theme.accounts
+        )
+        self._validate_enabled_accounts(accounts)
+        return self.save(
+            self._replace_theme(config, theme_name, replace(theme, accounts=accounts))
+        )
+
+    def remove_account(
+        self, config: AutomationConfig, theme_name: str, account_name: str
+    ) -> AutomationConfig:
+        theme = config.theme(theme_name)
+        if not any(item.name == account_name for item in theme.accounts):
+            raise KeyError(f"Account not found: {account_name}")
+        accounts = tuple(item for item in theme.accounts if item.name != account_name)
+        return self.save(
+            self._replace_theme(config, theme_name, replace(theme, accounts=accounts))
+        )
+
     @staticmethod
     def _replace_theme(
         config: AutomationConfig, name: str, updated: ThemeProfile
@@ -233,6 +309,21 @@ class AutomationStore:
             for item in theme.creators
         ):
             raise ValueError(f"Já existe um criador chamado '{name}' neste tema.")
+
+    @staticmethod
+    def _ensure_unique_account(
+        theme: ThemeProfile, name: str, *, excluding: str | None = None
+    ) -> None:
+        if any(
+            item.name != excluding and item.name.casefold() == name.casefold()
+            for item in theme.accounts
+        ):
+            raise ValueError(f"Já existe uma conta chamada '{name}' neste tema.")
+
+    @staticmethod
+    def _validate_enabled_accounts(accounts: tuple[AccountProfile, ...]) -> None:
+        if sum(account.enabled for account in accounts) > 3:
+            raise ValueError("Um tema pode ter no máximo 3 contas ativas.")
 
 
 def _fsync_directory(directory: Path) -> None:
