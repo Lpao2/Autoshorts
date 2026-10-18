@@ -31,3 +31,4 @@ def test_parse_cuts_rejects_reversed_interval() -> None:
 
 def test_seconds_to_timestamp() -> None:
     assert seconds_to_timestamp(5405) == "01:30:05"
+    assert seconds_to_timestamp(667.38) == "00:11:07.38"

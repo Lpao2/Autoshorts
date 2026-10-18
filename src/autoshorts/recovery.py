@@ -407,9 +407,14 @@ def resume_analyzed_production(
         expected_width=settings.output_width,
         expected_height=settings.output_height,
     )
-    if plan.next_action != RecoveryAction.REUSE_ANALYSIS:
-        raise ValueError(f"Expected reusable ANALYZED job, got {plan.next_action}.")
-    analysis_path, transcript_path = plan.reusable_artifacts
+    if plan.next_action not in {RecoveryAction.REUSE_ANALYSIS, RecoveryAction.RERENDER}:
+        raise ValueError(f"Expected reusable analyzed job, got {plan.next_action}.")
+    if plan.next_action == RecoveryAction.RERENDER:
+        prepare_recovery(store, plan)
+        analysis_path = theme_root / ".work" / youtube_id / "analysis.json"
+        transcript_path = theme_root / ".work" / youtube_id / "transcript.json"
+    else:
+        analysis_path, transcript_path = plan.reusable_artifacts
     transcript = load_transcript(transcript_path, youtube_id=youtube_id)
     analysis = load_analysis(analysis_path, transcript, youtube_id=youtube_id)
     source_path = theme_root / "downloads" / creator_directory / f"{youtube_id}.mp4"

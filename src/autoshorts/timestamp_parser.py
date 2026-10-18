@@ -23,12 +23,12 @@ _TIMESTAMP_PATTERN = re.compile(
 class Clip:
     """A section selected from the original video."""
 
-    start_seconds: int
-    end_seconds: int
+    start_seconds: float
+    end_seconds: float
     title: str
 
     @property
-    def duration_seconds(self) -> int:
+    def duration_seconds(self) -> float:
         return self.end_seconds - self.start_seconds
 
 
@@ -57,15 +57,21 @@ def time_to_seconds(timestamp: str) -> int:
     raise ValueError(f"Invalid timestamp '{timestamp}'. Use MM:SS or HH:MM:SS.")
 
 
-def seconds_to_timestamp(total_seconds: int) -> str:
+def seconds_to_timestamp(total_seconds: float) -> str:
     """Convert seconds into an FFmpeg-compatible HH:MM:SS timestamp."""
 
     if total_seconds < 0:
         raise ValueError("Seconds cannot be negative.")
 
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    hours = int(total_seconds // 3600)
+    remainder = total_seconds - hours * 3600
+    minutes = int(remainder // 60)
+    seconds = remainder - minutes * 60
+    if float(seconds).is_integer():
+        seconds_text = f"{int(seconds):02d}"
+    else:
+        seconds_text = f"{seconds:06.3f}".rstrip("0").rstrip(".")
+    return f"{hours:02d}:{minutes:02d}:{seconds_text}"
 
 
 def parse_cuts(text: str) -> list[Clip]:
