@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from queue import Queue
 from threading import Event, Thread
 
@@ -13,14 +14,18 @@ from autoshorts.automation_pipeline import (
     run_automation,
 )
 from autoshorts.config import Settings
+from autoshorts.state_store import StateStore
 
 
 class AutomationController:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self, settings: Settings, *, state_db_path: str | Path | None = None
+    ) -> None:
         self.settings = settings
         self.messages: Queue[tuple[str, object]] = Queue()
         self.cancel_event = Event()
         self.thread: Thread | None = None
+        self.state_db_path = Path(state_db_path) if state_db_path is not None else None
 
     @property
     def busy(self) -> bool:
@@ -54,14 +59,11 @@ class AutomationController:
         analyze: AnalysisProvider | None,
     ) -> None:
         try:
-            result = run_automation(
-                request,
-                config,
-                self.settings,
-                analyze=analyze,
-                cancel=self.cancel_event,
-                event_handler=lambda event: self.messages.put(("event", event)),
-            )
+            if self.state_db_path is None:
+                result = self._run(request, config, analyze, None)
+            else:
+                with StateStore(self.state_db_path) as state_store:
+                    result = self._run(request, config, analyze, state_store)
             self.messages.put(("completed", result))
         except AutomationCancelled as exc:
             self.messages.put(("cancelled", exc))
@@ -69,3 +71,14 @@ class AutomationController:
             self.messages.put(("failed", exc))
         finally:
             self.messages.put(("finished", None))
+
+    def _run(self, request, config, analyze, state_store):
+        return run_automation(
+            request,
+            config,
+            self.settings,
+            analyze=analyze,
+            cancel=self.cancel_event,
+            state_store=state_store,
+            event_handler=lambda event: self.messages.put(("event", event)),
+        )

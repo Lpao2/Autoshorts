@@ -22,12 +22,14 @@ from autoshorts.collection import (
     CandidateSkip,
     VideoCandidate,
     YouTubeAccess,
+    candidate_youtube_id,
     discover_creator_videos,
     download_video,
 )
 from autoshorts.config import Settings
 from autoshorts.pipeline import PipelineResult, run_pipeline
 from autoshorts.render_events import RenderCancelled
+from autoshorts.state_store import StateStore, VideoStatus
 
 AnalysisProvider = Callable[[Path, VideoCandidate, ThemeProfile], ClipAnalysis]
 EventHandler = Callable[[AutomationEvent], None]
@@ -61,6 +63,7 @@ def run_automation(
     analyze: AnalysisProvider | None = None,
     event_handler: EventHandler | None = None,
     cancel: Event | None = None,
+    state_store: StateStore | None = None,
 ) -> tuple[AutomationItemResult, ...]:
     """Run collection and optional analysis/rendering for one configured theme."""
     if request.videos_per_creator < 1:
@@ -113,6 +116,31 @@ def run_automation(
             for index, candidate in enumerate(candidates, start=1):
                 stage = "download"
                 check_automation_cancelled(cancel)
+                youtube_id = candidate_youtube_id(candidate)
+                if state_store is not None and youtube_id:
+                    if state_store.is_completed(youtube_id):
+                        emit(
+                            AutomationEvent(
+                                "candidate_skipped",
+                                creator=candidate.creator,
+                                title=candidate.title,
+                                url=candidate.url,
+                                message="already_processed",
+                            )
+                        )
+                        continue
+                    state_store.register_video(
+                        youtube_id=youtube_id,
+                        source_url=candidate.url,
+                        creator_name=candidate.creator,
+                        theme_name=theme.name,
+                        title=candidate.title,
+                    )
+                    record = state_store.get_video(youtube_id)
+                    if record and record.status == VideoStatus.FAILED:
+                        state_store.transition_video(
+                            youtube_id, VideoStatus.DISCOVERED
+                        )
                 emit(
                     _candidate_event(
                         "candidate_found", candidate, index, len(candidates)
@@ -124,6 +152,12 @@ def run_automation(
                     )
                 )
                 try:
+                    if state_store is not None and youtube_id:
+                        record = state_store.get_video(youtube_id)
+                        if record and record.status == VideoStatus.DISCOVERED:
+                            state_store.transition_video(
+                                youtube_id, VideoStatus.DOWNLOADING
+                            )
                     source_path = download_video(
                         candidate,
                         theme_root
@@ -159,6 +193,12 @@ def run_automation(
                             progress=1.0,
                         )
                     )
+                    if state_store is not None and youtube_id:
+                        record = state_store.get_video(youtube_id)
+                        if record and record.status == VideoStatus.DOWNLOADING:
+                            state_store.transition_video(
+                                youtube_id, VideoStatus.DOWNLOADED
+                            )
                     if request.download_only:
                         results.append(
                             AutomationItemResult(candidate, source_path, None, None)
@@ -220,6 +260,13 @@ def run_automation(
                         raise AutomationCancelled(str(exc)) from exc
                     raise
                 except Exception as exc:
+                    if state_store is not None and youtube_id:
+                        record = state_store.get_video(youtube_id)
+                        if record and record.status not in {
+                            VideoStatus.COMPLETED,
+                            VideoStatus.FAILED,
+                        }:
+                            state_store.fail_video(youtube_id, str(exc))
                     kind = f"{stage}_failed"
                     emit(
                         AutomationEvent(

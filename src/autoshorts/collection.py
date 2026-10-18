@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from threading import Event
 from typing import Any, Literal
+from urllib.parse import parse_qs, urlparse
 
 from autoshorts.automation_events import AutomationCancelled, check_automation_cancelled
 
@@ -33,6 +34,7 @@ class VideoCandidate:
     title: str
     upload_date: date | None
     duration_seconds: int | None
+    youtube_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +190,7 @@ def discover_creator_videos(
                 title,
                 upload_date,
                 int(hydrated["duration"]) if hydrated.get("duration") else None,
+                str(hydrated["id"]) if hydrated.get("id") else None,
             )
         )
     return candidates
@@ -255,6 +258,16 @@ def classify_youtube_error(error: BaseException | str) -> str:
     if "unavailable" in text or "private video" in text or "removed" in text:
         return "unavailable"
     return "metadata_error"
+
+
+def candidate_youtube_id(candidate: VideoCandidate) -> str | None:
+    if candidate.youtube_id:
+        return candidate.youtube_id
+    parsed = urlparse(candidate.url)
+    if parsed.hostname in {"youtu.be", "www.youtu.be"}:
+        return parsed.path.strip("/") or None
+    values = parse_qs(parsed.query).get("v")
+    return values[0] if values else None
 
 
 def friendly_youtube_error(error: BaseException | str) -> str:
