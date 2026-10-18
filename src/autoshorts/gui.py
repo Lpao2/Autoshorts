@@ -16,6 +16,7 @@ from autoshorts.automation_config import AutomationConfig, load_automation_confi
 from autoshorts.automation_events import AutomationEvent
 from autoshorts.automation_jobs import AutomationController
 from autoshorts.automation_pipeline import AutomationRequest
+from autoshorts.collection import YouTubeAccess, resolve_deno
 from autoshorts.config import OverwritePolicy, Settings, load_settings
 from autoshorts.fake_analysis import fake_analysis_provider
 from autoshorts.gui_jobs import JobController, JobRequest
@@ -37,6 +38,19 @@ POLICIES = {
     "Proteger existentes": "error",
     "Reutilizar válidos": "skip",
     "Substituir existentes": "replace",
+}
+YOUTUBE_AUTH = {
+    "Sem autenticação": None,
+    "Brave": "brave",
+    "Firefox": "firefox",
+}
+SKIP_REASONS = {
+    "requires_authentication": "Requer autenticação",
+    "unavailable": "Indisponível",
+    "too_old": "Muito antigo",
+    "live": "Transmissão ao vivo",
+    "upcoming": "Estreia futura",
+    "metadata_error": "Erro de metadados",
 }
 
 
@@ -276,6 +290,9 @@ class AutoShortsWindow:
         self.auto_theme = tk.StringVar(master=self.root)
         self.auto_quantity = tk.IntVar(master=self.root, value=1)
         self.auto_age = tk.IntVar(master=self.root, value=3650)
+        self.auto_youtube_auth = tk.StringVar(
+            master=self.root, value="Sem autenticação"
+        )
         self.auto_download_only = tk.BooleanVar(master=self.root, value=True)
         self.auto_fake = tk.BooleanVar(master=self.root, value=False)
         self.auto_status = tk.StringVar(
@@ -321,6 +338,15 @@ class AutoShortsWindow:
         ttk.Spinbox(limits, from_=0, to=3650, textvariable=self.auto_age, width=7).pack(
             side="left", padx=5
         )
+        ttk.Label(limits, text="Autenticação YouTube:").pack(side="left", padx=(18, 5))
+        self.auto_auth_combo = ttk.Combobox(
+            limits,
+            textvariable=self.auto_youtube_auth,
+            values=tuple(YOUTUBE_AUTH),
+            state="readonly",
+            width=18,
+        )
+        self.auto_auth_combo.pack(side="left")
         self._automation_path_row(
             frame, 5, "Workspace", self.auto_workspace, self.choose_automation_workspace
         )
@@ -592,6 +618,7 @@ class AutoShortsWindow:
             workspace,
             download_only=self.auto_download_only.get(),
             selected_creators=selected,
+            youtube_access=YouTubeAccess(YOUTUBE_AUTH[self.auto_youtube_auth.get()]),
         )
 
     def start_automation(self) -> None:
@@ -606,6 +633,14 @@ class AutoShortsWindow:
             messagebox.showerror("Automação", str(exc))
             return
         analyze = None
+        if resolve_deno() is None:
+            warning = (
+                "Runtime JavaScript Deno não encontrado. "
+                "A extração do YouTube pode falhar."
+            )
+            self.auto_status.set(warning)
+            self.auto_log(warning)
+            messagebox.showwarning("Deno não encontrado", warning)
         if not request.download_only:
             if not self.auto_fake.get():
                 messagebox.showerror(
@@ -848,6 +883,29 @@ class AutoShortsWindow:
                 values=(event.creator, event.title, "Encontrado", "-", "Na fila"),
             )
             self.auto_log(f"Encontrado: {event.title}")
+            return
+        if event.kind == "candidate_skipped":
+            reason = SKIP_REASONS.get(event.message or "", event.message or "Ignorado")
+            row = f"auto-{len(self.automation_rows) + 1}"
+            self.auto_tree.insert(
+                "",
+                "end",
+                iid=row,
+                values=(event.creator, event.title, "Ignorado", "-", reason),
+            )
+            self.auto_log(
+                f"{event.creator} | {event.title} | Ignorado | {reason}"
+            )
+            detail = event.data.get("technical_detail")
+            if detail:
+                self.auto_log(f"Detalhe técnico: {detail}")
+            if event.message == "requires_authentication" and not YOUTUBE_AUTH.get(
+                self.auto_youtube_auth.get()
+            ):
+                self.auto_status.set(
+                    "YouTube exige autenticação. Selecione Brave ou Firefox em "
+                    "Autenticação YouTube."
+                )
             return
         if event.kind == "discovery_started":
             self.auto_status.set(f"Descobrindo vídeos de {event.creator}...")
