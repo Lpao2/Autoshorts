@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 from test_render_integration import make_settings
@@ -19,7 +20,7 @@ from autoshorts.collection import (
     YouTubeAccess,
     download_progress_from_hook,
 )
-from autoshorts.state_store import StateStore
+from autoshorts.state_store import RenderedShort, StateStore, VideoStatus
 from autoshorts.timestamp_parser import Clip
 from autoshorts.video_processor import RenderResult
 
@@ -399,3 +400,71 @@ def test_completed_youtube_id_is_skipped_globally(tmp_path, monkeypatch):
     assert result == ()
     skipped = next(event for event in events if event.kind == "candidate_skipped")
     assert skipped.message == "already_produced"
+
+
+def test_pipeline_resumes_rendered_at_distribution_only(tmp_path, monkeypatch):
+    from autoshorts import automation_pipeline
+    from autoshorts.media_probe import MediaInfo
+
+    item = VideoCandidate(
+        "Creator",
+        "https://youtube.com/watch?v=resume-id",
+        "Resume",
+        date.today(),
+        30,
+        "resume-id",
+    )
+    monkeypatch.setattr(
+        automation_pipeline, "discover_creator_videos", lambda *args, **kwargs: [item]
+    )
+    monkeypatch.setattr(
+        automation_pipeline,
+        "download_video",
+        lambda *args, **kwargs: pytest.fail("resume must not download"),
+    )
+    monkeypatch.setattr(
+        automation_pipeline,
+        "run_pipeline",
+        lambda *args, **kwargs: pytest.fail("resume must not render"),
+    )
+    monkeypatch.setattr(
+        "autoshorts.recovery.probe_media",
+        lambda path, *_args: MediaInfo(Path(path), 10, 108, 192, 30, True, 0),
+    )
+    masters = tmp_path / "tech" / "creators" / "Creator" / "resume-id"
+    masters.mkdir(parents=True)
+    paths = tuple(masters / f"{index:02d}.mp4" for index in range(1, 4))
+    for path in paths:
+        path.touch()
+    events = []
+    with StateStore(tmp_path / "resume.db") as store:
+        store.register_video(
+            youtube_id="resume-id",
+            source_url=item.url,
+            creator_name=item.creator,
+            theme_name="tech",
+            title=item.title,
+        )
+        for status in (
+            VideoStatus.DOWNLOADING,
+            VideoStatus.DOWNLOADED,
+            VideoStatus.RENDERING,
+        ):
+            store.transition_video("resume-id", status)
+        store.record_rendered_shorts(
+            "resume-id",
+            tuple(
+                RenderedShort(index, path) for index, path in enumerate(paths, start=1)
+            ),
+        )
+        result = run_automation(
+            AutomationRequest("tech", 1, 30, tmp_path),
+            config(),
+            make_settings(tmp_path),
+            analyze=lambda *args: pytest.fail("resume must not analyze"),
+            state_store=store,
+            event_handler=events.append,
+        )
+        assert result[0].error is None
+        assert store.get_video("resume-id").status == VideoStatus.QUEUED
+    assert any(event.kind == "recovery_started" for event in events)
