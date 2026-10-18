@@ -96,25 +96,45 @@ O progresso geral é a média dos percentuais dos clipes, não uma previsão de 
 
 ## Fluxo automático experimental
 
-A aba **Automático** usa `config/automation.example.json` por padrão e mantém o
-fluxo manual intacto. Instale o adaptador de coleta explicitamente:
+A aba **Automático** mantém o fluxo manual intacto. O arquivo
+`config/automation.example.json` é somente documentação e nunca é alterado pela
+GUI. A configuração de trabalho padrão fica em `config/automation.local.json`,
+ignorada pelo Git. Em uma instalação headless/servidor, defina explicitamente:
+
+```bash
+export AUTOSHORTS_AUTOMATION_CONFIG=/srv/autoshorts/config/automation.json
+```
+
+Instale o adaptador de coleta explicitamente:
 
 ```bash
 .venv/bin/python -m pip install -e '.[automation]'
 ```
 
-Para testes locais, copie o exemplo para `config/local-automation-test.json` e
-edite tema, criadores e URLs. Arquivos `config/local*` são ignorados pelo Git.
+Temas e criadores agora podem ser criados, editados, ativados, desativados e
+removidos diretamente pela interface. O JSON continua sendo a fonte persistente;
+a GUI usa uma camada independente de Tk para validar e publicar alterações
+atomicamente (`.tmp`, `fsync` e `replace`). JSON antigo sem `enabled` continua
+válido e assume `true`.
 
-1. Selecione o JSON e clique em **Recarregar**.
-2. Escolha tema, criadores, quantidade, idade máxima e workspace.
-3. Em **Autenticação YouTube**, mantenha **Sem autenticação** para conteúdo que
+1. Use **Novo** para criar um tema e informe nome e pasta de saída.
+2. Use **Adicionar** para cadastrar nome e URL `/videos` de cada criador.
+3. Escolha os criadores habilitados desta execução, quantidade, idade e workspace.
+4. Em **Autenticação YouTube**, mantenha **Sem autenticação** para conteúdo que
    funcionar anonimamente ou selecione explicitamente **Brave**/**Firefox** para
    o yt-dlp ler o perfil local. Cookies nunca são exportados para o projeto.
-4. Use **Somente download** para descoberta e coleta reais sem análise.
-5. Para o E2E de desenvolvimento, desmarque **Somente download** e marque
+5. Use **Somente download** para descoberta e coleta reais sem análise.
+6. Para o E2E de desenvolvimento, desmarque **Somente download** e marque
    explicitamente **TEST / DEVELOPMENT ONLY — análise fake**.
-6. Clique em **Executar automação** e acompanhe os itens, bytes, velocidade e ETA.
+7. Clique em **Executar automação** e acompanhe os itens, bytes, velocidade e ETA.
+
+`Ativo` é persistente; a seleção azul na tabela vale apenas para a próxima
+execução. Criadores inativos permanecem visíveis, não são pré-selecionados e são
+ignorados pelo core. Temas inativos também permanecem salvos, mas não executam.
+
+Novos downloads usam `workspace/<tema>/downloads/<criador>/<video-id>.mp4`.
+Outputs continuam sob `workspace/<tema>/outputs/<criador>/`. Arquivos no layout
+anterior não são movidos nem apagados automaticamente.
 
 O provider fake cria um único corte curto e previsível, apenas para validar o
 caminho download → Clip → FFmpeg → manifest. Ele nunca é ativado por padrão.
