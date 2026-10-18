@@ -46,12 +46,8 @@ VIDEO_TRANSITIONS: dict[VideoStatus, frozenset[VideoStatus]] = {
             VideoStatus.FAILED,
         }
     ),
-    VideoStatus.TRANSCRIBING: frozenset(
-        {VideoStatus.TRANSCRIBED, VideoStatus.FAILED}
-    ),
-    VideoStatus.TRANSCRIBED: frozenset(
-        {VideoStatus.ANALYZING, VideoStatus.FAILED}
-    ),
+    VideoStatus.TRANSCRIBING: frozenset({VideoStatus.TRANSCRIBED, VideoStatus.FAILED}),
+    VideoStatus.TRANSCRIBED: frozenset({VideoStatus.ANALYZING, VideoStatus.FAILED}),
     VideoStatus.ANALYZING: frozenset({VideoStatus.ANALYZED, VideoStatus.FAILED}),
     VideoStatus.ANALYZED: frozenset({VideoStatus.RENDERING, VideoStatus.FAILED}),
     VideoStatus.RENDERING: frozenset({VideoStatus.RENDERED, VideoStatus.FAILED}),
@@ -211,12 +207,51 @@ class StateStore:
         return self.transition_video(youtube_id, VideoStatus.FAILED, error=error)
 
     def interrupted_videos(self) -> tuple[VideoRecord, ...]:
-        terminal = (VideoStatus.COMPLETED, VideoStatus.FAILED)
+        terminal = (VideoStatus.QUEUED, VideoStatus.COMPLETED, VideoStatus.FAILED)
         rows = self.connection.execute(
-            "SELECT * FROM videos WHERE status NOT IN (?, ?) ORDER BY updated_at",
+            "SELECT * FROM videos WHERE status NOT IN (?, ?, ?) ORDER BY updated_at",
             terminal,
         ).fetchall()
         return tuple(_video_record(row) for row in rows)
+
+    def list_incomplete_videos(
+        self, *, include_failed: bool = False
+    ) -> tuple[VideoRecord, ...]:
+        """List production jobs that may require recovery or manual retry."""
+        excluded = [VideoStatus.QUEUED, VideoStatus.COMPLETED]
+        if not include_failed:
+            excluded.append(VideoStatus.FAILED)
+        placeholders = ", ".join("?" for _ in excluded)
+        rows = self.connection.execute(
+            f"SELECT * FROM videos WHERE status NOT IN ({placeholders}) "
+            "ORDER BY updated_at",
+            tuple(excluded),
+        ).fetchall()
+        return tuple(_video_record(row) for row in rows)
+
+    def reset_for_recovery(self, youtube_id: str, target: VideoStatus) -> VideoRecord:
+        """Apply one explicit, audited rewind selected by the recovery service."""
+        allowed = {
+            (VideoStatus.DOWNLOADING, VideoStatus.DISCOVERED),
+            (VideoStatus.DOWNLOADED, VideoStatus.DISCOVERED),
+            (VideoStatus.RENDERING, VideoStatus.DISCOVERED),
+            (VideoStatus.RENDERING, VideoStatus.DOWNLOADED),
+            (VideoStatus.FAILED, VideoStatus.DISCOVERED),
+        }
+        with self.connection:
+            record = self.get_video(youtube_id)
+            if record is None:
+                raise KeyError(f"Unknown YouTube ID: {youtube_id}")
+            if (record.status, target) not in allowed:
+                raise ValueError(f"Invalid recovery reset: {record.status} -> {target}")
+            self.connection.execute(
+                "UPDATE videos SET status = ?, updated_at = ?, error = NULL "
+                "WHERE youtube_id = ?",
+                (target, _now(), youtube_id),
+            )
+        updated = self.get_video(youtube_id)
+        assert updated is not None
+        return updated
 
     def record_rendered_shorts(
         self, youtube_id: str, shorts: tuple[RenderedShort, ...]
@@ -330,7 +365,7 @@ class StateStore:
         if version == 0:
             with self.connection:
                 self.connection.executescript(
-                """
+                    """
                 CREATE TABLE IF NOT EXISTS videos (
                     youtube_id TEXT PRIMARY KEY,
                     source_url TEXT NOT NULL,
