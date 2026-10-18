@@ -5,6 +5,8 @@ O ciclo automático local até `QUEUED` está documentado em
 
 A transcrição local opcional está documentada em
 [docs/transcription.md](docs/transcription.md).
+A análise real por transcript está documentada em
+[docs/gemini-analysis.md](docs/gemini-analysis.md).
 
 Automated local pipeline for transforming selected moments from long-form videos into vertical short-form content.
 

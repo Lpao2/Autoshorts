@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import Event
 
 from autoshorts.ai_analysis import ClipAnalysis
+from autoshorts.analysis_service import analyze_transcript
 from autoshorts.automation_config import AutomationConfig, ThemeProfile
 from autoshorts.automation_events import (
     AutomationCancelled,
@@ -37,6 +38,7 @@ from autoshorts.recovery import (
     RecoveryAction,
     inspect_video_state,
     prepare_recovery,
+    reconcile_analysis,
     reconcile_transcript,
     resume_rendered_distribution,
 )
@@ -47,10 +49,12 @@ from autoshorts.state_store import (
     StateStore,
     VideoStatus,
 )
+from autoshorts.transcript_analysis import TranscriptAnalysisProvider, load_analysis
 from autoshorts.transcription import Transcript, TranscriptionProvider, load_transcript
 from autoshorts.transcription_service import transcript_video
 
-AnalysisProvider = Callable[[Path, VideoCandidate, ThemeProfile], ClipAnalysis]
+LegacyAnalysisProvider = Callable[[Path, VideoCandidate, ThemeProfile], ClipAnalysis]
+AnalysisProvider = LegacyAnalysisProvider | TranscriptAnalysisProvider
 EventHandler = Callable[[AutomationEvent], None]
 
 
@@ -141,6 +145,7 @@ def run_automation(
                 recovery_plan = None
                 reusable_source: Path | None = None
                 transcript: Transcript | None = None
+                analysis: ClipAnalysis | None = None
                 if state_store is not None and youtube_id:
                     state_store.register_video(
                         youtube_id=youtube_id,
@@ -229,6 +234,44 @@ def run_automation(
                         if source.is_file():
                             reusable_source = source
                     elif recovery_plan.next_action == RecoveryAction.REUSE_TRANSCRIPT:
+                        transcript = load_transcript(
+                            recovery_plan.reusable_artifacts[0], youtube_id=youtube_id
+                        )
+                        source = (
+                            theme_root
+                            / "downloads"
+                            / creator_directory
+                            / f"{youtube_id}.mp4"
+                        )
+                        if source.is_file():
+                            reusable_source = source
+                    elif recovery_plan.next_action in {
+                        RecoveryAction.RECONCILE_ANALYSIS,
+                        RecoveryAction.REUSE_ANALYSIS,
+                    }:
+                        transcript = load_transcript(
+                            recovery_plan.reusable_artifacts[1], youtube_id=youtube_id
+                        )
+                        resolved = (
+                            reconcile_analysis(state_store, recovery_plan)
+                            if recovery_plan.next_action
+                            == RecoveryAction.RECONCILE_ANALYSIS
+                            else load_analysis(
+                                recovery_plan.reusable_artifacts[0],
+                                transcript,
+                                youtube_id=youtube_id,
+                            )
+                        )
+                        analysis = resolved.clips
+                        source = (
+                            theme_root
+                            / "downloads"
+                            / creator_directory
+                            / f"{youtube_id}.mp4"
+                        )
+                        if source.is_file():
+                            reusable_source = source
+                    elif recovery_plan.next_action == RecoveryAction.REANALYZE:
                         transcript = load_transcript(
                             recovery_plan.reusable_artifacts[0], youtube_id=youtube_id
                         )
@@ -368,31 +411,64 @@ def run_automation(
                             cancel=cancel,
                             event_handler=emit,
                         )
-                    assert analyze is not None
-                    stage = "analysis"
-                    check_automation_cancelled(cancel)
-                    emit(
-                        _candidate_event(
-                            "analysis_started", candidate, index, len(candidates)
-                        )
-                    )
-                    analysis = analyze(source_path, candidate, theme)
-                    if len(analysis.clips) != 3:
-                        raise ValueError(
-                            "Produção automática exige exatamente 3 cortes; "
-                            f"o provider retornou {len(analysis.clips)}."
-                        )
                     if state_store is None or not youtube_id:
                         raise ValueError(
                             "Produção automática requer o SQLite e um youtube_id."
                         )
-                    state_store.transition_video(youtube_id, VideoStatus.ANALYZING)
-                    state_store.transition_video(youtube_id, VideoStatus.ANALYZED)
-                    emit(
-                        _candidate_event(
-                            "analysis_finished", candidate, index, len(candidates)
-                        )
-                    )
+                    if analysis is None:
+                        assert analyze is not None
+                        stage = "analysis"
+                        check_automation_cancelled(cancel)
+                        if hasattr(analyze, "analyze"):
+                            if transcript is None:
+                                raise ValueError(
+                                    "Análise inteligente exige transcrição válida."
+                                )
+                            resolved = analyze_transcript(
+                                youtube_id=youtube_id,
+                                transcript=transcript,
+                                artifact_path=(
+                                    theme_root / ".work" / youtube_id / "analysis.json"
+                                ),
+                                provider=analyze,
+                                state_store=state_store,
+                                title=candidate.title,
+                                creator=candidate.creator,
+                                theme=theme.name,
+                                theme_prompt=theme.prompt,
+                                cancel=cancel,
+                                event_handler=emit,
+                            )
+                            analysis = resolved.clips
+                        else:
+                            state_store.transition_video(
+                                youtube_id, VideoStatus.ANALYZING
+                            )
+                            emit(
+                                _candidate_event(
+                                    "analysis_started",
+                                    candidate,
+                                    index,
+                                    len(candidates),
+                                )
+                            )
+                            analysis = analyze(source_path, candidate, theme)
+                            if len(analysis.clips) != 3:
+                                raise ValueError(
+                                    "Produção automática exige exatamente 3 cortes; "
+                                    f"o provider retornou {len(analysis.clips)}."
+                                )
+                            state_store.transition_video(
+                                youtube_id, VideoStatus.ANALYZED
+                            )
+                            emit(
+                                _candidate_event(
+                                    "analysis_finished",
+                                    candidate,
+                                    index,
+                                    len(candidates),
+                                )
+                            )
                     check_automation_cancelled(cancel)
                     stage = "render"
                     emit(

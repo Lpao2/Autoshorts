@@ -253,6 +253,13 @@ def test_migrates_v1_database_and_preserves_data(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
+        tables = {
+            row[0]
+            for row in store.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert {"analyses", "ai_usage"} <= tables
 
 
 def test_migrates_v2_to_v3_without_losing_video_or_shorts(tmp_path):
@@ -282,6 +289,6 @@ def test_migrates_v2_to_v3_without_losing_video_or_shorts(tmp_path):
     )
     connection.close()
     with StateStore(path) as store:
-        assert store.schema_version == 3
+        assert store.schema_version == 4
         assert store.get_video("old").status == VideoStatus.DOWNLOADED
         assert store.get_transcript("old") is None

@@ -187,7 +187,7 @@ def test_final_states_are_noop(tmp_path, media_probe, status):
 def test_future_and_failed_states_are_explicit(tmp_path, media_probe):
     with StateStore(tmp_path / "state.db") as store:
         register(store, VideoStatus.ANALYZING)
-        assert inspect(store, tmp_path).next_action == RecoveryAction.UNSUPPORTED
+        assert inspect(store, tmp_path).next_action == RecoveryAction.REDOWNLOAD
         store.connection.execute(
             "UPDATE videos SET status = 'FAILED' WHERE youtube_id = 'video-1'"
         )

@@ -14,6 +14,7 @@ from autoshorts.distribution import (
 )
 from autoshorts.media_probe import MediaProbeError, probe_media
 from autoshorts.state_store import QueuedShort, StateStore, VideoStatus
+from autoshorts.transcript_analysis import load_analysis
 from autoshorts.transcription import load_transcript
 
 
@@ -24,6 +25,9 @@ class RecoveryAction(StrEnum):
     RETRANSCRIBE = "RETRANSCRIBE"
     RECONCILE_TRANSCRIPT = "RECONCILE_TRANSCRIPT"
     REUSE_TRANSCRIPT = "REUSE_TRANSCRIPT"
+    REANALYZE = "REANALYZE"
+    RECONCILE_ANALYSIS = "RECONCILE_ANALYSIS"
+    REUSE_ANALYSIS = "REUSE_ANALYSIS"
     RERENDER = "RERENDER"
     DISTRIBUTE = "DISTRIBUTE"
     NOOP = "NOOP"
@@ -62,6 +66,7 @@ def inspect_video_state(
     partial_downloads = _download_residues(source.parent, youtube_id)
     partial_renders = tuple(sorted(master_root.glob("*.part*")))
     transcript_path = theme_root / ".work" / youtube_id / "transcript.json"
+    analysis_path = theme_root / ".work" / youtube_id / "analysis.json"
 
     if record.status in {VideoStatus.QUEUED, VideoStatus.COMPLETED}:
         return RecoveryPlan(
@@ -133,11 +138,54 @@ def inspect_video_state(
             cleanup_actions=((path,) if path.exists() else ()),
         )
     if record.status in {VideoStatus.ANALYZING, VideoStatus.ANALYZED}:
+        transcript_record = store.get_transcript(youtube_id)
+        transcript_file = (
+            transcript_record.file_path if transcript_record else transcript_path
+        )
+        transcript = _valid_transcript(transcript_file, youtube_id)
+        if transcript is not None and _valid_analysis(
+            analysis_path, transcript, youtube_id
+        ):
+            action = (
+                RecoveryAction.RECONCILE_ANALYSIS
+                if record.status == VideoStatus.ANALYZING
+                else RecoveryAction.REUSE_ANALYSIS
+            )
+            return RecoveryPlan(
+                youtube_id,
+                record.status,
+                action,
+                "Analysis artifact is valid and can be reused.",
+                reusable_artifacts=(analysis_path, transcript_file),
+            )
+        if transcript is not None:
+            return RecoveryPlan(
+                youtube_id,
+                record.status,
+                RecoveryAction.REANALYZE,
+                "Analysis is absent or invalid; transcript can be reused.",
+                reusable_artifacts=(transcript_file,),
+                cleanup_actions=((analysis_path,) if analysis_path.exists() else ()),
+            )
+        if _valid_media(source, ffprobe_path):
+            return RecoveryPlan(
+                youtube_id,
+                record.status,
+                RecoveryAction.RETRANSCRIBE,
+                "Analysis recovery requires a valid transcript first.",
+                reusable_artifacts=(source,),
+                cleanup_actions=tuple(
+                    path for path in (analysis_path, transcript_file) if path.exists()
+                ),
+            )
         return RecoveryPlan(
             youtube_id,
             record.status,
-            RecoveryAction.UNSUPPORTED,
-            "Recovery for this future stage is not implemented yet.",
+            RecoveryAction.REDOWNLOAD,
+            "Analysis, transcript and source are unavailable.",
+            cleanup_actions=tuple(
+                path for path in (analysis_path, transcript_file) if path.exists()
+            ),
         )
     if record.status == VideoStatus.DISCOVERED:
         return RecoveryPlan(
@@ -228,12 +276,15 @@ def prepare_recovery(store: StateStore, plan: RecoveryPlan) -> None:
         RecoveryAction.REDOWNLOAD,
         RecoveryAction.RERENDER,
         RecoveryAction.RETRANSCRIBE,
+        RecoveryAction.REANALYZE,
     }:
         return
     for path in plan.cleanup_actions:
         path.unlink(missing_ok=True)
     target = (
-        VideoStatus.DOWNLOADED
+        VideoStatus.TRANSCRIBED
+        if plan.next_action == RecoveryAction.REANALYZE
+        else VideoStatus.DOWNLOADED
         if plan.next_action in {RecoveryAction.RERENDER, RecoveryAction.RETRANSCRIBE}
         else VideoStatus.DISCOVERED
     )
@@ -253,6 +304,23 @@ def reconcile_transcript(store: StateStore, plan: RecoveryPlan):
         language=transcript.language,
     )
     return transcript
+
+
+def reconcile_analysis(store: StateStore, plan: RecoveryPlan):
+    if plan.next_action != RecoveryAction.RECONCILE_ANALYSIS:
+        raise ValueError(f"Recovery plan cannot reconcile: {plan.next_action}")
+    analysis_path, transcript_path = plan.reusable_artifacts
+    transcript = load_transcript(transcript_path, youtube_id=plan.youtube_id)
+    analysis = load_analysis(analysis_path, transcript, youtube_id=plan.youtube_id)
+    store.record_analysis(
+        plan.youtube_id,
+        file_path=analysis_path,
+        provider=analysis.result.provider,
+        model=analysis.result.model,
+        prompt_hash=analysis.prompt_hash,
+        usage=analysis.result.usage,
+    )
+    return analysis
 
 
 def resume_rendered_distribution(
@@ -323,6 +391,14 @@ def _valid_transcript(path: Path, youtube_id: str):
         return load_transcript(path, youtube_id=youtube_id)
     except ValueError:
         return None
+
+
+def _valid_analysis(path: Path, transcript, youtube_id: str) -> bool:
+    try:
+        load_analysis(path, transcript, youtube_id=youtube_id)
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def _inspect_masters(

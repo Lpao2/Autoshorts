@@ -26,6 +26,7 @@ from autoshorts.collection import YouTubeAccess, resolve_deno
 from autoshorts.config import OverwritePolicy, Settings, load_settings
 from autoshorts.fake_analysis import fake_analysis_provider
 from autoshorts.faster_whisper_provider import FasterWhisperProvider
+from autoshorts.gemini_analysis_provider import GeminiAnalysisProvider
 from autoshorts.gui_jobs import JobController, JobRequest
 from autoshorts.pipeline import PipelineResult
 from autoshorts.render_events import RenderEvent
@@ -470,6 +471,7 @@ class AutoShortsWindow:
         )
         self.auto_download_only = tk.BooleanVar(master=self.root, value=True)
         self.auto_fake = tk.BooleanVar(master=self.root, value=False)
+        self.auto_gemini = tk.BooleanVar(master=self.root, value=False)
         self.auto_transcription = tk.BooleanVar(master=self.root, value=False)
         self.auto_status = tk.StringVar(
             master=self.root, value="Carregue uma configuração."
@@ -605,6 +607,12 @@ class AutoShortsWindow:
             variable=self.auto_fake,
         )
         self.fake_check.pack(side="left", padx=14)
+        self.gemini_check = ttk.Checkbutton(
+            modes,
+            text="Gemini — análise real",
+            variable=self.auto_gemini,
+        )
+        self.gemini_check.pack(side="left", padx=(0, 14))
         transcription_available = importlib.util.find_spec("faster_whisper") is not None
         self.transcription_check = ttk.Checkbutton(
             modes,
@@ -681,6 +689,9 @@ class AutoShortsWindow:
 
     def _sync_analysis_mode(self) -> None:
         self.fake_check.configure(
+            state="disabled" if self.auto_download_only.get() else "normal"
+        )
+        self.gemini_check.configure(
             state="disabled" if self.auto_download_only.get() else "normal"
         )
         if importlib.util.find_spec("faster_whisper") is not None:
@@ -1202,14 +1213,32 @@ class AutoShortsWindow:
             self.auto_log(warning)
             messagebox.showwarning("Deno não encontrado", warning)
         if not request.download_only:
-            if not self.auto_fake.get():
+            if self.auto_gemini.get() and self.auto_fake.get():
+                messagebox.showerror(
+                    "Provider ambíguo", "Selecione Gemini ou análise fake, não ambos."
+                )
+                return
+            if self.auto_gemini.get():
+                if not self.auto_transcription.get():
+                    messagebox.showerror(
+                        "Transcrição necessária",
+                        "A análise Gemini exige Transcrição local (Whisper).",
+                    )
+                    return
+                try:
+                    analyze = GeminiAnalysisProvider()
+                except RuntimeError as exc:
+                    messagebox.showerror("Gemini", str(exc))
+                    return
+            elif self.auto_fake.get():
+                analyze = fake_analysis_provider
+            else:
                 messagebox.showerror(
                     "Provider ausente",
-                    "Ative explicitamente o provider TEST / DEVELOPMENT ONLY "
+                    "Selecione Gemini, o provider TEST / DEVELOPMENT ONLY "
                     "ou use Somente download.",
                 )
                 return
-            analyze = fake_analysis_provider
             if self.auto_transcription.get():
                 transcribe = FasterWhisperProvider()
         self.automation_rows.clear()
@@ -1539,6 +1568,16 @@ class AutoShortsWindow:
                 f"Transcrição concluída ({event.data.get('language', '?')}): "
                 f"{event.path}"
             )
+            return
+        if event.kind == "analysis_finished" and event.data.get("model"):
+            cost = float(event.data.get("cost_usd", 0))
+            month = float(event.data.get("month_cost_usd", 0))
+            budget = float(event.data.get("budget_usd", 8))
+            self.auto_status.set(
+                f"{event.data['model']} · Tokens: {event.data.get('tokens', 0)} · "
+                f"US$ {cost:.4f} · mês US$ {month:.4f} / US$ {budget:.2f}"
+            )
+            self.auto_log(self.auto_status.get())
             return
         if event.kind == "render_progress":
             progress = event.progress or 0.0

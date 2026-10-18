@@ -27,5 +27,11 @@ avança para `QUEUED` na transação que associa todos os Shorts. Uma segunda
 execução encontra `QUEUED` e vira `NOOP`.
 
 `StateStore.list_incomplete_videos()` lista trabalhos recuperáveis sem incluir
-`QUEUED`, `COMPLETED` ou, por padrão, `FAILED`. O schema v3 adiciona a tabela
-1:1 `transcripts`; as migrations v1→v2→v3 preservam os dados anteriores.
+`QUEUED`, `COMPLETED` ou, por padrão, `FAILED`. O schema v3 adiciona `transcripts`;
+o v4 adiciona `analyses` e o ledger `ai_usage`. As migrations
+v1→v2→v3→v4 preservam os dados anteriores.
+
+Para `ANALYZING`, um `analysis.json` válido é reconciliado e promovido a
+`ANALYZED`. Sem artifact válido, um transcript íntegro permite `REANALYZE`.
+Para `ANALYZED`, o artifact válido é reutilizado sem nova chamada; se estiver
+ausente ou corrompido, o pipeline volta à análise a partir do transcript.

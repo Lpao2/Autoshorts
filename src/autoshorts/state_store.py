@@ -9,8 +9,10 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
+from autoshorts.transcript_analysis import AnalysisUsage
+
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class VideoStatus(StrEnum):
@@ -111,6 +113,16 @@ class TranscriptRecord:
     provider: str
     model: str
     language: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisRecord:
+    youtube_id: str
+    file_path: Path
+    provider: str
+    model: str
+    prompt_hash: str
     created_at: str
 
 
@@ -250,6 +262,12 @@ class StateStore:
             (VideoStatus.TRANSCRIBED, VideoStatus.DOWNLOADED),
             (VideoStatus.TRANSCRIBING, VideoStatus.DISCOVERED),
             (VideoStatus.TRANSCRIBED, VideoStatus.DISCOVERED),
+            (VideoStatus.ANALYZING, VideoStatus.TRANSCRIBED),
+            (VideoStatus.ANALYZED, VideoStatus.TRANSCRIBED),
+            (VideoStatus.ANALYZING, VideoStatus.DOWNLOADED),
+            (VideoStatus.ANALYZED, VideoStatus.DOWNLOADED),
+            (VideoStatus.ANALYZING, VideoStatus.DISCOVERED),
+            (VideoStatus.ANALYZED, VideoStatus.DISCOVERED),
             (VideoStatus.FAILED, VideoStatus.DISCOVERED),
         }
         with self.connection:
@@ -312,6 +330,93 @@ class StateStore:
         with self.connection:
             self.connection.execute(
                 "DELETE FROM transcripts WHERE youtube_id = ?", (youtube_id,)
+            )
+
+    def get_analysis(self, youtube_id: str) -> AnalysisRecord | None:
+        row = self.connection.execute(
+            "SELECT * FROM analyses WHERE youtube_id = ?", (youtube_id,)
+        ).fetchone()
+        return _analysis_record(row) if row else None
+
+    def record_analysis(
+        self,
+        youtube_id: str,
+        *,
+        file_path: Path,
+        provider: str,
+        model: str,
+        prompt_hash: str,
+        usage: AnalysisUsage,
+    ) -> AnalysisRecord:
+        if not file_path.is_file():
+            raise ValueError(f"Analysis artifact does not exist: {file_path}")
+        now = _now()
+        with self.connection:
+            current = self.get_video(youtube_id)
+            if current is None or current.status != VideoStatus.ANALYZING:
+                raise ValueError("Video must be ANALYZING before persistence.")
+            self.connection.execute(
+                """INSERT INTO analyses
+                   (youtube_id, file_path, provider, model, prompt_hash, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(youtube_id) DO UPDATE SET
+                     file_path=excluded.file_path, provider=excluded.provider,
+                     model=excluded.model, prompt_hash=excluded.prompt_hash,
+                     created_at=excluded.created_at""",
+                (youtube_id, str(file_path), provider, model, prompt_hash, now),
+            )
+            self.connection.execute(
+                """INSERT INTO ai_usage
+                   (youtube_id, provider, model, input_tokens, output_tokens,
+                    thinking_tokens, total_tokens, estimated_cost_usd, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    youtube_id,
+                    provider,
+                    model,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.thinking_tokens,
+                    usage.total_tokens,
+                    usage.estimated_cost_usd,
+                    now,
+                ),
+            )
+            self._transition_video(youtube_id, VideoStatus.ANALYZED)
+        record = self.get_analysis(youtube_id)
+        assert record is not None
+        return record
+
+    def monthly_ai_cost(self, provider: str, *, month: str | None = None) -> float:
+        month = month or datetime.now(UTC).strftime("%Y-%m")
+        row = self.connection.execute(
+            "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM ai_usage "
+            "WHERE provider = ? AND substr(created_at, 1, 7) = ?",
+            (provider, month),
+        ).fetchone()
+        return float(row[0])
+
+    def record_ai_usage(
+        self, youtube_id: str, *, provider: str, model: str, usage: AnalysisUsage
+    ) -> None:
+        """Record a billed call that did not produce a reusable analysis."""
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO ai_usage
+                   (youtube_id, provider, model, input_tokens, output_tokens,
+                    thinking_tokens, total_tokens, estimated_cost_usd, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    youtube_id,
+                    provider,
+                    model,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.thinking_tokens,
+                    usage.total_tokens,
+                    usage.estimated_cost_usd,
+                    _now(),
+                ),
             )
 
     def record_rendered_shorts(
@@ -472,6 +577,24 @@ class StateStore:
                     FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
                         ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS analyses (
+                    youtube_id TEXT PRIMARY KEY, file_path TEXT NOT NULL,
+                    provider TEXT NOT NULL, model TEXT NOT NULL,
+                    prompt_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS ai_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, youtube_id TEXT NOT NULL,
+                    provider TEXT NOT NULL, model TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                    thinking_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+                    estimated_cost_usd REAL NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage(created_at);
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -481,6 +604,9 @@ class StateStore:
             version = 2
         if version == 2:
             self._migrate_v2_to_v3()
+            version = 3
+        if version == 3:
+            self._migrate_v3_to_v4()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -536,6 +662,31 @@ class StateStore:
                 """
             )
 
+    def _migrate_v3_to_v4(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE analyses (
+                    youtube_id TEXT PRIMARY KEY, file_path TEXT NOT NULL,
+                    provider TEXT NOT NULL, model TEXT NOT NULL,
+                    prompt_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE ai_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, youtube_id TEXT NOT NULL,
+                    provider TEXT NOT NULL, model TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                    thinking_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+                    estimated_cost_usd REAL NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX idx_ai_usage_created ON ai_usage(created_at);
+                PRAGMA user_version = 4;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -580,5 +731,16 @@ def _transcript_record(row: sqlite3.Row) -> TranscriptRecord:
         provider=row["provider"],
         model=row["model"],
         language=row["language"],
+        created_at=row["created_at"],
+    )
+
+
+def _analysis_record(row: sqlite3.Row) -> AnalysisRecord:
+    return AnalysisRecord(
+        youtube_id=row["youtube_id"],
+        file_path=Path(row["file_path"]),
+        provider=row["provider"],
+        model=row["model"],
+        prompt_hash=row["prompt_hash"],
         created_at=row["created_at"],
     )
