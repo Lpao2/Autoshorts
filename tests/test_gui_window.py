@@ -147,8 +147,8 @@ def test_automatic_tab_reflects_saved_creators_and_disabled_state(window, tmp_pa
                     ),
                     "lol",
                     accounts=(
-                        AccountProfile("Account A", "a@example.test"),
-                        AccountProfile("Account B", "b@example.test", False),
+                        AccountProfile("Account A", "a@example.test", 1),
+                        AccountProfile("Account B", "b@example.test", 2, False),
                     ),
                 ),
             )

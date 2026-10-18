@@ -153,8 +153,8 @@ def test_accounts_and_policy_persist_and_reload(tmp_path):
                 (),
                 "lol",
                 accounts=(
-                    AccountProfile("A", "a@example.test"),
-                    AccountProfile("B", "b@example.test", False),
+                    AccountProfile("A", "a@example.test", 1),
+                    AccountProfile("B", "b@example.test", 2, False),
                 ),
                 policy=ThemePolicy(3, 30),
             ),
@@ -177,6 +177,7 @@ def test_account_crud_preserves_slot_order_and_limit(tmp_path):
             "LoL",
             name=f"Account {index}",
             email=f"a{index}@example.test",
+            slot=index,
         )
     assert [item.name for item in config.theme("LoL").accounts] == [
         "Account 1",
@@ -185,7 +186,7 @@ def test_account_crud_preserves_slot_order_and_limit(tmp_path):
     ]
     with pytest.raises(ValueError, match="máximo 3"):
         store.add_account(
-            config, "LoL", name="Account 4", email="a4@example.test"
+            config, "LoL", name="Account 4", email="a4@example.test", slot=1
         )
     config = store.edit_account(
         config,
@@ -193,10 +194,11 @@ def test_account_crud_preserves_slot_order_and_limit(tmp_path):
         "Account 2",
         name="Middle",
         email="middle@example.test",
+        slot=2,
         enabled=False,
     )
     assert config.theme("LoL").accounts[1] == AccountProfile(
-        "Middle", "middle@example.test", False
+        "Middle", "middle@example.test", 2, False
     )
     config = store.remove_account(config, "LoL", "Middle")
     assert [item.name for item in config.theme("LoL").accounts] == [
@@ -214,3 +216,53 @@ def test_policy_rejects_non_three_shorts_and_can_be_edited(tmp_path):
     )
     config = store.set_theme_policy(config, "LoL", ThemePolicy(5, 60))
     assert store.load().theme("LoL").policy == ThemePolicy(5, 60)
+
+
+def test_legacy_accounts_gain_slots_and_save_them(tmp_path):
+    path = tmp_path / "automation.json"
+    path.write_text(
+        '{"themes":[{"name":"LoL","output_subdirectory":"lol","accounts":['
+        '{"name":"A","email":"a@example.test"},'
+        '{"name":"B","email":"b@example.test"},'
+        '{"name":"C","email":"c@example.test"}]}]}',
+        encoding="utf-8",
+    )
+    store = AutomationStore(path)
+    config = store.load()
+    assert [item.slot for item in config.theme("LoL").accounts] == [1, 2, 3]
+    store.save(config)
+    assert [
+        item["slot"] for item in json.loads(path.read_text())["themes"][0]["accounts"]
+    ] == [1, 2, 3]
+
+
+def test_removing_slot_two_does_not_renumber_slot_three(tmp_path):
+    store = AutomationStore(tmp_path / "automation.json")
+    config = store.add_theme(
+        AutomationConfig(()), name="LoL", output_subdirectory="lol"
+    )
+    for slot in (1, 2, 3):
+        config = store.add_account(
+            config, "LoL", name=f"A{slot}", email=f"a{slot}@example.test", slot=slot
+        )
+    config = store.remove_account(config, "LoL", "A2")
+    assert [(item.name, item.slot) for item in config.theme("LoL").accounts] == [
+        ("A1", 1),
+        ("A3", 3),
+    ]
+
+
+def test_enabled_account_slots_must_be_unique(tmp_path):
+    store = AutomationStore(tmp_path / "automation.json")
+    config = store.add_theme(
+        AutomationConfig(()), name="LoL", output_subdirectory="lol"
+    )
+    config = store.add_account(config, "LoL", name="A", email="a@example.test", slot=1)
+    with pytest.raises(ValueError, match="mesmo slot"):
+        store.add_account(config, "LoL", name="B", email="b@example.test", slot=1)
+
+
+@pytest.mark.parametrize("slot", [0, 4, -1])
+def test_account_rejects_invalid_slot(slot):
+    with pytest.raises(ValueError, match="slot"):
+        AccountProfile("A", "a@example.test", slot)

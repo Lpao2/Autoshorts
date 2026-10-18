@@ -21,16 +21,19 @@
         {
           "name": "Conta A",
           "email": "a@example.test",
+          "slot": 1,
           "enabled": true
         },
         {
           "name": "Conta B",
           "email": "b@example.test",
+          "slot": 2,
           "enabled": true
         },
         {
           "name": "Conta C",
           "email": "c@example.test",
+          "slot": 3,
           "enabled": true
         }
       ]

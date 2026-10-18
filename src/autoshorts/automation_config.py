@@ -19,7 +19,12 @@ class Creator:
 class AccountProfile:
     name: str
     email: str
+    slot: int
     enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if self.slot not in {1, 2, 3}:
+            raise ValueError("Account slot must be 1, 2 or 3.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +97,10 @@ def automation_config_from_dict(data: object) -> AutomationConfig:
         accounts_data = raw_theme.get("accounts", [])
         if not isinstance(accounts_data, list):
             raise ValueError(f"Theme '{name}' accounts must be a list.")
-        accounts = tuple(_load_account(item, name) for item in accounts_data)
+        accounts = tuple(
+            _load_account(item, name, legacy_slot=index)
+            for index, item in enumerate(accounts_data, start=1)
+        )
         if len(accounts) > 3:
             raise ValueError(f"Theme '{name}' can contain at most 3 accounts.")
         account_names = [account.name.casefold() for account in accounts]
@@ -100,6 +108,9 @@ def automation_config_from_dict(data: object) -> AutomationConfig:
             raise ValueError(f"Theme '{name}' has duplicate account names.")
         if sum(account.enabled for account in accounts) > 3:
             raise ValueError(f"Theme '{name}' can enable at most 3 accounts.")
+        enabled_slots = [account.slot for account in accounts if account.enabled]
+        if len(enabled_slots) != len(set(enabled_slots)):
+            raise ValueError(f"Theme '{name}' has duplicate enabled account slots.")
         policy = _load_policy(raw_theme.get("policy"), name)
         output = str(raw_theme.get("output_subdirectory", name)).strip()
         validate_output_subdirectory(output, name)
@@ -137,6 +148,7 @@ def automation_config_to_dict(config: AutomationConfig) -> dict[str, object]:
                     {
                         "name": account.name,
                         "email": account.email,
+                        "slot": account.slot,
                         "enabled": account.enabled,
                     }
                     for account in theme.accounts
@@ -212,15 +224,25 @@ def _load_creator(data: object, theme_name: str) -> Creator:
     )
 
 
-def _load_account(data: object, theme_name: str) -> AccountProfile:
+def _load_account(
+    data: object, theme_name: str, *, legacy_slot: int
+) -> AccountProfile:
     if not isinstance(data, dict):
         raise ValueError(f"Accounts in theme '{theme_name}' must be objects.")
     name = _required_text(data, "name", "account")
     email = _required_text(data, "email", f"account '{name}'")
     name, email = validate_account(name, email)
+    raw_slot = data.get("slot", legacy_slot)
+    if isinstance(raw_slot, bool):
+        raise ValueError(f"Account '{name}' slot must be 1, 2 or 3.")
+    try:
+        slot = int(raw_slot)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Account '{name}' slot must be 1, 2 or 3.") from exc
     return AccountProfile(
         name,
         email,
+        slot,
         _boolean(data, "enabled", True, f"account '{name}'"),
     )
 

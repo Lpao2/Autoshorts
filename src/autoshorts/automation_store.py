@@ -226,6 +226,7 @@ class AutomationStore:
         *,
         name: str,
         email: str,
+        slot: int,
         enabled: bool = True,
     ) -> AutomationConfig:
         theme = config.theme(theme_name)
@@ -233,7 +234,10 @@ class AutomationStore:
             raise ValueError("Um tema pode ter no máximo 3 contas.")
         clean_name, clean_email = validate_account(name, email)
         self._ensure_unique_account(theme, clean_name)
-        accounts = (*theme.accounts, AccountProfile(clean_name, clean_email, enabled))
+        accounts = (
+            *theme.accounts,
+            AccountProfile(clean_name, clean_email, slot, enabled),
+        )
         self._validate_enabled_accounts(accounts)
         return self.save(
             self._replace_theme(config, theme_name, replace(theme, accounts=accounts))
@@ -247,6 +251,7 @@ class AutomationStore:
         *,
         name: str,
         email: str,
+        slot: int,
         enabled: bool,
     ) -> AutomationConfig:
         theme = config.theme(theme_name)
@@ -258,7 +263,7 @@ class AutomationStore:
         clean_name, clean_email = validate_account(name, email)
         self._ensure_unique_account(theme, clean_name, excluding=original_name)
         updated = replace(
-            current, name=clean_name, email=clean_email, enabled=enabled
+            current, name=clean_name, email=clean_email, slot=slot, enabled=enabled
         )
         accounts = tuple(
             updated if item.name == original_name else item for item in theme.accounts
@@ -324,6 +329,9 @@ class AutomationStore:
     def _validate_enabled_accounts(accounts: tuple[AccountProfile, ...]) -> None:
         if sum(account.enabled for account in accounts) > 3:
             raise ValueError("Um tema pode ter no máximo 3 contas ativas.")
+        enabled_slots = [account.slot for account in accounts if account.enabled]
+        if len(enabled_slots) != len(set(enabled_slots)):
+            raise ValueError("Duas contas ativas não podem usar o mesmo slot.")
 
 
 def _fsync_directory(directory: Path) -> None:
