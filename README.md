@@ -3,6 +3,9 @@
 O ciclo automático local até `QUEUED` está documentado em
 [docs/production-cycle.md](docs/production-cycle.md).
 
+A transcrição local opcional está documentada em
+[docs/transcription.md](docs/transcription.md).
+
 Automated local pipeline for transforming selected moments from long-form videos into vertical short-form content.
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
