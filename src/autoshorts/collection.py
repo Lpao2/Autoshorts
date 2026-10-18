@@ -1,23 +1,29 @@
-"""Optional YouTube collection through yt-dlp.
-
-The adapter is deliberately independent of browser sessions and AI providers.
-Authenticated cookies, if ever needed, must be supplied by the caller and kept
-outside the repository.
-"""
+"""Resilient YouTube collection through the yt-dlp Python API."""
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Literal
 
-from autoshorts.automation_events import (
-    AutomationCancelled,
-    check_automation_cancelled,
-)
+from autoshorts.automation_events import AutomationCancelled, check_automation_cancelled
+
+BrowserName = Literal["brave", "firefox"]
+
+
+@dataclass(frozen=True, slots=True)
+class YouTubeAccess:
+    """Selects a local browser profile; it never contains cookie data."""
+
+    browser: BrowserName | None = None
+
+    def __post_init__(self) -> None:
+        if self.browser not in {None, "brave", "firefox"}:
+            raise ValueError("browser must be none, brave or firefox")
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +33,15 @@ class VideoCandidate:
     title: str
     upload_date: date | None
     duration_seconds: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSkip:
+    creator: str
+    title: str
+    url: str
+    reason: str
+    detail: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +57,7 @@ class DownloadProgress:
 
 
 ProgressHandler = Callable[[DownloadProgress], None]
+SkipHandler = Callable[[CandidateSkip], None]
 
 
 def _require_yt_dlp() -> Any:
@@ -55,51 +71,125 @@ def _require_yt_dlp() -> Any:
     return yt_dlp
 
 
+def resolve_deno() -> Path | None:
+    """Find Deno both in PATH and in its standard per-user installation."""
+    found = shutil.which("deno")
+    if found:
+        return Path(found).resolve()
+    fallback = Path.home() / ".deno" / "bin" / "deno"
+    return fallback.resolve() if fallback.is_file() else None
+
+
+def youtube_dl_options(
+    access: YouTubeAccess | None = None, *, deno_path: Path | None = None
+) -> dict[str, object]:
+    """Build shared authentication/runtime options for every yt-dlp phase."""
+    options: dict[str, object] = {}
+    access = access or YouTubeAccess()
+    if access.browser:
+        options["cookiesfrombrowser"] = (access.browser, None, None, None)
+    deno = deno_path if deno_path is not None else resolve_deno()
+    if deno is not None:
+        options["js_runtimes"] = {"deno": {"path": str(deno)}}
+    return options
+
+
+def candidate_scan_limit(quantity: int) -> int:
+    return min(max(quantity * 5, 20), 100)
+
+
 def discover_creator_videos(
     creator_name: str,
     videos_url: str,
     *,
     quantity: int,
     age_days: int,
+    access: YouTubeAccess | None = None,
+    skip_handler: SkipHandler | None = None,
+    cancel: Event | None = None,
 ) -> list[VideoCandidate]:
-    """Discover recent non-live videos from a creator's videos page."""
+    """Flat-discover a channel, then hydrate candidates independently."""
     if quantity < 1 or age_days < 0:
         raise ValueError("quantity must be positive and age_days cannot be negative")
     yt_dlp = _require_yt_dlp()
-    with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
-        info = ydl.extract_info(videos_url, download=False)
+    limit = candidate_scan_limit(quantity)
+    shared = youtube_dl_options(access)
+    flat_options = {
+        **shared,
+        "quiet": True,
+        "skip_download": True,
+        "extract_flat": "in_playlist",
+        "playlistend": limit,
+        "ignoreerrors": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(flat_options) as ydl:
+            info = ydl.extract_info(videos_url, download=False)
+    except Exception as exc:
+        raise RuntimeError(friendly_youtube_error(exc)) from exc
     cutoff = date.today() - timedelta(days=age_days)
     candidates: list[VideoCandidate] = []
-    for entry in info.get("entries") or []:
-        if (
-            not entry
-            or entry.get("is_live")
-            or entry.get("live_status")
-            in {
-                "is_live",
-                "is_upcoming",
-            }
-        ):
+    for entry in (info or {}).get("entries") or []:
+        if len(candidates) >= quantity:
+            break
+        check_automation_cancelled(cancel)
+        if not entry:
             continue
-        upload_date = _parse_upload_date(entry.get("upload_date"))
-        if upload_date is not None and upload_date < cutoff:
-            continue
-        url = entry.get("webpage_url") or entry.get("url")
+        title = str(entry.get("title") or "Sem título")
+        url = _entry_url(entry)
         if not url:
+            _skip(skip_handler, creator_name, title, "", "unavailable", "URL ausente")
+            continue
+        try:
+            hydrate_options = {
+                **shared,
+                "quiet": True,
+                "skip_download": True,
+                "noplaylist": True,
+            }
+            with yt_dlp.YoutubeDL(hydrate_options) as ydl:
+                hydrated = ydl.extract_info(url, download=False)
+            if not hydrated:
+                raise RuntimeError("yt-dlp não retornou metadados")
+        except Exception as exc:
+            _skip(
+                skip_handler,
+                creator_name,
+                title,
+                url,
+                classify_youtube_error(exc),
+                str(exc),
+            )
+            continue
+        title = str(hydrated.get("title") or title)
+        final_url = _entry_url(hydrated) or url
+        live_status = hydrated.get("live_status")
+        if hydrated.get("is_live") or live_status == "is_live":
+            _skip(skip_handler, creator_name, title, final_url, "live", "live")
+            continue
+        if live_status == "is_upcoming":
+            _skip(skip_handler, creator_name, title, final_url, "upcoming", "upcoming")
+            continue
+        upload_date = _parse_upload_date(hydrated.get("upload_date"))
+        if upload_date is not None and upload_date < cutoff:
+            _skip(
+                skip_handler,
+                creator_name,
+                title,
+                final_url,
+                "too_old",
+                str(upload_date),
+            )
             continue
         candidates.append(
             VideoCandidate(
-                creator=creator_name,
-                url=str(url),
-                title=str(entry.get("title") or "untitled"),
-                upload_date=upload_date,
-                duration_seconds=(
-                    int(entry["duration"]) if entry.get("duration") else None
-                ),
+                creator_name,
+                final_url,
+                title,
+                upload_date,
+                int(hydrated["duration"]) if hydrated.get("duration") else None,
             )
         )
-        if len(candidates) >= quantity:
-            break
     return candidates
 
 
@@ -107,7 +197,7 @@ def download_video(
     candidate: VideoCandidate,
     destination: str | Path,
     *,
-    cookie_file: str | Path | None = None,
+    access: YouTubeAccess | None = None,
     progress_handler: ProgressHandler | None = None,
     cancel: Event | None = None,
 ) -> Path:
@@ -122,6 +212,7 @@ def download_video(
             progress_handler(download_progress_from_hook(raw))
 
     options: dict[str, object] = {
+        **youtube_dl_options(access),
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
         "merge_output_format": "mp4",
         "outtmpl": str(output_dir / "%(id)s.%(ext)s"),
@@ -130,8 +221,6 @@ def download_video(
         "no_warnings": True,
         "progress_hooks": [progress_hook],
     }
-    if cookie_file is not None:
-        options["cookiefile"] = str(cookie_file)
     check_automation_cancelled(cancel)
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -153,10 +242,38 @@ def download_video(
         ):
             _cleanup_partials(output_dir)
             raise AutomationCancelled("Download cancelado pelo usuário.") from exc
-        raise
+        raise RuntimeError(friendly_youtube_error(exc)) from exc
     if not prepared.is_file():
-        raise RuntimeError(f"yt-dlp did not create the expected file: {prepared}")
+        raise RuntimeError(f"yt-dlp não criou o arquivo esperado: {prepared}")
     return prepared
+
+
+def classify_youtube_error(error: BaseException | str) -> str:
+    text = str(error).lower()
+    if "sign in to confirm" in text or "authentication" in text:
+        return "requires_authentication"
+    if "unavailable" in text or "private video" in text or "removed" in text:
+        return "unavailable"
+    return "metadata_error"
+
+
+def friendly_youtube_error(error: BaseException | str) -> str:
+    text = str(error)
+    lowered = text.lower()
+    if "sign in to confirm you're not a bot" in lowered:
+        return (
+            "YouTube exige autenticação. Selecione Brave ou Firefox em "
+            "Autenticação YouTube."
+        )
+    if "sign in to confirm your age" in lowered or "age-restricted" in lowered:
+        return "Este vídeo exige autenticação/validação de idade."
+    if "http error 429" in lowered or "http 429" in lowered:
+        return "YouTube limitou temporariamente as requisições."
+    if "javascript runtime" in lowered or (
+        "deno" in lowered and "not found" in lowered
+    ):
+        return "Runtime JavaScript Deno não encontrado."
+    return text
 
 
 def download_progress_from_hook(raw: dict[str, object]) -> DownloadProgress:
@@ -170,15 +287,35 @@ def download_progress_from_hook(raw: dict[str, object]) -> DownloadProgress:
     if raw.get("status") == "finished":
         percent = 1.0
     return DownloadProgress(
-        status=str(raw.get("status") or "unknown"),
-        filename=str(raw["filename"]) if raw.get("filename") else None,
-        downloaded_bytes=downloaded,
-        total_bytes=total,
-        total_is_estimate=exact_total is None and estimated_total is not None,
-        speed=_optional_float(raw.get("speed")),
-        eta=_optional_int(raw.get("eta")),
-        percent=percent,
+        str(raw.get("status") or "unknown"),
+        str(raw["filename"]) if raw.get("filename") else None,
+        downloaded,
+        total,
+        exact_total is None and estimated_total is not None,
+        _optional_float(raw.get("speed")),
+        _optional_int(raw.get("eta")),
+        percent,
     )
+
+
+def _entry_url(entry: dict[str, Any]) -> str:
+    value = entry.get("webpage_url") or entry.get("original_url") or entry.get("url")
+    if value and str(value).startswith(("http://", "https://")):
+        return str(value)
+    video_id = entry.get("id") or value
+    return f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+
+
+def _skip(
+    handler: SkipHandler | None,
+    creator: str,
+    title: str,
+    url: str,
+    reason: str,
+    detail: str,
+) -> None:
+    if handler:
+        handler(CandidateSkip(creator, title, url, reason, detail))
 
 
 def _optional_int(value: object) -> int | None:

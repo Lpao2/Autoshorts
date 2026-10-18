@@ -19,7 +19,9 @@ from autoshorts.automation_events import (
     check_automation_cancelled,
 )
 from autoshorts.collection import (
+    CandidateSkip,
     VideoCandidate,
+    YouTubeAccess,
     discover_creator_videos,
     download_video,
 )
@@ -39,6 +41,7 @@ class AutomationRequest:
     workspace: Path
     download_only: bool = False
     selected_creators: tuple[str, ...] | None = None
+    youtube_access: YouTubeAccess = YouTubeAccess()
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +93,9 @@ def run_automation(
                 creator.videos_url,
                 quantity=request.videos_per_creator,
                 age_days=request.maximum_age_days,
+                access=request.youtube_access,
+                cancel=cancel,
+                skip_handler=lambda skipped: emit(_candidate_skipped_event(skipped)),
             )
             check_automation_cancelled(cancel)
             emit(
@@ -116,6 +122,7 @@ def run_automation(
                     source_path = download_video(
                         candidate,
                         theme_root / "downloads",
+                        access=request.youtube_access,
                         cancel=cancel,
                         progress_handler=lambda progress, item=candidate: emit(
                             AutomationEvent(
@@ -239,6 +246,17 @@ def _candidate_event(
         url=candidate.url,
         index=index,
         total=total,
+    )
+
+
+def _candidate_skipped_event(skipped: CandidateSkip) -> AutomationEvent:
+    return AutomationEvent(
+        "candidate_skipped",
+        creator=skipped.creator,
+        title=skipped.title,
+        url=skipped.url,
+        message=skipped.reason,
+        data={"technical_detail": skipped.detail},
     )
 
 
