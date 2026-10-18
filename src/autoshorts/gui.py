@@ -148,9 +148,7 @@ class _ThemeDialog(_EntityDialog):
         self.videos_per_creator = tk.IntVar(
             master=self.window, value=videos_per_creator
         )
-        self.maximum_age_days = tk.IntVar(
-            master=self.window, value=maximum_age_days
-        )
+        self.maximum_age_days = tk.IntVar(master=self.window, value=maximum_age_days)
         self._output_is_suggested = not bool(output)
         for row, (label, variable) in enumerate(
             (
@@ -161,9 +159,7 @@ class _ThemeDialog(_EntityDialog):
         ):
             ttk.Label(self.body, text=label).grid(row=row, column=0, sticky="w", pady=4)
             entry = ttk.Entry(self.body, textvariable=variable, width=46)
-            entry.grid(
-                row=row, column=1, sticky="ew", pady=4
-            )
+            entry.grid(row=row, column=1, sticky="ew", pady=4)
             if variable is self.output:
                 entry.bind(
                     "<KeyPress>",
@@ -229,31 +225,41 @@ class _CreatorDialog(_EntityDialog):
 
 
 class _AccountDialog(_EntityDialog):
-    def __init__(self, parent, *, name="", email="", enabled=True):
+    def __init__(self, parent, *, name="", email="", slot=1, enabled=True):
         super().__init__(parent, "Conta de destino")
         self.name = tk.StringVar(master=self.window, value=name)
         self.email = tk.StringVar(master=self.window, value=email)
+        self.slot = tk.IntVar(master=self.window, value=slot)
         self.enabled = tk.BooleanVar(master=self.window, value=enabled)
+        ttk.Label(self.body, text="Slot").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Combobox(
+            self.body,
+            textvariable=self.slot,
+            values=(1, 2, 3),
+            state="readonly",
+            width=6,
+        ).grid(row=0, column=1, sticky="w", pady=4)
         for row, (label, variable) in enumerate(
-            (("Nome", self.name), ("Email identificador", self.email))
+            (("Nome", self.name), ("Email identificador", self.email)), start=1
         ):
             ttk.Label(self.body, text=label).grid(row=row, column=0, sticky="w", pady=4)
             ttk.Entry(self.body, textvariable=variable, width=52).grid(
                 row=row, column=1, sticky="ew", pady=4
             )
         ttk.Checkbutton(self.body, text="Ativa", variable=self.enabled).grid(
-            row=2, column=1, sticky="w", pady=4
+            row=3, column=1, sticky="w", pady=4
         )
         ttk.Label(
             self.body,
             text="O slot define a associação: Short 1→Conta 1, 2→2, 3→3.",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.actions(self._save)
 
     def _save(self) -> None:
         self.result = (
             self.name.get(),
             self.email.get(),
+            str(self.slot.get()),
             "1" if self.enabled.get() else "0",
         )
         self.window.destroy()
@@ -517,12 +523,12 @@ class AutoShortsWindow:
         self.auto_creators.grid(row=0, column=0, sticky="nsew")
         creator_actions = ttk.Frame(creators_panel)
         creator_actions.grid(row=1, column=0, sticky="w", pady=(5, 0))
-        ttk.Button(
-            creator_actions, text="Adicionar", command=self.add_creator_ui
-        ).pack(side="left")
-        ttk.Button(
-            creator_actions, text="Editar", command=self.edit_creator_ui
-        ).pack(side="left", padx=6)
+        ttk.Button(creator_actions, text="Adicionar", command=self.add_creator_ui).pack(
+            side="left"
+        )
+        ttk.Button(creator_actions, text="Editar", command=self.edit_creator_ui).pack(
+            side="left", padx=6
+        )
         ttk.Button(
             creator_actions, text="Remover", command=self.remove_creator_ui
         ).pack(side="left")
@@ -847,13 +853,13 @@ class AutoShortsWindow:
         if self.automation_config is None or not self.auto_theme.get():
             return
         theme = self.automation_config.theme(self._current_theme_name())
-        for slot, account in enumerate(theme.accounts, start=1):
+        for account in sorted(theme.accounts, key=lambda item: item.slot):
             self.auto_accounts.insert(
                 "",
                 "end",
-                iid=f"account-{slot}",
+                iid=f"account-{account.slot}-{account.name}",
                 values=(
-                    slot,
+                    account.slot,
                     "✓" if account.enabled else "—",
                     account.name,
                     account.email,
@@ -1044,13 +1050,14 @@ class AutoShortsWindow:
         result = _AccountDialog(self.root).show()
         if not result:
             return
-        name, email, enabled = result
+        name, email, slot, enabled = result
         try:
             self.automation_config = self.automation_store.add_account(
                 self.automation_config,
                 theme_name,
                 name=name,
                 email=email,
+                slot=int(slot),
                 enabled=enabled == "1",
             )
         except (OSError, ValueError) as exc:
@@ -1072,11 +1079,12 @@ class AutoShortsWindow:
             self.root,
             name=account.name,
             email=account.email,
+            slot=account.slot,
             enabled=account.enabled,
         ).show()
         if not result:
             return
-        name, email, enabled = result
+        name, email, slot, enabled = result
         try:
             self.automation_config = self.automation_store.edit_account(
                 self.automation_config,
@@ -1084,6 +1092,7 @@ class AutoShortsWindow:
                 account_name,
                 name=name,
                 email=email,
+                slot=int(slot),
                 enabled=enabled == "1",
             )
         except (OSError, ValueError) as exc:
@@ -1428,9 +1437,7 @@ class AutoShortsWindow:
                 iid=row,
                 values=(event.creator, event.title, "Ignorado", "-", reason),
             )
-            self.auto_log(
-                f"{event.creator} | {event.title} | Ignorado | {reason}"
-            )
+            self.auto_log(f"{event.creator} | {event.title} | Ignorado | {reason}")
             detail = event.data.get("technical_detail")
             if detail:
                 self.auto_log(f"Detalhe técnico: {detail}")
@@ -1476,6 +1483,31 @@ class AutoShortsWindow:
             detail = _download_detail(event)
             self.auto_status.set(f"Baixando {event.title or ''} — {detail}")
             return
+        if event.kind == "render_progress":
+            progress = event.progress or 0.0
+            clip = event.index or 0
+            total = event.total or 3
+            self.auto_progress.stop()
+            self.auto_progress.configure(
+                mode="determinate", value=((clip - 1) + progress) * 100 / total
+            )
+            self.auto_status.set(f"Render {clip}/{total}")
+            if row:
+                values = list(self.auto_tree.item(row, "values"))
+                values[2:] = [
+                    "Render",
+                    f"{clip}/{total}",
+                    event.message or "Renderizando",
+                ]
+                self.auto_tree.item(row, values=values)
+            return
+        if event.kind == "queue_finished":
+            self.auto_status.set("QUEUED — 3 Shorts nas filas das contas")
+        elif event.kind == "cleanup_warning":
+            self.auto_log(
+                f"Aviso: Shorts continuam QUEUED, mas o source não foi removido: "
+                f"{event.message}"
+            )
         if event.kind in labels:
             self.auto_status.set(labels[event.kind])
         if row:

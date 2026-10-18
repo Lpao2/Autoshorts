@@ -4,7 +4,12 @@ import pytest
 from test_render_integration import make_settings
 
 from autoshorts.ai_analysis import ClipAnalysis
-from autoshorts.automation_config import AutomationConfig, Creator, ThemeProfile
+from autoshorts.automation_config import (
+    AccountProfile,
+    AutomationConfig,
+    Creator,
+    ThemeProfile,
+)
 from autoshorts.automation_events import AutomationCancelled
 from autoshorts.automation_jobs import AutomationController
 from autoshorts.automation_pipeline import AutomationRequest, run_automation
@@ -14,7 +19,9 @@ from autoshorts.collection import (
     YouTubeAccess,
     download_progress_from_hook,
 )
+from autoshorts.state_store import StateStore
 from autoshorts.timestamp_parser import Clip
+from autoshorts.video_processor import RenderResult
 
 
 def candidate(title="Video"):
@@ -31,6 +38,10 @@ def config():
                 "prompt",
                 (Creator("Creator", "https://example.com/videos"),),
                 "tech",
+                accounts=tuple(
+                    AccountProfile(f"Account {index}", f"a{index}@example.test", index)
+                    for index in range(1, 4)
+                ),
             ),
         )
     )
@@ -92,7 +103,22 @@ def test_fake_provider_path_delegates_to_existing_pipeline(tmp_path, monkeypatch
 
     source = tmp_path / "video.mp4"
     source.touch()
-    render_sentinel = object()
+
+    class RenderSentinel:
+        def __init__(self):
+            self.renders = tuple(
+                RenderResult(
+                    index,
+                    tmp_path / "tech" / "masters" / f"{index:02d}.mp4",
+                    "generated",
+                )
+                for index in range(1, 4)
+            )
+            for item in self.renders:
+                item.output_path.parent.mkdir(parents=True, exist_ok=True)
+                item.output_path.touch()
+
+    render_sentinel = RenderSentinel()
     monkeypatch.setattr(
         automation_pipeline,
         "discover_creator_videos",
@@ -104,12 +130,17 @@ def test_fake_provider_path_delegates_to_existing_pipeline(tmp_path, monkeypatch
     monkeypatch.setattr(
         automation_pipeline, "run_pipeline", lambda *args, **kwargs: render_sentinel
     )
-    result = run_automation(
-        AutomationRequest("tech", 1, 30, tmp_path),
-        config(),
-        make_settings(tmp_path),
-        analyze=lambda *args: ClipAnalysis((Clip(0, 1, "Fake"),), "FAKE"),
-    )
+    with StateStore(tmp_path / "state.db") as state_store:
+        result = run_automation(
+            AutomationRequest("tech", 1, 30, tmp_path),
+            config(),
+            make_settings(tmp_path),
+            analyze=lambda *args: ClipAnalysis(
+                tuple(Clip(index, index + 1, f"Fake {index}") for index in range(3)),
+                "FAKE",
+            ),
+            state_store=state_store,
+        )
     assert result[0].render is render_sentinel
 
 
@@ -329,7 +360,7 @@ def test_completed_youtube_id_is_skipped_globally(tmp_path, monkeypatch):
     )
 
     class CompletedStore:
-        def is_completed(self, youtube_id):
+        def is_produced(self, youtube_id):
             return youtube_id == "global-id"
 
     events = []
@@ -342,4 +373,4 @@ def test_completed_youtube_id_is_skipped_globally(tmp_path, monkeypatch):
     )
     assert result == ()
     skipped = next(event for event in events if event.kind == "candidate_skipped")
-    assert skipped.message == "already_processed"
+    assert skipped.message == "already_produced"

@@ -27,9 +27,19 @@ from autoshorts.collection import (
     download_video,
 )
 from autoshorts.config import Settings
+from autoshorts.distribution import (
+    ShortArtifact,
+    assign_shorts_to_accounts,
+    distribute_short_files,
+)
 from autoshorts.pipeline import PipelineResult, run_pipeline
 from autoshorts.render_events import RenderCancelled
-from autoshorts.state_store import StateStore, VideoStatus
+from autoshorts.state_store import (
+    QueuedShort,
+    RenderedShort,
+    StateStore,
+    VideoStatus,
+)
 
 AnalysisProvider = Callable[[Path, VideoCandidate, ThemeProfile], ClipAnalysis]
 EventHandler = Callable[[AutomationEvent], None]
@@ -118,14 +128,14 @@ def run_automation(
                 check_automation_cancelled(cancel)
                 youtube_id = candidate_youtube_id(candidate)
                 if state_store is not None and youtube_id:
-                    if state_store.is_completed(youtube_id):
+                    if state_store.is_produced(youtube_id):
                         emit(
                             AutomationEvent(
                                 "candidate_skipped",
                                 creator=candidate.creator,
                                 title=candidate.title,
                                 url=candidate.url,
-                                message="already_processed",
+                                message="already_produced",
                             )
                         )
                         continue
@@ -218,6 +228,17 @@ def run_automation(
                         )
                     )
                     analysis = analyze(source_path, candidate, theme)
+                    if len(analysis.clips) != 3:
+                        raise ValueError(
+                            "Produção automática exige exatamente 3 cortes; "
+                            f"o provider retornou {len(analysis.clips)}."
+                        )
+                    if state_store is None or not youtube_id:
+                        raise ValueError(
+                            "Produção automática requer o SQLite e um youtube_id."
+                        )
+                    state_store.transition_video(youtube_id, VideoStatus.ANALYZING)
+                    state_store.transition_video(youtube_id, VideoStatus.ANALYZED)
                     emit(
                         _candidate_event(
                             "analysis_finished", candidate, index, len(candidates)
@@ -232,21 +253,100 @@ def run_automation(
                     )
                     output = (
                         theme_root
-                        / "outputs"
+                        / "creators"
                         / _safe_creator_directory(candidate.creator)
+                        / youtube_id
                     )
-                    render_settings = replace(settings, output_dir=output)
+                    render_settings = replace(
+                        settings, output_dir=output, exact_index_filenames=True
+                    )
+                    state_store.transition_video(youtube_id, VideoStatus.RENDERING)
                     render = run_pipeline(
                         source_path,
                         list(analysis.clips),
                         render_settings,
                         cancel=cancel,
+                        on_progress=lambda progress, item=candidate: emit(
+                            AutomationEvent(
+                                "render_progress",
+                                creator=item.creator,
+                                title=item.title,
+                                url=item.url,
+                                index=progress.index,
+                                total=3,
+                                progress=progress.progress,
+                                message=progress.status,
+                            )
+                        ),
+                    )
+                    artifacts = tuple(
+                        ShortArtifact(item.index, item.output_path)
+                        for item in render.renders
+                    )
+                    if len(artifacts) != 3:
+                        raise ValueError(
+                            "A renderização não produziu exatamente 3 Shorts."
+                        )
+                    state_store.record_rendered_shorts(
+                        youtube_id,
+                        tuple(
+                            RenderedShort(item.clip_index, item.file_path)
+                            for item in artifacts
+                        ),
                     )
                     emit(
                         _candidate_event(
                             "render_finished", candidate, index, len(candidates)
                         )
                     )
+                    stage = "queue"
+                    assignments = assign_shorts_to_accounts(artifacts, theme.accounts)
+                    distributed = ()
+                    try:
+                        distributed = distribute_short_files(
+                            assignments, theme_root / "accounts", youtube_id
+                        )
+                        state_store.record_queued_shorts(
+                            youtube_id,
+                            tuple(
+                                QueuedShort(
+                                    item.assignment.clip_index,
+                                    item.assignment.account_slot,
+                                    item.assignment.account.email,
+                                    item.queue_path,
+                                )
+                                for item in distributed
+                            ),
+                        )
+                    except Exception:
+                        for item in distributed:
+                            item.queue_path.unlink(missing_ok=True)
+                        raise
+                    emit(
+                        _candidate_event(
+                            "queue_finished", candidate, index, len(candidates)
+                        )
+                    )
+                    try:
+                        source_path.unlink()
+                        emit(
+                            AutomationEvent(
+                                "source_removed",
+                                creator=candidate.creator,
+                                title=candidate.title,
+                                path=source_path,
+                            )
+                        )
+                    except OSError as exc:
+                        emit(
+                            AutomationEvent(
+                                "cleanup_warning",
+                                creator=candidate.creator,
+                                title=candidate.title,
+                                path=source_path,
+                                message=str(exc),
+                            )
+                        )
                     results.append(
                         AutomationItemResult(candidate, source_path, analysis, render)
                     )
@@ -263,6 +363,8 @@ def run_automation(
                     if state_store is not None and youtube_id:
                         record = state_store.get_video(youtube_id)
                         if record and record.status not in {
+                            VideoStatus.RENDERED,
+                            VideoStatus.QUEUED,
                             VideoStatus.COMPLETED,
                             VideoStatus.FAILED,
                         }:
