@@ -44,7 +44,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class VideoStatus(StrEnum):
@@ -1091,6 +1091,109 @@ class StateStore:
                     ),
                 )
 
+    def save_brand_asset(self, asset) -> None:
+        from autoshorts.brand_assets import GeneratedBrandAsset
+
+        if not isinstance(asset, GeneratedBrandAsset):
+            raise TypeError("asset must be GeneratedBrandAsset")
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO brand_asset_metadata
+                (brand_plan_id, asset_type, file_path, provider, model, prompt,
+                 width, height, checksum, created_at, status, version, file_size,
+                 preview_path, delivery_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(brand_plan_id, asset_type, version) DO NOTHING""",
+                (
+                    asset.brand_plan_id,
+                    asset.asset_type,
+                    str(asset.file_path),
+                    asset.provider,
+                    asset.model,
+                    asset.prompt,
+                    asset.width,
+                    asset.height,
+                    asset.checksum,
+                    asset.created_at,
+                    asset.status,
+                    asset.version,
+                    asset.file_size,
+                    str(asset.preview_path) if asset.preview_path else None,
+                    str(asset.delivery_path) if asset.delivery_path else None,
+                ),
+            )
+
+    def brand_assets(self, brand_plan_id: str | None = None):
+        sql = "SELECT * FROM brand_asset_metadata"
+        params = ()
+        if brand_plan_id is not None:
+            sql += " WHERE brand_plan_id = ?"
+            params = (brand_plan_id,)
+        sql += " ORDER BY brand_plan_id, asset_type, version"
+        return tuple(
+            _brand_asset_record(row) for row in self.connection.execute(sql, params)
+        )
+
+    def brand_asset(self, brand_plan_id: str, asset_type, version: int):
+        row = self.connection.execute(
+            """SELECT * FROM brand_asset_metadata
+            WHERE brand_plan_id=? AND asset_type=? AND version=?""",
+            (brand_plan_id, asset_type, version),
+        ).fetchone()
+        return _brand_asset_record(row) if row else None
+
+    def latest_valid_brand_asset(self, brand_plan_id: str, asset_type):
+        row = self.connection.execute(
+            """SELECT * FROM brand_asset_metadata
+            WHERE brand_plan_id=? AND asset_type=?
+              AND status IN ('VALIDATED', 'APPROVED')
+            ORDER BY version DESC LIMIT 1""",
+            (brand_plan_id, asset_type),
+        ).fetchone()
+        return _brand_asset_record(row) if row else None
+
+    def next_brand_asset_version(self, brand_plan_id: str, asset_type) -> int:
+        return int(
+            self.connection.execute(
+                """SELECT COALESCE(MAX(version), 0) + 1
+                FROM brand_asset_metadata WHERE brand_plan_id=? AND asset_type=?""",
+                (brand_plan_id, asset_type),
+            ).fetchone()[0]
+        )
+
+    def set_brand_asset_status(
+        self, brand_plan_id: str, asset_type, version: int, status
+    ) -> None:
+        from autoshorts.brand_assets import BrandAssetStatus
+
+        selected = BrandAssetStatus(status)
+        with self.connection:
+            current = self.connection.execute(
+                """SELECT status FROM brand_asset_metadata
+                WHERE brand_plan_id=? AND asset_type=? AND version=?""",
+                (brand_plan_id, asset_type, version),
+            ).fetchone()
+            if current is None:
+                raise KeyError("Unknown brand asset version.")
+            if selected == BrandAssetStatus.APPROVED and current["status"] not in {
+                BrandAssetStatus.VALIDATED,
+                BrandAssetStatus.APPROVED,
+            }:
+                raise ValueError("Only a validated brand asset can be approved.")
+            if selected == BrandAssetStatus.APPROVED:
+                self.connection.execute(
+                    """UPDATE brand_asset_metadata SET status='RETIRED'
+                    WHERE brand_plan_id=? AND asset_type=? AND status='APPROVED'""",
+                    (brand_plan_id, asset_type),
+                )
+            cursor = self.connection.execute(
+                """UPDATE brand_asset_metadata SET status=?
+                WHERE brand_plan_id=? AND asset_type=? AND version=?""",
+                (selected, brand_plan_id, asset_type, version),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError("Unknown brand asset version.")
+
     def approve_brand_kit(self, kit: ChannelBrandKit) -> ChannelBrandKit:
         if kit.status != BrandKitStatus.APPROVED:
             raise ValueError("Approval requires APPROVED status.")
@@ -1647,11 +1750,17 @@ class StateStore:
                     provider TEXT NOT NULL, model TEXT NOT NULL, prompt TEXT NOT NULL,
                     width INTEGER NOT NULL, height INTEGER NOT NULL,
                     checksum TEXT NOT NULL, created_at TEXT NOT NULL,
-                    status TEXT NOT NULL,
+                    status TEXT NOT NULL, version INTEGER NOT NULL,
+                    file_size INTEGER NOT NULL, preview_path TEXT,
+                    delivery_path TEXT,
+                    UNIQUE(brand_plan_id, asset_type, version),
                     FOREIGN KEY (brand_plan_id)
                         REFERENCES planned_channel_brands(brand_plan_id)
                         ON DELETE CASCADE
                 );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_one_approved_brand_asset
+                    ON brand_asset_metadata(brand_plan_id, asset_type)
+                    WHERE status = 'APPROVED';
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -1694,6 +1803,9 @@ class StateStore:
             version = 13
         if version == 13:
             self._migrate_v13_to_v14()
+            version = 14
+        if version == 14:
+            self._migrate_v14_to_v15()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -2017,9 +2129,54 @@ class StateStore:
                 """
             )
 
+    def _migrate_v14_to_v15(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE brand_asset_metadata
+                    ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+                ALTER TABLE brand_asset_metadata
+                    ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE brand_asset_metadata ADD COLUMN preview_path TEXT;
+                ALTER TABLE brand_asset_metadata ADD COLUMN delivery_path TEXT;
+                CREATE UNIQUE INDEX idx_brand_asset_version
+                    ON brand_asset_metadata(brand_plan_id, asset_type, version);
+                CREATE UNIQUE INDEX idx_one_approved_brand_asset
+                    ON brand_asset_metadata(brand_plan_id, asset_type)
+                    WHERE status = 'APPROVED';
+                PRAGMA user_version = 15;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _brand_asset_record(row):
+    from autoshorts.brand_assets import (
+        BrandAssetStatus,
+        BrandAssetType,
+        GeneratedBrandAsset,
+    )
+
+    return GeneratedBrandAsset(
+        row["brand_plan_id"],
+        BrandAssetType(row["asset_type"]),
+        Path(row["file_path"]),
+        row["provider"],
+        row["model"],
+        row["prompt"],
+        row["width"],
+        row["height"],
+        row["file_size"],
+        row["checksum"],
+        BrandAssetStatus(row["status"]),
+        row["created_at"],
+        row["version"],
+        Path(row["preview_path"]) if row["preview_path"] else None,
+        Path(row["delivery_path"]) if row["delivery_path"] else None,
+    )
 
 
 def _video_record(row: sqlite3.Row) -> VideoRecord:

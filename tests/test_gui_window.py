@@ -21,6 +21,7 @@ from autoshorts.gui import (  # noqa: E402
     AutoShortsWindow,
     _brand_generation_error_message,
     _identity_display,
+    _latest_asset_statuses,
     _youtube_action_labels,
 )
 from autoshorts.state_store import ChannelCredentialBinding, StateStore  # noqa: E402
@@ -106,6 +107,41 @@ def test_theme_library_shows_complete_blueprints(window):
     ]
     assert all(row[3] == "Completo" for row in rows)
     assert all(int(row[6]) == 3 for row in rows)
+
+
+def test_brand_asset_status_summary_and_library_dialog(window):
+    app, root, _errors = window
+    assert _latest_asset_statuses(()) == {"LOGO": "PENDING", "BANNER": "PENDING"}
+    first = app.catalog_tree.get_children()[0]
+    app.catalog_tree.selection_set(first)
+    app.view_brand_assets()
+    root.update_idletasks()
+    dialogs = [
+        item for item in root.winfo_children() if item.winfo_class() == "Toplevel"
+    ]
+    assert dialogs
+
+    def labels(widget):
+        result = []
+        for child in widget.winfo_children():
+            if child.winfo_class() == "TButton":
+                result.append(str(child["text"]))
+            result.extend(labels(child))
+        return result
+
+    buttons = set(labels(dialogs[-1]))
+    assert {
+        "Gerar logo",
+        "Gerar banner",
+        "Gerar ambos",
+        "Visualizar",
+        "Aprovar",
+        "Rejeitar",
+        "Regenerar",
+        "Gerar assets pendentes — tema atual",
+        "Gerar assets pendentes — todos",
+    } <= buttons
+    dialogs[-1].destroy()
 
 
 def test_window_validates_renders_and_reuses_without_blocking(window, synthetic_video):  # noqa: F811

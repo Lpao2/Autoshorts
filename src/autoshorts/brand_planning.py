@@ -69,20 +69,6 @@ class PlannedIdentityAssignment:
 
 
 @dataclass(frozen=True, slots=True)
-class BrandAssetMetadata:
-    brand_plan_id: str
-    asset_type: str
-    file_path: Path
-    provider: str
-    model: str
-    prompt: str
-    width: int
-    height: int
-    checksum: str
-    status: str
-
-
-@dataclass(frozen=True, slots=True)
 class BrandRerankResult:
     selected_names: tuple[tuple[int, str], ...]
     reasons: tuple[tuple[int, str], ...]

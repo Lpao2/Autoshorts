@@ -42,19 +42,34 @@ def test_initializes_schema_foreign_keys_and_wal(tmp_path):
         assert store.connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
-def test_migrates_v13_and_rejects_only_future_schema(tmp_path):
-    current = tmp_path / "v13.db"
+def test_migrates_v14_and_rejects_only_future_schema(tmp_path):
+    current = tmp_path / "v14.db"
     with StateStore(current):
         pass
     connection = sqlite3.connect(current)
-    connection.execute("DROP TABLE planned_channel_brand_history")
-    connection.execute("PRAGMA user_version = 13")
+    connection.executescript(
+        """
+        DROP INDEX idx_one_approved_brand_asset;
+        DROP INDEX IF EXISTS idx_brand_asset_version;
+        DROP TABLE brand_asset_metadata;
+        CREATE TABLE brand_asset_metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, brand_plan_id TEXT NOT NULL,
+            asset_type TEXT NOT NULL, file_path TEXT NOT NULL,
+            provider TEXT NOT NULL, model TEXT NOT NULL, prompt TEXT NOT NULL,
+            width INTEGER NOT NULL, height INTEGER NOT NULL,
+            checksum TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL,
+            FOREIGN KEY (brand_plan_id)
+                REFERENCES planned_channel_brands(brand_plan_id) ON DELETE CASCADE
+        );
+        PRAGMA user_version = 14;
+        """
+    )
     connection.close()
     with StateStore(current) as store:
         assert store.schema_version == SCHEMA_VERSION
         assert store.connection.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='table' AND name='planned_channel_brand_history'"
+            "SELECT name FROM pragma_table_info('brand_asset_metadata') "
+            "WHERE name='version'"
         ).fetchone()
 
     future = tmp_path / "future.db"

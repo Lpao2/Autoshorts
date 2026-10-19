@@ -181,12 +181,6 @@ class BrandIdentityProvider(Protocol):
     ) -> BrandGenerationResult: ...
 
 
-class BrandImageProvider(Protocol):
-    """Reserved interface; no image implementation exists yet."""
-
-    def generate_assets(self, brand_kit: ChannelBrandKit) -> tuple[str, ...]: ...
-
-
 CANDIDATE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,

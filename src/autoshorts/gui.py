@@ -31,6 +31,11 @@ from autoshorts.automation_store import (
     default_automation_config_path,
     suggest_output_subdirectory,
 )
+from autoshorts.brand_assets import (
+    BrandAssetService,
+    BrandAssetStatus,
+    BrandAssetType,
+)
 from autoshorts.brand_identity import (
     BrandGenerationValidationError,
     BrandKitStatus,
@@ -116,6 +121,13 @@ def _youtube_action_labels(binding) -> tuple[str, ...]:
     if binding is None:
         return ("Conectar YouTube",)
     return ("Verificar conexão", "Reconectar", "Desconectar")
+
+
+def _latest_asset_statuses(assets) -> dict[str, str]:
+    result = {asset_type.value: "PENDING" for asset_type in BrandAssetType}
+    for asset in assets:
+        result[asset.asset_type.value] = f"{asset.status.value} v{asset.version}"
+    return result
 
 
 def _binding_display(
@@ -440,6 +452,7 @@ class AutoShortsWindow:
         self.state_db_path = default_state_db_path()
         self.credential_store = FilesystemCredentialStore()
         self.automation_config: AutomationConfig | None = None
+        self.brand_image_provider = None
         self.automation_running = False
         self.automation_finishing = False
         self.automation_rows: dict[tuple[str, str], str] = {}
@@ -669,6 +682,9 @@ class AutoShortsWindow:
         ttk.Button(actions, text="Atualizar", command=self.refresh_catalog).pack(
             side="left"
         )
+        ttk.Button(
+            actions, text="Assets de marca", command=self.view_brand_assets
+        ).pack(side="left", padx=6)
         self.catalog_tree.bind("<Double-1>", lambda _event: self.view_catalog_theme())
         self.refresh_catalog()
 
@@ -710,6 +726,12 @@ class AutoShortsWindow:
                 item.slot: item
                 for item in store.planned_channel_brands(template.theme_key)
             }
+            asset_statuses = {
+                item.brand_plan_id: _latest_asset_statuses(
+                    store.brand_assets(item.brand_plan_id)
+                )
+                for item in plans.values()
+            }
         archetypes = "\n\n".join(
             f"CANAL {item.slot}: {item.name}\n"
             f"Foco: {', '.join(item.editorial_focus)}\n"
@@ -725,7 +747,9 @@ class AutoShortsWindow:
                 f"{plans[item.slot].preferred_handle}\n"
                 f"Backups: {', '.join(plans[item.slot].backup_handles)}\n"
                 f"Tagline: {plans[item.slot].tagline}\n"
-                f"Status: {plans[item.slot].status}"
+                f"Status: {plans[item.slot].status}\n"
+                f"Logo: {asset_statuses[plans[item.slot].brand_plan_id]['LOGO']}\n"
+                f"Banner: {asset_statuses[plans[item.slot].brand_plan_id]['BANNER']}"
                 if item.slot in plans
                 else "Brand Plan: ainda não planejado"
             )
@@ -744,6 +768,195 @@ class AutoShortsWindow:
             f"{rights.notes}\n\nPROMPT ATIVO (v{len(template.prompt_versions)}):\n"
             f"{template.base_prompt}\n\n{archetypes}",
         )
+
+    def view_brand_assets(self) -> None:
+        template = self._selected_catalog_theme()
+        if template is None:
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Assets de marca — {template.display_name}")
+        dialog.transient(self.root)
+        body = ttk.Frame(dialog, padding=16)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        ttk.Label(
+            body,
+            text=(
+                "Geração usa fila retomável e nunca aprova automaticamente. "
+                "Previews abrem em arquivo separado."
+            ),
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        tree = ttk.Treeview(
+            body,
+            columns=("slot", "name", "logo", "banner", "provider", "version"),
+            show="headings",
+            height=8,
+        )
+        for column, label, width in (
+            ("slot", "Canal", 55),
+            ("name", "Marca", 180),
+            ("logo", "Logo", 100),
+            ("banner", "Banner", 100),
+            ("provider", "Provider", 130),
+            ("version", "Versão", 70),
+        ):
+            tree.heading(column, text=label)
+            tree.column(column, width=width, stretch=column == "name")
+        tree.grid(row=1, column=0, sticky="nsew")
+
+        def refresh() -> None:
+            for row in tree.get_children():
+                tree.delete(row)
+            with StateStore(self.state_db_path) as store:
+                plans = store.planned_channel_brands(template.theme_key)
+                for plan in plans:
+                    assets = store.brand_assets(plan.brand_plan_id)
+                    statuses = _latest_asset_statuses(assets)
+                    latest = assets[-1] if assets else None
+                    tree.insert(
+                        "",
+                        "end",
+                        iid=plan.brand_plan_id,
+                        values=(
+                            plan.slot,
+                            plan.public_name,
+                            statuses["LOGO"],
+                            statuses["BANNER"],
+                            latest.provider if latest else "—",
+                            f"v{latest.version}" if latest else "—",
+                        ),
+                    )
+
+        def selected_plan():
+            selected = tree.selection()
+            if not selected:
+                messagebox.showinfo("Assets", "Selecione uma marca.")
+                return None
+            with StateStore(self.state_db_path) as store:
+                return next(
+                    item
+                    for item in store.planned_channel_brands(template.theme_key)
+                    if item.brand_plan_id == selected[0]
+                )
+
+        def generate(asset_types, *, regenerate=False) -> None:
+            plan = selected_plan()
+            if plan is None:
+                return
+            if self.brand_image_provider is None:
+                messagebox.showinfo(
+                    "Provider de imagem",
+                    "Nenhum provider de imagem foi configurado no runtime da GUI.",
+                )
+                return
+            archetype = next(
+                item for item in template.channel_archetypes if item.slot == plan.slot
+            )
+            with StateStore(self.state_db_path) as store:
+                service = BrandAssetService(
+                    Path(__file__).resolve().parents[2],
+                    store,
+                    self.brand_image_provider,
+                )
+                for asset_type in asset_types:
+                    service.generate(
+                        plan,
+                        template,
+                        archetype,
+                        asset_type,
+                        regenerate=regenerate,
+                    )
+            refresh()
+
+        def review(status: BrandAssetStatus) -> None:
+            plan = selected_plan()
+            if plan is None:
+                return
+            with StateStore(self.state_db_path) as store:
+                for asset_type in BrandAssetType:
+                    asset = store.latest_valid_brand_asset(
+                        plan.brand_plan_id, asset_type
+                    )
+                    if asset:
+                        store.set_brand_asset_status(
+                            plan.brand_plan_id, asset_type, asset.version, status
+                        )
+            refresh()
+
+        def visualize() -> None:
+            plan = selected_plan()
+            if plan is None:
+                return
+            with StateStore(self.state_db_path) as store:
+                for asset_type in BrandAssetType:
+                    asset = store.latest_valid_brand_asset(
+                        plan.brand_plan_id, asset_type
+                    )
+                    if asset and asset.preview_path:
+                        webbrowser.open(asset.preview_path.resolve().as_uri())
+
+        def generate_pending(*, all_themes: bool) -> None:
+            if self.brand_image_provider is None:
+                messagebox.showinfo(
+                    "Provider de imagem",
+                    "Nenhum provider de imagem foi configurado no runtime da GUI.",
+                )
+                return
+            with StateStore(self.state_db_path) as store:
+                templates = store.list_theme_templates() if all_themes else (template,)
+                requests = []
+                for selected_template in templates:
+                    archetypes = {
+                        item.slot: item for item in selected_template.channel_archetypes
+                    }
+                    for plan in store.planned_channel_brands(
+                        selected_template.theme_key
+                    ):
+                        for asset_type in BrandAssetType:
+                            requests.append(
+                                (
+                                    plan,
+                                    selected_template,
+                                    archetypes[plan.slot],
+                                    asset_type,
+                                )
+                            )
+                BrandAssetService(
+                    Path(__file__).resolve().parents[2],
+                    store,
+                    self.brand_image_provider,
+                ).generate_pending(requests, max_workers=2)
+            refresh()
+
+        actions = ttk.Frame(body)
+        actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        buttons = (
+            ("Gerar logo", lambda: generate((BrandAssetType.LOGO,))),
+            ("Gerar banner", lambda: generate((BrandAssetType.BANNER,))),
+            ("Gerar ambos", lambda: generate(tuple(BrandAssetType))),
+            ("Visualizar", visualize),
+            ("Aprovar", lambda: review(BrandAssetStatus.APPROVED)),
+            ("Rejeitar", lambda: review(BrandAssetStatus.REJECTED)),
+            ("Regenerar", lambda: generate(tuple(BrandAssetType), regenerate=True)),
+        )
+        for label, command in buttons:
+            ttk.Button(actions, text=label, command=command).pack(
+                side="left", padx=(0, 5)
+            )
+        batch = ttk.Frame(body)
+        batch.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(
+            batch,
+            text="Gerar assets pendentes — tema atual",
+            command=lambda: generate_pending(all_themes=False),
+        ).pack(side="left")
+        ttk.Button(
+            batch,
+            text="Gerar assets pendentes — todos",
+            command=lambda: generate_pending(all_themes=True),
+        ).pack(side="left", padx=6)
+        refresh()
 
     def edit_catalog_theme(self) -> None:
         template = self._selected_catalog_theme()
