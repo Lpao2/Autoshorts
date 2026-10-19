@@ -17,7 +17,7 @@ from autoshorts.automation_config import (  # noqa: E402
     ThemeProfile,
 )
 from autoshorts.automation_store import AutomationStore  # noqa: E402
-from autoshorts.gui import AutoShortsWindow  # noqa: E402
+from autoshorts.gui import AutoShortsWindow, _brand_generation_error_message  # noqa: E402
 from autoshorts.state_store import ChannelCredentialBinding, StateStore  # noqa: E402
 
 
@@ -64,15 +64,28 @@ def drive_until_idle(app, root):
     return len(beats)
 
 
+def test_brand_503_message_preserves_existing_data():
+    message = _brand_generation_error_message(
+        RuntimeError("503 UNAVAILABLE: model high demand")
+    )
+    assert "temporariamente indisponível" in message
+    assert "Nenhuma proposta foi salva" in message
+
+
 def test_theme_library_shows_complete_blueprints(window):
     app, _root, _errors = window
     assert len(app.catalog_tree.get_children()) == 20
     assert app.catalog_tree["columns"] == (
-        "status", "name", "origin", "readiness", "prompt", "versions", "channels"
+        "status",
+        "name",
+        "origin",
+        "readiness",
+        "prompt",
+        "versions",
+        "channels",
     )
     rows = [
-        app.catalog_tree.item(row, "values")
-        for row in app.catalog_tree.get_children()
+        app.catalog_tree.item(row, "values") for row in app.catalog_tree.get_children()
     ]
     assert all(row[3] == "Completo" for row in rows)
     assert all(int(row[6]) == 3 for row in rows)
@@ -191,8 +204,16 @@ def test_automatic_tab_reflects_saved_creators_and_disabled_state(window, tmp_pa
     assert app.auto_creators.selection() == (rows[0],)
     account_rows = app.auto_accounts.get_children()
     assert [app.auto_accounts.item(row, "values") for row in account_rows] == [
-        ("1", "✓", "LoL A", "Google A", "—", "Não conectado"),
-        ("2", "—", "LoL B", "não vinculada", "—", "Não conectado"),
+        (
+            "1",
+            "LoL A",
+            "Caos na Rift",
+            "Google A",
+            "Pendente",
+            "—",
+            "Branding pendente",
+        ),
+        ("2", "LoL B", "Clutch Mecânico", "—", "Pendente", "—", "Não preparado"),
     ]
     identity_rows = app.auto_identities.get_children()
     assert [app.auto_identities.item(row, "values") for row in identity_rows] == [
@@ -251,11 +272,11 @@ def test_gui_loads_sqlite_binding_and_does_not_use_config_channel_id(
     app.load_automation_config_ui(silent=True)
     root.update_idletasks()
     rows = app.auto_accounts.get_children()
-    assert app.auto_accounts.item(rows[0], "values")[4:] == (
+    assert app.auto_accounts.item(rows[0], "values")[5:] == (
         "Real Channel (UC-REAL)",
-        "Conectado",
+        "Branding pendente",
     )
-    assert app.auto_accounts.item(rows[1], "values")[4:] == ("—", "Não conectado")
+    assert app.auto_accounts.item(rows[1], "values")[5:] == ("—", "Não preparado")
     app.auto_accounts.selection_set("lol-a")
     app._update_youtube_buttons()
     assert str(app.connect_youtube_button["state"]) == "disabled"

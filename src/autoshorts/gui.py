@@ -7,6 +7,7 @@ import importlib.util
 import subprocess
 import sys
 import tkinter as tk
+import webbrowser
 from dataclasses import replace
 from pathlib import Path
 from queue import Empty
@@ -34,6 +35,10 @@ from autoshorts.brand_identity import (
     BrandKitStatus,
     ChannelBrandKit,
     GeminiBrandIdentityProvider,
+)
+from autoshorts.channel_setup import (
+    ChannelSetupStatus,
+    resolve_theme_channel_setups,
 )
 from autoshorts.collection import YouTubeAccess, resolve_deno
 from autoshorts.config import OverwritePolicy, Settings, load_settings
@@ -89,6 +94,16 @@ OAUTH_STATUS_LABELS = {
     "REVOKED": "Revogado",
     "DISABLED": "Desativado",
 }
+
+
+def _brand_generation_error_message(exc: Exception) -> str:
+    raw = str(exc)
+    if "503" in raw or "UNAVAILABLE" in raw or "high demand" in raw:
+        return (
+            "Gemini está temporariamente indisponível. Nenhuma proposta foi "
+            "salva. Você pode tentar novamente mais tarde."
+        )
+    return f"Não foi possível gerar propostas. Nenhum dado foi apagado.\n\n{raw}"
 
 
 def _binding_display(
@@ -865,26 +880,41 @@ class AutoShortsWindow:
         accounts_panel.columnconfigure(0, weight=1)
         self.auto_accounts = ttk.Treeview(
             accounts_panel,
-            columns=("slot", "enabled", "name", "identity", "youtube", "status"),
+            columns=(
+                "slot",
+                "name",
+                "profile",
+                "identity",
+                "branding",
+                "youtube",
+                "status",
+            ),
             show="headings",
             height=3,
             selectmode="browse",
         )
         for column, label, width in (
             ("slot", "Slot", 48),
-            ("enabled", "Ativo", 55),
-            ("name", "Canal", 150),
-            ("identity", "Google Identity", 150),
-            ("youtube", "YouTube Channel", 130),
-            ("status", "Status", 110),
+            ("name", "Canal", 105),
+            ("profile", "Perfil", 145),
+            ("identity", "Google", 125),
+            ("branding", "Branding", 85),
+            ("youtube", "YouTube", 130),
+            ("status", "Status", 165),
         ):
             self.auto_accounts.heading(column, text=label)
             self.auto_accounts.column(column, width=width, stretch=column == "youtube")
         self.auto_accounts.grid(row=0, column=0, sticky="nsew")
         account_actions = ttk.Frame(accounts_panel)
         account_actions.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+        ttk.Button(
+            account_actions,
+            text="Preparar canal",
+            style="Accent.TButton",
+            command=self.prepare_channel_ui,
+        ).pack(side="left")
         ttk.Button(account_actions, text="Adicionar", command=self.add_channel_ui).pack(
-            side="left"
+            side="left", padx=(16, 0)
         )
         ttk.Button(account_actions, text="Editar", command=self.edit_channel_ui).pack(
             side="left", padx=6
@@ -1065,6 +1095,143 @@ class AutoShortsWindow:
             row=row, column=2, padx=(8, 0)
         )
 
+    def prepare_channel_ui(self) -> None:
+        channel_id = self._selected_channel_id()
+        if not channel_id or self.automation_config is None:
+            messagebox.showinfo("Preparar canal", "Selecione um canal.")
+            return
+        theme = self.automation_config.theme(self._current_theme_name())
+        with StateStore(self.state_db_path) as store:
+            template = store.get_theme_template(theme.output_subdirectory)
+            if template is None:
+                messagebox.showerror("Preparar canal", "Template não encontrado.")
+                return
+            setups = resolve_theme_channel_setups(
+                theme, template, self.automation_config.google_identities, store
+            )
+        setup = next(x for x in setups if x.publishing_channel.channel_id == channel_id)
+        window = tk.Toplevel(self.root)
+        window.title(f"Preparar canal — {setup.publishing_channel.name}")
+        window.geometry("720x620")
+        window.transient(self.root)
+        body = ttk.Frame(window, padding=18)
+        body.pack(fill="both", expand=True)
+        identity = tk.StringVar(
+            window,
+            value=setup.google_identity.identity_id if setup.google_identity else "",
+        )
+        labels = {
+            item.identity_id: f"{item.label} — {item.email}"
+            for item in self.automation_config.google_identities
+            if item.enabled
+        }
+        ttk.Label(body, text="1. Configuração básica", style="Section.TLabel").pack(
+            anchor="w"
+        )
+        ttk.Label(
+            body,
+            text=(
+                f"Canal: {setup.publishing_channel.name}\nTema: {theme.name}\n"
+                f"Slot: {setup.publishing_channel.slot}\n"
+                f"Perfil: {setup.archetype.name}"
+            ),
+        ).pack(anchor="w", pady=6)
+        ttk.Label(body, text="Google Identity").pack(anchor="w")
+        combo = ttk.Combobox(
+            body, textvariable=identity, values=tuple(labels), state="readonly"
+        )
+        combo.pack(fill="x", pady=(2, 8))
+
+        def save_identity() -> None:
+            self.automation_config = self.automation_store.edit_channel(
+                self.automation_config,
+                theme.name,
+                channel_id,
+                google_identity_id=identity.get() or None,
+            )
+            self.refresh_theme_details()
+
+        ttk.Button(body, text="Salvar Google Identity", command=save_identity).pack(
+            anchor="w"
+        )
+        ttk.Separator(body).pack(fill="x", pady=14)
+        ttk.Label(body, text="2. Branding", style="Section.TLabel").pack(anchor="w")
+        brand_text = (
+            f"APPROVED — {setup.brand_kit.public_name} ({setup.brand_kit.handle})"
+            if setup.brand_kit
+            else "PENDING — nenhuma identidade aprovada"
+        )
+        ttk.Label(body, text=brand_text).pack(anchor="w", pady=4)
+        ttk.Label(
+            body,
+            text=(
+                f"Direção: {setup.archetype.brand_blueprint.name_direction}\n"
+                f"Paleta: {setup.archetype.palette.primary}, "
+                f"{setup.archetype.palette.secondary}, "
+                f"{setup.archetype.palette.accent}"
+            ),
+            wraplength=660,
+        ).pack(anchor="w")
+        ttk.Button(
+            body, text="Gerar propostas", command=self.generate_brand_identity_ui
+        ).pack(anchor="w", pady=5)
+        ttk.Separator(body).pack(fill="x", pady=14)
+        ttk.Label(body, text="3. YouTube", style="Section.TLabel").pack(anchor="w")
+        if setup.channel_binding:
+            binding = setup.channel_binding
+            ttk.Label(
+                body,
+                text=(
+                    f"Conectado a: {binding.youtube_channel_title}\n"
+                    f"ID do YouTube: {binding.youtube_channel_id}"
+                ),
+            ).pack(anchor="w", pady=4)
+        elif setup.brand_kit:
+            ttk.Label(
+                body,
+                text=(
+                    f"Crie manualmente o canal com:\nNome: "
+                    f"{setup.brand_kit.public_name}\nHandle: {setup.brand_kit.handle}\n"
+                    f"Descrição: {setup.brand_kit.description}"
+                ),
+                wraplength=660,
+            ).pack(anchor="w", pady=4)
+            utilities = ttk.Frame(body)
+            utilities.pack(anchor="w", pady=4)
+
+            def copy_value(value: str) -> None:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(value)
+
+            for label, value in (
+                ("Copiar nome", setup.brand_kit.public_name),
+                ("Copiar handle", setup.brand_kit.handle),
+                ("Copiar descrição", setup.brand_kit.description),
+            ):
+                ttk.Button(
+                    utilities, text=label, command=lambda text=value: copy_value(text)
+                ).pack(side="left", padx=(0, 6))
+            ttk.Button(
+                utilities,
+                text="Abrir YouTube",
+                command=lambda: webbrowser.open("https://www.youtube.com/"),
+            ).pack(side="left")
+        else:
+            ttk.Label(body, text="Disponível após revisar o branding.").pack(anchor="w")
+        ttk.Button(body, text="Conectar YouTube", command=self.connect_youtube_ui).pack(
+            anchor="w", pady=5
+        )
+        ttk.Separator(body).pack(fill="x", pady=14)
+        ttk.Label(body, text="Resumo", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(
+            body,
+            text=(
+                f"Branding: {'APPROVED' if setup.brand_kit else 'PENDING'}\n"
+                f"YouTube: {'CONNECTED' if setup.channel_binding else 'PENDING'}\n"
+                f"Scheduler: NOT CONFIGURED\nStatus: {setup.setup_status}"
+            ),
+        ).pack(anchor="w", pady=4)
+
     def generate_brand_identity_ui(self) -> None:
         if self.automation_config is None or not self._current_theme_name():
             messagebox.showinfo("Identidade", "Selecione um tema operacional.")
@@ -1097,7 +1264,9 @@ class AutoShortsWindow:
                 generation_id = store.save_brand_generation(result)
             self._show_brand_candidates(generation_id, theme_profile)
         except Exception as exc:
-            messagebox.showerror("Falha na geração", str(exc))
+            messagebox.showerror(
+                "Falha na geração", _brand_generation_error_message(exc)
+            )
 
     def _show_brand_candidates(self, generation_id, theme_profile) -> None:
         with StateStore(self.state_db_path) as store:
@@ -1369,15 +1538,9 @@ class AutoShortsWindow:
             if not silent:
                 self.auto_log(f"Configuração carregada: {self.auto_config_path.get()}")
         except Exception as exc:
-            self.automation_config = None
-            self.auto_theme_combo.configure(values=[])
-            self.auto_theme.set("")
-            for tree in (self.auto_creators, self.auto_accounts, self.auto_identities):
-                for row in tree.get_children():
-                    tree.delete(row)
-            self.auto_status.set(f"Configuração inválida: {exc}")
+            self.auto_status.set(f"Não foi possível atualizar: {exc}")
             if not silent:
-                messagebox.showerror("Configuração inválida", str(exc))
+                messagebox.showerror("Não foi possível atualizar", str(exc))
 
     def refresh_creators(self) -> None:
         for row in self.auto_creators.get_children():
@@ -1410,29 +1573,47 @@ class AutoShortsWindow:
             self._update_youtube_buttons({})
             return
         theme = self.automation_config.theme(self._current_theme_name())
-        identities = {
-            item.identity_id: item for item in self.automation_config.google_identities
+        try:
+            with StateStore(self.state_db_path) as state_store:
+                template = state_store.get_theme_template(theme.output_subdirectory)
+                if template is None:
+                    raise ValueError("Template do tema não encontrado.")
+                setups = resolve_theme_channel_setups(
+                    theme,
+                    template,
+                    self.automation_config.google_identities,
+                    state_store,
+                )
+        except Exception as exc:
+            self.auto_status.set(f"Erro ao ler estado dos canais: {exc}")
+            return
+        bindings = {
+            item.publishing_channel.channel_id: item.channel_binding for item in setups
         }
-        with StateStore(self.state_db_path) as state_store:
-            bindings = {
-                channel.channel_id: state_store.get_channel_binding(channel.channel_id)
-                for channel in theme.channels
-            }
-        for channel in sorted(theme.channels, key=lambda item: item.slot):
-            identity = identities.get(channel.google_identity_id)
-            binding = bindings[channel.channel_id]
-            youtube_channel, oauth_status = _binding_display(binding)
+        labels = {
+            ChannelSetupStatus.UNCONFIGURED: "Não preparado",
+            ChannelSetupStatus.BRANDING_PENDING: "Branding pendente",
+            ChannelSetupStatus.YOUTUBE_PENDING: "YouTube pendente",
+            ChannelSetupStatus.READY_FOR_SCHEDULING: "Pronto para agendar",
+            ChannelSetupStatus.ACTIVE: "Ativo",
+            ChannelSetupStatus.ERROR: "Requer atenção",
+        }
+        for setup in setups:
+            channel = setup.publishing_channel
+            binding = setup.channel_binding
+            youtube_channel, _oauth_status = _binding_display(binding)
             self.auto_accounts.insert(
                 "",
                 "end",
                 iid=channel.channel_id,
                 values=(
                     channel.slot,
-                    "✓" if channel.enabled else "—",
                     channel.name,
-                    identity.label if identity else "não vinculada",
-                    youtube_channel,
-                    oauth_status,
+                    setup.archetype.name,
+                    setup.google_identity.label if setup.google_identity else "—",
+                    "Aprovado" if setup.brand_kit else "Pendente",
+                    youtube_channel if binding else "—",
+                    labels[setup.setup_status],
                 ),
                 tags=(
                     "connected"

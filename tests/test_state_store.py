@@ -42,6 +42,21 @@ def test_initializes_schema_foreign_keys_and_wal(tmp_path):
         assert store.connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
+def test_accepts_v11_and_rejects_only_future_schema(tmp_path):
+    current = tmp_path / "v11.db"
+    with StateStore(current):
+        pass
+    with StateStore(current) as store:
+        assert store.schema_version == 11
+
+    future = tmp_path / "future.db"
+    connection = sqlite3.connect(future)
+    connection.execute("PRAGMA user_version = 12")
+    connection.close()
+    with pytest.raises(RuntimeError, match="Unsupported state schema version: 12"):
+        StateStore(future)
+
+
 def test_global_deduplication_uses_only_youtube_id(tmp_path):
     with StateStore(tmp_path / "state.db") as store:
         assert register(store, theme="LoL")

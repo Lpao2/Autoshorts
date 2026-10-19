@@ -789,6 +789,32 @@ class StateStore:
             )
         return dataclass_replace(kit, version=version)
 
+    def get_approved_brand_kit(
+        self, publishing_channel_id: str
+    ) -> ChannelBrandKit | None:
+        row = self.connection.execute(
+            """SELECT * FROM channel_brand_kits
+            WHERE publishing_channel_id = ? AND status = 'APPROVED'
+            ORDER BY version DESC LIMIT 1""",
+            (publishing_channel_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ChannelBrandKit(
+            publishing_channel_id=row["publishing_channel_id"],
+            public_name=row["public_name"],
+            handle=row["handle"],
+            description=row["description"],
+            tagline=row["tagline"],
+            brand_keywords=tuple(json.loads(row["brand_keywords_json"])),
+            visual_direction=row["visual_direction"],
+            palette=tuple(json.loads(row["palette_json"])),
+            logo_brief=row["logo_brief"],
+            banner_brief=row["banner_brief"],
+            status=BrandKitStatus(row["status"]),
+            version=row["version"],
+        )
+
     def get_theme_template(self, theme_key: str) -> ThemeTemplate | None:
         row = self.connection.execute(
             "SELECT * FROM theme_catalog WHERE theme_key = ?", (theme_key,)
