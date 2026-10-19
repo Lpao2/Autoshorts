@@ -56,3 +56,8 @@ retroativa inventada.
 integra imagens reais produzidas por um provider fora do processo, normalizando
 dimensões pelo mesmo pipeline. O runtime da GUI não presume credenciais nem
 provider configurado.
+
+Para produção externa, `BrandAssetImportService` é o caminho estrito: aceita
+somente PNG já nas dimensões finais, não faz crop ou resize e publica pelo mesmo
+pipeline versionado. Staging, manifest e fluxo de confirmação da GUI estão
+documentados em [external-brand-assets.md](external-brand-assets.md).

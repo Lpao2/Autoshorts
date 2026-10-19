@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import importlib.util
+import json
 import subprocess
 import sys
 import tkinter as tk
@@ -31,6 +32,7 @@ from autoshorts.automation_store import (
     default_automation_config_path,
     suggest_output_subdirectory,
 )
+from autoshorts.brand_asset_import import BrandAssetImportService
 from autoshorts.brand_assets import (
     BrandAssetService,
     BrandAssetStatus,
@@ -698,6 +700,11 @@ class AutoShortsWindow:
         ttk.Button(
             actions, text="Assets de marca", command=self.view_brand_assets
         ).pack(side="left", padx=6)
+        ttk.Button(
+            actions,
+            text="Revisão visual",
+            command=self.review_brand_asset_triads,
+        ).pack(side="left")
         self.catalog_tree.bind("<Double-1>", lambda _event: self.view_catalog_theme())
         self.refresh_catalog()
 
@@ -939,6 +946,79 @@ class AutoShortsWindow:
                 ).generate_pending(requests, max_workers=2)
             refresh()
 
+        def import_selected(asset_types) -> None:
+            plan = selected_plan()
+            if plan is None:
+                return
+            requests = []
+            with StateStore(self.state_db_path) as store:
+                importer = BrandAssetImportService(
+                    Path(__file__).resolve().parents[2], store
+                )
+                if len(asset_types) == 2:
+                    folder = filedialog.askdirectory(
+                        title="Pasta com logo.png e banner.png", parent=dialog
+                    )
+                    if not folder:
+                        return
+                    sources = {
+                        BrandAssetType.LOGO: Path(folder) / "logo.png",
+                        BrandAssetType.BANNER: Path(folder) / "banner.png",
+                    }
+                else:
+                    asset_type = asset_types[0]
+                    selected = filedialog.askopenfilename(
+                        title=f"Importar {asset_type.value.lower()}",
+                        parent=dialog,
+                        filetypes=(("PNG", "*.png"),),
+                    )
+                    if not selected:
+                        return
+                    sources = {asset_type: Path(selected)}
+                requests = tuple(
+                    importer.request(plan, asset_type, source)
+                    for asset_type, source in sources.items()
+                )
+            self._import_external_assets(requests, dialog, refresh)
+
+        def import_folder() -> None:
+            selected = filedialog.askdirectory(
+                title="Pasta de staging de branding", parent=dialog
+            )
+            if not selected:
+                return
+            try:
+                with StateStore(self.state_db_path) as store:
+                    requests = BrandAssetImportService(
+                        Path(__file__).resolve().parents[2], store
+                    ).discover_staging(Path(selected))
+            except (OSError, ValueError) as exc:
+                messagebox.showerror(
+                    "Importação externa", str(exc), parent=dialog
+                )
+                return
+            self._import_external_assets(requests, dialog, refresh)
+
+        def import_manifest() -> None:
+            selected = filedialog.askopenfilename(
+                title="Manifest de importação",
+                parent=dialog,
+                filetypes=(("JSON", "*.json"),),
+            )
+            if not selected:
+                return
+            try:
+                with StateStore(self.state_db_path) as store:
+                    requests = BrandAssetImportService(
+                        Path(__file__).resolve().parents[2], store
+                    ).read_manifest(Path(selected))
+            except (json.JSONDecodeError, OSError, ValueError) as exc:
+                messagebox.showerror(
+                    "Importação externa", str(exc), parent=dialog
+                )
+                return
+            self._import_external_assets(requests, dialog, refresh)
+
         actions = ttk.Frame(body)
         actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         buttons = (
@@ -946,6 +1026,9 @@ class AutoShortsWindow:
             ("Gerar banner", lambda: generate((BrandAssetType.BANNER,))),
             ("Gerar ambos", lambda: generate(tuple(BrandAssetType))),
             ("Visualizar", visualize),
+            ("Importar logo", lambda: import_selected((BrandAssetType.LOGO,))),
+            ("Importar banner", lambda: import_selected((BrandAssetType.BANNER,))),
+            ("Importar ambos", lambda: import_selected(tuple(BrandAssetType))),
             ("Aprovar", lambda: review(BrandAssetStatus.APPROVED)),
             ("Rejeitar", lambda: review(BrandAssetStatus.REJECTED)),
             ("Regenerar", lambda: generate(tuple(BrandAssetType), regenerate=True)),
@@ -966,7 +1049,372 @@ class AutoShortsWindow:
             text="Gerar assets pendentes — todos",
             command=lambda: generate_pending(all_themes=True),
         ).pack(side="left", padx=6)
+        ttk.Button(
+            batch, text="Importar pasta/lote", command=import_folder
+        ).pack(side="left")
+        ttk.Button(
+            batch, text="Importar manifest JSON", command=import_manifest
+        ).pack(side="left", padx=6)
         refresh()
+
+    def _confirm_external_asset_imports(self, requests, parent) -> bool:
+        if not requests:
+            messagebox.showinfo(
+                "Importação externa", "Nenhum logo ou banner encontrado.", parent=parent
+            )
+            return False
+        dialog = tk.Toplevel(parent)
+        dialog.title("Confirmar correspondência dos assets")
+        dialog.transient(parent)
+        dialog.grab_set()
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text=(
+                "Confira a correspondência pelo Brand Plan antes de importar. "
+                "Nenhum asset será aprovado automaticamente."
+            ),
+        ).pack(anchor="w", pady=(0, 8))
+        tree = ttk.Treeview(
+            body,
+            columns=("theme", "name", "type", "source"),
+            show="headings",
+            height=min(18, max(4, len(requests))),
+        )
+        for column, label, width in (
+            ("theme", "Tema", 150),
+            ("name", "Canal", 190),
+            ("type", "Asset", 80),
+            ("source", "Arquivo externo", 520),
+        ):
+            tree.heading(column, text=label)
+            tree.column(column, width=width, stretch=column == "source")
+        for item in requests:
+            tree.insert(
+                "",
+                "end",
+                values=(
+                    item.theme_key,
+                    item.public_name,
+                    item.asset_type.value,
+                    str(item.source_file),
+                ),
+            )
+        tree.pack(fill="both", expand=True)
+        accepted = tk.BooleanVar(value=False)
+
+        def finish(value: bool) -> None:
+            accepted.set(value)
+            dialog.destroy()
+
+        actions = ttk.Frame(body)
+        actions.pack(fill="x", pady=(8, 0))
+        ttk.Button(
+            actions, text="Cancelar", command=lambda: finish(False)
+        ).pack(side="right")
+        ttk.Button(
+            actions, text="Confirmar importação", command=lambda: finish(True)
+        ).pack(side="right", padx=6)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: finish(False))
+        parent.wait_window(dialog)
+        return accepted.get()
+
+    def _import_external_assets(self, requests, parent, refresh) -> None:
+        if not self._confirm_external_asset_imports(requests, parent):
+            return
+        with StateStore(self.state_db_path) as store:
+            result = BrandAssetImportService(
+                Path(__file__).resolve().parents[2], store
+            ).import_requests(requests)
+        imported = sum(not item.duplicate for item in result.completed)
+        duplicates = sum(item.duplicate for item in result.completed)
+        details = "\n".join(
+            f"{item.request.public_name} / "
+            f"{item.request.asset_type.value}: {item.error}"
+            for item in result.failed
+        )
+        messagebox.showinfo(
+            "Importação externa",
+            f"Importados: {imported}\nDuplicados: {duplicates}\n"
+            f"Falhos: {len(result.failed)}"
+            + (f"\n\n{details}" if details else ""),
+            parent=parent,
+        )
+        refresh()
+
+    def review_brand_asset_triads(self) -> None:
+        """Review the three channel brands for each still-unapproved theme."""
+        with StateStore(self.state_db_path) as store:
+            themes = []
+            for template in store.list_theme_templates():
+                plans = store.planned_channel_brands(template.theme_key)
+                if not plans:
+                    continue
+                all_approved = all(
+                    all(
+                        (
+                            asset := store.latest_valid_brand_asset(
+                                plan.brand_plan_id, asset_type
+                            )
+                        )
+                        and asset.status == BrandAssetStatus.APPROVED
+                        for asset_type in BrandAssetType
+                    )
+                    for plan in plans
+                )
+                if not all_approved:
+                    themes.append(template)
+        if not themes:
+            messagebox.showinfo("Revisão visual", "Todos os temas estão aprovados.")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Revisão visual das tríades")
+        dialog.transient(self.root)
+        dialog.geometry("1180x760")
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        heading = ttk.Label(body, style="Title.TLabel")
+        heading.grid(row=0, column=0, sticky="w", pady=(0, 8))
+        cards = ttk.Frame(body)
+        cards.grid(row=1, column=0, sticky="nsew")
+        for column in range(3):
+            cards.columnconfigure(column, weight=1, uniform="brand-card")
+        cards.rowconfigure(0, weight=1)
+        navigation = ttk.Frame(body)
+        navigation.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        index = tk.IntVar(value=0)
+        image_refs: list[tk.PhotoImage] = []
+
+        def current_context():
+            template = themes[index.get()]
+            with StateStore(self.state_db_path) as store:
+                plans = store.planned_channel_brands(template.theme_key)
+                assets = {
+                    (plan.brand_plan_id, asset_type): store.latest_valid_brand_asset(
+                        plan.brand_plan_id, asset_type
+                    )
+                    for plan in plans
+                    for asset_type in BrandAssetType
+                }
+            return template, plans, assets
+
+        def approve(plan, asset_types) -> None:
+            with StateStore(self.state_db_path) as store:
+                for asset_type in asset_types:
+                    asset = store.latest_valid_brand_asset(
+                        plan.brand_plan_id, asset_type
+                    )
+                    if asset:
+                        store.set_brand_asset_status(
+                            plan.brand_plan_id,
+                            asset_type,
+                            asset.version,
+                            BrandAssetStatus.APPROVED,
+                        )
+            render()
+
+        def regenerate(plan, asset_type) -> None:
+            if self.brand_image_provider is None:
+                messagebox.showinfo(
+                    "Provider de imagem",
+                    "Nenhum provider de imagem foi configurado no runtime da GUI.",
+                )
+                return
+            template = themes[index.get()]
+            archetype = next(
+                item for item in template.channel_archetypes if item.slot == plan.slot
+            )
+            with StateStore(self.state_db_path) as store:
+                BrandAssetService(
+                    Path(__file__).resolve().parents[2],
+                    store,
+                    self.brand_image_provider,
+                ).generate(
+                    plan,
+                    template,
+                    archetype,
+                    asset_type,
+                    regenerate=True,
+                )
+            render()
+
+        def import_plan(plan, asset_types) -> None:
+            if len(asset_types) == 2:
+                selected = filedialog.askdirectory(
+                    title="Pasta com logo.png e banner.png", parent=dialog
+                )
+                if not selected:
+                    return
+                sources = {
+                    BrandAssetType.LOGO: Path(selected) / "logo.png",
+                    BrandAssetType.BANNER: Path(selected) / "banner.png",
+                }
+            else:
+                asset_type = asset_types[0]
+                selected = filedialog.askopenfilename(
+                    title=f"Importar {asset_type.value.lower()}",
+                    parent=dialog,
+                    filetypes=(("PNG", "*.png"),),
+                )
+                if not selected:
+                    return
+                sources = {asset_type: Path(selected)}
+            with StateStore(self.state_db_path) as store:
+                importer = BrandAssetImportService(
+                    Path(__file__).resolve().parents[2], store
+                )
+                requests = tuple(
+                    importer.request(plan, asset_type, source)
+                    for asset_type, source in sources.items()
+                )
+            self._import_external_assets(requests, dialog, render)
+
+        def preview(parent, asset, *, logo: bool) -> None:
+            if not asset or not asset.preview_path or not asset.preview_path.is_file():
+                ttk.Label(parent, text="Asset pendente", anchor="center").pack(
+                    fill="both", expand=True, pady=6
+                )
+                return
+            try:
+                image = tk.PhotoImage(file=str(asset.preview_path))
+                image = image.subsample(2 if logo else 2)
+            except tk.TclError:
+                ttk.Label(parent, text="Preview inválido", anchor="center").pack(
+                    fill="both", expand=True, pady=6
+                )
+                return
+            image_refs.append(image)
+            ttk.Label(parent, image=image).pack(pady=6)
+
+        def render() -> None:
+            for child in cards.winfo_children():
+                child.destroy()
+            image_refs.clear()
+            template, plans, assets = current_context()
+            heading.configure(
+                text=(
+                    f"{template.display_name} — "
+                    f"tema {index.get() + 1} de {len(themes)}"
+                )
+            )
+            for column, plan in enumerate(plans):
+                card = ttk.LabelFrame(
+                    cards, text=f"Canal {'ABC'[plan.slot - 1]} — {plan.public_name}"
+                )
+                card.grid(row=0, column=column, sticky="nsew", padx=5)
+                logo = assets[(plan.brand_plan_id, BrandAssetType.LOGO)]
+                banner = assets[(plan.brand_plan_id, BrandAssetType.BANNER)]
+                preview(card, logo, logo=True)
+                ttk.Label(
+                    card,
+                    text=f"Logo {logo.status.value if logo else 'PENDING'}",
+                ).pack()
+                preview(card, banner, logo=False)
+                ttk.Label(
+                    card,
+                    text=f"Banner {banner.status.value if banner else 'PENDING'}",
+                ).pack()
+                row = ttk.Frame(card)
+                row.pack(pady=(8, 2))
+                ttk.Button(
+                    row,
+                    text="Aprovar logo",
+                    command=lambda item=plan: approve(item, (BrandAssetType.LOGO,)),
+                ).pack(side="left", padx=2)
+                ttk.Button(
+                    row,
+                    text="Aprovar banner",
+                    command=lambda item=plan: approve(item, (BrandAssetType.BANNER,)),
+                ).pack(side="left", padx=2)
+                ttk.Button(
+                    card,
+                    text="Aprovar ambos",
+                    command=lambda item=plan: approve(item, tuple(BrandAssetType)),
+                ).pack(pady=2)
+                import_row = ttk.Frame(card)
+                import_row.pack(pady=2)
+                ttk.Button(
+                    import_row,
+                    text="Importar logo",
+                    command=lambda item=plan: import_plan(
+                        item, (BrandAssetType.LOGO,)
+                    ),
+                ).pack(side="left", padx=2)
+                ttk.Button(
+                    import_row,
+                    text="Importar banner",
+                    command=lambda item=plan: import_plan(
+                        item, (BrandAssetType.BANNER,)
+                    ),
+                ).pack(side="left", padx=2)
+                ttk.Button(
+                    card,
+                    text="Importar ambos",
+                    command=lambda item=plan: import_plan(
+                        item, tuple(BrandAssetType)
+                    ),
+                ).pack(pady=2)
+                regenerate_row = ttk.Frame(card)
+                regenerate_row.pack(pady=2)
+                ttk.Button(
+                    regenerate_row,
+                    text="Regenerar logo",
+                    command=lambda item=plan: regenerate(item, BrandAssetType.LOGO),
+                ).pack(side="left", padx=2)
+                ttk.Button(
+                    regenerate_row,
+                    text="Regenerar banner",
+                    command=lambda item=plan: regenerate(item, BrandAssetType.BANNER),
+                ).pack(side="left", padx=2)
+            previous.configure(state="normal" if index.get() else "disabled")
+            following.configure(
+                state="normal" if index.get() < len(themes) - 1 else "disabled"
+            )
+
+        def move(delta: int) -> None:
+            index.set(max(0, min(index.get() + delta, len(themes) - 1)))
+            render()
+
+        def approve_theme() -> None:
+            template, plans, assets = current_context()
+            if any(
+                assets[(plan.brand_plan_id, asset_type)] is None
+                for plan in plans
+                for asset_type in BrandAssetType
+            ):
+                messagebox.showinfo(
+                    "Aprovar tema",
+                    "A tríade ainda possui assets pendentes.",
+                    parent=dialog,
+                )
+                return
+            if not messagebox.askyesno(
+                "Aprovar tema",
+                f"Aprovar logos e banners validados de {template.display_name}?",
+                parent=dialog,
+            ):
+                return
+            for plan in plans:
+                approve(plan, tuple(BrandAssetType))
+
+        previous = ttk.Button(
+            navigation, text="Tema anterior", command=lambda: move(-1)
+        )
+        previous.pack(side="left")
+        following = ttk.Button(
+            navigation, text="Próximo tema", command=lambda: move(1)
+        )
+        following.pack(side="left", padx=6)
+        ttk.Button(
+            navigation,
+            text="Aprovar todos deste tema",
+            command=approve_theme,
+        ).pack(side="right")
+        render()
 
     def edit_catalog_theme(self) -> None:
         template = self._selected_catalog_theme()

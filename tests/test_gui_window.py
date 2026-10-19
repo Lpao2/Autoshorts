@@ -156,12 +156,50 @@ def test_brand_asset_status_summary_and_library_dialog(window):
         "Gerar banner",
         "Gerar ambos",
         "Visualizar",
+        "Importar logo",
+        "Importar banner",
+        "Importar ambos",
         "Aprovar",
         "Rejeitar",
         "Regenerar",
         "Gerar assets pendentes — tema atual",
         "Gerar assets pendentes — todos",
+        "Importar pasta/lote",
+        "Importar manifest JSON",
     } <= buttons
+    dialogs[-1].destroy()
+
+
+def test_catalog_exposes_triads_visual_review(window):
+    app, root, _errors = window
+    app.review_brand_asset_triads()
+    root.update_idletasks()
+    dialogs = [
+        item for item in root.winfo_children() if item.winfo_class() == "Toplevel"
+    ]
+    assert dialogs
+
+    def labels(widget):
+        result = []
+        for child in widget.winfo_children():
+            if child.winfo_class() in {"TButton", "TLabel", "TLabelframe"}:
+                result.append(str(child["text"]))
+            result.extend(labels(child))
+        return result
+
+    text = labels(dialogs[-1])
+    assert "Tema anterior" in text
+    assert "Próximo tema" in text
+    assert "Aprovar logo" in text
+    assert "Aprovar banner" in text
+    assert "Aprovar ambos" in text
+    assert "Importar logo" in text
+    assert "Importar banner" in text
+    assert "Importar ambos" in text
+    assert "Aprovar todos deste tema" in text
+    assert "Regenerar logo" in text
+    assert "Regenerar banner" in text
+    assert not any("catalog:" in item for item in text)
     dialogs[-1].destroy()
 
 

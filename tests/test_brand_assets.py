@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from autoshorts.brand_asset_import import BrandAssetImportService
 from autoshorts.brand_assets import (
     BrandAssetService,
     BrandAssetStatus,
@@ -12,6 +13,7 @@ from autoshorts.brand_assets import (
     FakeBrandImageProvider,
     brand_asset_prompt,
     brand_asset_version_directory,
+    write_test_png,
 )
 from autoshorts.brand_identity import HandleAvailability
 from autoshorts.brand_planning import (
@@ -203,8 +205,6 @@ def test_failure_cleans_partial_files(tmp_path):
         parent = tmp_path / "data" / "branding" / plan.theme_key / plan.brand_plan_id
         assert not tuple(parent.glob("logo/.tmp-*"))
         assert store.brand_assets() == ()
-
-
 def test_reconcile_recovers_published_manifest_and_batch_skips_valid(tmp_path):
     with StateStore(tmp_path / "state.db") as store:
         theme, archetype, plan = setup_brand(store)
@@ -235,3 +235,152 @@ def test_rejects_unapproved_plan_and_invalid_concurrency(tmp_path):
             )
         with pytest.raises(ValueError, match="between 1 and 4"):
             service.generate_pending((), max_workers=120)
+
+
+def test_imports_external_logo_and_detects_current_checksum_duplicate(tmp_path):
+    source = tmp_path / "external" / "logo.png"
+    write_test_png(source, 1024, 1024)
+    with StateStore(tmp_path / "state.db") as store:
+        _theme, _archetype, plan = setup_brand(store)
+        importer = BrandAssetImportService(tmp_path, store)
+        first = importer.import_brand_asset(plan, BrandAssetType.LOGO, source)
+        duplicate = importer.import_brand_asset(plan, BrandAssetType.LOGO, source)
+        assert not first.duplicate
+        assert duplicate.duplicate
+        assert duplicate.asset == first.asset
+        assert first.asset.provider == "external-import"
+        assert first.asset.model == "external"
+        assert first.asset.status == BrandAssetStatus.VALIDATED
+        assert first.asset.version == 1
+        assert first.asset.resolved_visual_direction is not None
+        assert len(store.brand_assets(plan.brand_plan_id)) == 1
+
+
+def test_imports_external_banner_with_preview_and_delivery(tmp_path):
+    source = tmp_path / "external" / "banner.png"
+    write_test_png(source, 2560, 1440)
+    with StateStore(tmp_path / "state.db") as store:
+        _theme, _archetype, plan = setup_brand(store)
+        result = BrandAssetImportService(tmp_path, store).import_brand_asset(
+            plan, BrandAssetType.BANNER, source
+        )
+        assert result.asset.width == 2560
+        assert result.asset.height == 1440
+        assert result.asset.preview_path.is_file()
+        assert result.asset.delivery_path.is_file()
+        assert result.asset.delivery_path.stat().st_size <= 6 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("size", "message"),
+    (((1000, 1000), "Invalid logo dimensions"), ((1024, 1024), "decodable")),
+)
+def test_rejects_invalid_external_asset_atomically(tmp_path, size, message):
+    source = tmp_path / "external" / "logo.png"
+    write_test_png(source, *size)
+    if message == "decodable":
+        source.write_bytes(source.read_bytes()[:32])
+    with StateStore(tmp_path / "state.db") as store:
+        _theme, _archetype, plan = setup_brand(store)
+        importer = BrandAssetImportService(tmp_path, store)
+        with pytest.raises(ValueError, match=message):
+            importer.import_brand_asset(plan, BrandAssetType.LOGO, source)
+        assert store.brand_assets(plan.brand_plan_id) == ()
+        parent = tmp_path / "data" / "branding" / plan.theme_key / plan.brand_plan_id
+        assert not tuple(parent.glob("logo/.tmp-*"))
+        assert not tuple(parent.glob("logo/v*"))
+
+
+def test_external_import_creates_v2_without_overwriting_v1(tmp_path):
+    first_source = tmp_path / "external" / "logo-1.png"
+    second_source = tmp_path / "external" / "logo-2.png"
+    write_test_png(first_source, 1024, 1024)
+    second_source.write_bytes(first_source.read_bytes() + b"external-version-two")
+    with StateStore(tmp_path / "state.db") as store:
+        _theme, _archetype, plan = setup_brand(store)
+        importer = BrandAssetImportService(tmp_path, store)
+        first = importer.import_brand_asset(
+            plan, BrandAssetType.LOGO, first_source
+        ).asset
+        second = importer.import_brand_asset(
+            plan, BrandAssetType.LOGO, second_source
+        ).asset
+        assert (first.version, second.version) == (1, 2)
+        assert first.file_path.is_file()
+        assert second.file_path.is_file()
+        assert first.checksum != second.checksum
+
+
+def test_batch_manifest_maps_brand_plan_and_continues_after_failure(tmp_path):
+    logo = tmp_path / "incoming" / "logo.png"
+    banner = tmp_path / "incoming" / "banner.png"
+    invalid = tmp_path / "incoming" / "invalid-logo.png"
+    write_test_png(logo, 1024, 1024)
+    write_test_png(banner, 2560, 1440)
+    write_test_png(invalid, 1000, 1000)
+    with StateStore(tmp_path / "state.db") as store:
+        _theme, _archetype, plan = setup_brand(store)
+        manifest = tmp_path / "incoming" / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "assets": [
+                        {
+                            "brand_plan_id": plan.brand_plan_id,
+                            "logo_path": "logo.png",
+                            "banner_path": "banner.png",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        importer = BrandAssetImportService(tmp_path, store)
+        manifest_requests = importer.read_manifest(manifest)
+        assert [(item.public_name, item.asset_type) for item in manifest_requests] == [
+            (plan.public_name, BrandAssetType.LOGO),
+            (plan.public_name, BrandAssetType.BANNER),
+        ]
+        requests = (
+            *manifest_requests,
+            importer.request(plan, BrandAssetType.LOGO, invalid),
+        )
+        result = importer.import_requests(requests)
+        assert len(result.completed) == 2
+        assert len(result.failed) == 1
+        assert "Invalid logo dimensions" in result.failed[0].error
+        assert len(store.brand_assets(plan.brand_plan_id)) == 2
+
+
+def test_discovers_strict_staging_layout(tmp_path):
+    with StateStore(tmp_path / "state.db") as store:
+        _theme, _archetype, plan = setup_brand(store)
+        folder = (
+            tmp_path
+            / "data"
+            / "branding-import"
+            / plan.theme_key
+            / plan.brand_plan_id
+        )
+        write_test_png(folder / "logo.png", 1024, 1024)
+        write_test_png(folder / "banner.png", 2560, 1440)
+        requests = BrandAssetImportService(tmp_path, store).discover_staging()
+        assert {item.asset_type for item in requests} == set(BrandAssetType)
+        assert all(item.brand_plan_id == plan.brand_plan_id for item in requests)
+
+
+def test_import_is_scoped_and_preserves_existing_other_asset(tmp_path):
+    source = tmp_path / "external" / "logo.png"
+    write_test_png(source, 1024, 1024)
+    with StateStore(tmp_path / "state.db") as store:
+        theme, archetype, plan = setup_brand(store)
+        existing = BrandAssetService(
+            tmp_path, store, FakeBrandImageProvider()
+        ).generate(plan, theme, archetype, BrandAssetType.BANNER)
+        BrandAssetImportService(tmp_path, store).import_brand_asset(
+            plan, BrandAssetType.LOGO, source
+        )
+        preserved = store.brand_asset(
+            plan.brand_plan_id, BrandAssetType.BANNER, existing.version
+        )
+        assert preserved == existing
