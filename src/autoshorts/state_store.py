@@ -12,6 +12,13 @@ from enum import StrEnum
 from pathlib import Path
 
 from autoshorts.automation_config import ColorPalette
+from autoshorts.brand_identity import (
+    BrandCandidate,
+    BrandGenerationResult,
+    BrandKitStatus,
+    ChannelBrandKit,
+    HandleAvailability,
+)
 from autoshorts.theme_catalog import (
     AuthorizationStatus,
     BrandBlueprint,
@@ -30,7 +37,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class VideoStatus(StrEnum):
@@ -676,6 +683,112 @@ class StateStore:
         ).fetchall()
         return tuple(self._theme_template(row) for row in rows)
 
+    def save_brand_generation(self, result: BrandGenerationResult) -> int:
+        now = _now()
+        usage = result.usage
+        with self.connection:
+            cursor = self.connection.execute(
+                """INSERT INTO brand_generations
+                (provider, model, operation, input_tokens, output_tokens,
+                 thinking_tokens, total_tokens, duration_seconds,
+                 theoretical_cost_usd, created_at)
+                VALUES (?, ?, 'brand_generation', ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    result.provider,
+                    result.model,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.thinking_tokens,
+                    usage.total_tokens,
+                    usage.duration_seconds,
+                    usage.estimated_cost_usd,
+                    now,
+                ),
+            )
+            generation_id = int(cursor.lastrowid)
+            for candidate in result.candidates:
+                self.connection.execute(
+                    """INSERT INTO brand_candidates
+                    (generation_id, publishing_channel_id, public_name,
+                     handle_candidates_json, handle_availability, description,
+                     tagline, brand_keywords_json, logo_brief, banner_brief,
+                     reason, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        generation_id,
+                        candidate.publishing_channel_id,
+                        candidate.public_name,
+                        json.dumps(candidate.handle_candidates, ensure_ascii=False),
+                        HandleAvailability.UNKNOWN,
+                        candidate.description,
+                        candidate.tagline,
+                        json.dumps(candidate.brand_keywords, ensure_ascii=False),
+                        candidate.logo_brief,
+                        candidate.banner_brief,
+                        candidate.reason,
+                        now,
+                    ),
+                )
+        return generation_id
+
+    def brand_candidates(self, generation_id: int) -> tuple[BrandCandidate, ...]:
+        rows = self.connection.execute(
+            "SELECT * FROM brand_candidates WHERE generation_id = ? ORDER BY id",
+            (generation_id,),
+        ).fetchall()
+        return tuple(
+            BrandCandidate(
+                publishing_channel_id=row["publishing_channel_id"],
+                public_name=row["public_name"],
+                handle_candidates=tuple(json.loads(row["handle_candidates_json"])),
+                description=row["description"],
+                tagline=row["tagline"],
+                brand_keywords=tuple(json.loads(row["brand_keywords_json"])),
+                logo_brief=row["logo_brief"],
+                banner_brief=row["banner_brief"],
+                reason=row["reason"],
+            )
+            for row in rows
+        )
+
+    def approve_brand_kit(self, kit: ChannelBrandKit) -> ChannelBrandKit:
+        if kit.status != BrandKitStatus.APPROVED:
+            raise ValueError("Approval requires APPROVED status.")
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                "UPDATE channel_brand_kits SET status = 'RETIRED' "
+                "WHERE publishing_channel_id = ? AND status = 'APPROVED'",
+                (kit.publishing_channel_id,),
+            )
+            version = self.connection.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM channel_brand_kits "
+                "WHERE publishing_channel_id = ?",
+                (kit.publishing_channel_id,),
+            ).fetchone()[0]
+            self.connection.execute(
+                """INSERT INTO channel_brand_kits
+                (publishing_channel_id, public_name, handle, description,
+                 tagline, brand_keywords_json, visual_direction, palette_json,
+                 logo_brief, banner_brief, status, version, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, ?)""",
+                (
+                    kit.publishing_channel_id,
+                    kit.public_name,
+                    kit.handle,
+                    kit.description,
+                    kit.tagline,
+                    json.dumps(kit.brand_keywords, ensure_ascii=False),
+                    kit.visual_direction,
+                    json.dumps(kit.palette),
+                    kit.logo_brief,
+                    kit.banner_brief,
+                    version,
+                    now,
+                ),
+            )
+        return dataclass_replace(kit, version=version)
+
     def get_theme_template(self, theme_key: str) -> ThemeTemplate | None:
         row = self.connection.execute(
             "SELECT * FROM theme_catalog WHERE theme_key = ?", (theme_key,)
@@ -704,11 +817,16 @@ class StateStore:
                     updated_at=excluded.updated_at
                 """,
                 (
-                    template.theme_key, template.display_name, template.description,
+                    template.theme_key,
+                    template.display_name,
+                    template.description,
                     json.dumps(template.tags, ensure_ascii=False),
                     json.dumps(asdict(template.source_strategy), ensure_ascii=False),
                     json.dumps(template.production_defaults, ensure_ascii=False),
-                    template.status, template.provenance, now, now,
+                    template.status,
+                    template.provenance,
+                    now,
+                    now,
                 ),
             )
             self.connection.execute(
@@ -725,35 +843,52 @@ class StateStore:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        template.theme_key, item.slot, item.name,
-                        item.editorial_prompt, item.headline_style, item.tone,
+                        template.theme_key,
+                        item.slot,
+                        item.name,
+                        item.editorial_prompt,
+                        item.headline_style,
+                        item.tone,
                         item.visual_direction,
-                        json.dumps([
-                            item.palette.primary, item.palette.secondary,
-                            item.palette.accent, item.palette.background,
-                        ]),
-                        json.dumps({
-                            "public_name": item.brand.public_name,
-                            "handle": item.brand.handle,
-                            "description": item.brand.description,
-                            "tagline": item.brand.tagline,
-                            "logo_path": item.brand.logo_path,
-                            "banner_path": item.brand.banner_path,
-                        }, ensure_ascii=False),
-                        json.dumps({
-                            "editorial_focus": item.editorial_focus,
-                            "audience": item.audience,
-                            "content_preferences": item.content_preferences,
-                            "content_avoid": item.content_avoid,
-                        }, ensure_ascii=False),
+                        json.dumps(
+                            [
+                                item.palette.primary,
+                                item.palette.secondary,
+                                item.palette.accent,
+                                item.palette.background,
+                            ]
+                        ),
+                        json.dumps(
+                            {
+                                "public_name": item.brand.public_name,
+                                "handle": item.brand.handle,
+                                "description": item.brand.description,
+                                "tagline": item.brand.tagline,
+                                "logo_path": item.brand.logo_path,
+                                "banner_path": item.brand.banner_path,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(
+                            {
+                                "editorial_focus": item.editorial_focus,
+                                "audience": item.audience,
+                                "content_preferences": item.content_preferences,
+                                "content_avoid": item.content_avoid,
+                            },
+                            ensure_ascii=False,
+                        ),
                         json.dumps(asdict(item.brand_blueprint), ensure_ascii=False),
                     ),
                 )
             self.connection.execute(
                 "UPDATE theme_catalog SET rights_json = ?, readiness_json = ? "
                 "WHERE theme_key = ?",
-                (json.dumps(asdict(template.rights_profile), ensure_ascii=False),
-                 json.dumps(asdict(template.readiness)), template.theme_key),
+                (
+                    json.dumps(asdict(template.rights_profile), ensure_ascii=False),
+                    json.dumps(asdict(template.readiness)),
+                    template.theme_key,
+                ),
             )
             active = next((x for x in template.prompt_versions if x.active), None)
             prompt = active.prompt if active else template.base_prompt
@@ -807,9 +942,11 @@ class StateStore:
         ).fetchall()
         prompts = tuple(
             PromptVersion(
-                version=item["version"], prompt=item["prompt"],
+                version=item["version"],
+                prompt=item["prompt"],
                 provenance=CatalogProvenance(item["provenance"]),
-                active=bool(item["active"]), created_at=item["created_at"],
+                active=bool(item["active"]),
+                created_at=item["created_at"],
             )
             for item in prompt_rows
         )
@@ -820,28 +957,35 @@ class StateStore:
             brand = json.loads(item["brand_json"])
             editorial = json.loads(item["editorial_json"])
             blueprint = json.loads(item["brand_blueprint_json"])
-            archetypes.append(ChannelArchetype(
-                slot=item["slot"], name=item["name"],
-                editorial_focus=tuple(editorial["editorial_focus"]),
-                editorial_prompt=item["editorial_prompt"],
-                headline_style=item["headline_style"], tone=item["tone"],
-                visual_direction=item["visual_direction"],
-                audience=editorial["audience"],
-                content_preferences=tuple(editorial["content_preferences"]),
-                content_avoid=tuple(editorial["content_avoid"]),
-                palette=ColorPalette(*colors), brand=BrandProfile(**brand),
-                brand_blueprint=BrandBlueprint(
-                    keywords=tuple(blueprint["keywords"]),
-                    **{k: v for k, v in blueprint.items() if k != "keywords"},
-                ),
-            ))
+            archetypes.append(
+                ChannelArchetype(
+                    slot=item["slot"],
+                    name=item["name"],
+                    editorial_focus=tuple(editorial["editorial_focus"]),
+                    editorial_prompt=item["editorial_prompt"],
+                    headline_style=item["headline_style"],
+                    tone=item["tone"],
+                    visual_direction=item["visual_direction"],
+                    audience=editorial["audience"],
+                    content_preferences=tuple(editorial["content_preferences"]),
+                    content_avoid=tuple(editorial["content_avoid"]),
+                    palette=ColorPalette(*colors),
+                    brand=BrandProfile(**brand),
+                    brand_blueprint=BrandBlueprint(
+                        keywords=tuple(blueprint["keywords"]),
+                        **{k: v for k, v in blueprint.items() if k != "keywords"},
+                    ),
+                )
+            )
         source = json.loads(row["source_strategy_json"])
         if "source_types" not in source:
             source = {
                 "source_types": ("creator_longform",),
                 "description": "Legacy creator-channel collection strategy.",
                 "requires_creator_authorization": True,
-                "preferred_sources": (), "avoid_sources": (), "notes": "",
+                "preferred_sources": (),
+                "avoid_sources": (),
+                "notes": "",
             }
         rights = json.loads(row["rights_json"])
         if not rights:
@@ -853,23 +997,29 @@ class StateStore:
             }
         readiness = json.loads(row["readiness_json"])
         if not readiness:
-            readiness = {key: False for key in (
-                "editorial_ready", "channel_profiles_ready",
-                "source_strategy_ready", "rights_strategy_ready",
-                "brand_direction_ready", "production_fit_ready",
-            )}
+            readiness = {
+                key: False
+                for key in (
+                    "editorial_ready",
+                    "channel_profiles_ready",
+                    "source_strategy_ready",
+                    "rights_strategy_ready",
+                    "brand_direction_ready",
+                    "production_fit_ready",
+                )
+            }
         return ThemeTemplate(
-            theme_key=key, display_name=row["display_name"],
-            description=row["description"], base_prompt=active,
+            theme_key=key,
+            display_name=row["display_name"],
+            description=row["description"],
+            base_prompt=active,
             tags=tuple(json.loads(row["tags_json"])),
             source_strategy=SourceStrategy(
                 source_types=tuple(source["source_types"]),
                 preferred_sources=tuple(source["preferred_sources"]),
                 avoid_sources=tuple(source["avoid_sources"]),
                 description=source["description"],
-                requires_creator_authorization=source[
-                    "requires_creator_authorization"
-                ],
+                requires_creator_authorization=source["requires_creator_authorization"],
                 notes=source.get("notes", ""),
             ),
             rights_profile=RightsProfile(
@@ -877,7 +1027,8 @@ class StateStore:
                 authorization_status=AuthorizationStatus(
                     rights["authorization_status"]
                 ),
-                reuse_risk=ReuseRisk(rights["reuse_risk"]), notes=rights["notes"],
+                reuse_risk=ReuseRisk(rights["reuse_risk"]),
+                notes=rights["notes"],
             ),
             readiness=ThemeReadiness(**readiness),
             production_defaults=json.loads(row["production_defaults_json"]),
@@ -1030,6 +1181,40 @@ class StateStore:
                     FOREIGN KEY (theme_key) REFERENCES theme_catalog(theme_key)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS brand_generations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL,
+                    model TEXT NOT NULL, operation TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                    thinking_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+                    duration_seconds REAL NOT NULL, theoretical_cost_usd REAL NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS brand_candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    generation_id INTEGER NOT NULL,
+                    publishing_channel_id TEXT NOT NULL, public_name TEXT NOT NULL,
+                    handle_candidates_json TEXT NOT NULL,
+                    handle_availability TEXT NOT NULL, description TEXT NOT NULL,
+                    tagline TEXT NOT NULL, brand_keywords_json TEXT NOT NULL,
+                    logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
+                    reason TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY (generation_id) REFERENCES brand_generations(id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS channel_brand_kits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    publishing_channel_id TEXT NOT NULL, public_name TEXT NOT NULL,
+                    handle TEXT NOT NULL, description TEXT NOT NULL,
+                    tagline TEXT NOT NULL, brand_keywords_json TEXT NOT NULL,
+                    visual_direction TEXT NOT NULL, palette_json TEXT NOT NULL,
+                    logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
+                    status TEXT NOT NULL, version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (publishing_channel_id, version)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_one_approved_brand
+                    ON channel_brand_kits(publishing_channel_id)
+                    WHERE status = 'APPROVED';
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -1060,6 +1245,9 @@ class StateStore:
             version = 9
         if version == 9:
             self._migrate_v9_to_v10()
+            version = 10
+        if version == 10:
+            self._migrate_v10_to_v11()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -1243,6 +1431,48 @@ class StateStore:
                     ADD COLUMN brand_blueprint_json TEXT NOT NULL DEFAULT
                     '{"keywords":[],"name_direction":"","handle_direction":"","description_direction":"","tagline_direction":"","logo_brief":"","banner_brief":""}';
                 PRAGMA user_version = 10;
+                """
+            )
+
+    def _migrate_v10_to_v11(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE brand_generations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL,
+                    model TEXT NOT NULL, operation TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                    thinking_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+                    duration_seconds REAL NOT NULL, theoretical_cost_usd REAL NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE brand_candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    generation_id INTEGER NOT NULL,
+                    publishing_channel_id TEXT NOT NULL, public_name TEXT NOT NULL,
+                    handle_candidates_json TEXT NOT NULL,
+                    handle_availability TEXT NOT NULL, description TEXT NOT NULL,
+                    tagline TEXT NOT NULL, brand_keywords_json TEXT NOT NULL,
+                    logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
+                    reason TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY (generation_id) REFERENCES brand_generations(id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE channel_brand_kits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    publishing_channel_id TEXT NOT NULL, public_name TEXT NOT NULL,
+                    handle TEXT NOT NULL, description TEXT NOT NULL,
+                    tagline TEXT NOT NULL, brand_keywords_json TEXT NOT NULL,
+                    visual_direction TEXT NOT NULL, palette_json TEXT NOT NULL,
+                    logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
+                    status TEXT NOT NULL, version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (publishing_channel_id, version)
+                );
+                CREATE UNIQUE INDEX idx_one_approved_brand
+                    ON channel_brand_kits(publishing_channel_id)
+                    WHERE status = 'APPROVED';
+                PRAGMA user_version = 11;
                 """
             )
 

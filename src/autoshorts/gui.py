@@ -10,7 +10,7 @@ import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
 from queue import Empty
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import cast
 
@@ -29,6 +29,11 @@ from autoshorts.automation_store import (
     AutomationStore,
     default_automation_config_path,
     suggest_output_subdirectory,
+)
+from autoshorts.brand_identity import (
+    BrandKitStatus,
+    ChannelBrandKit,
+    GeminiBrandIdentityProvider,
 )
 from autoshorts.collection import YouTubeAccess, resolve_deno
 from autoshorts.config import OverwritePolicy, Settings, load_settings
@@ -296,9 +301,7 @@ class _ChannelDialog(_EntityDialog):
         self.crop_preset = tk.StringVar(master=self.window, value=crop_preset)
         self.caption_preset = tk.StringVar(master=self.window, value=caption_preset)
         self.branding_preset = tk.StringVar(master=self.window, value=branding_preset)
-        self.posting_enabled = tk.BooleanVar(
-            master=self.window, value=posting_enabled
-        )
+        self.posting_enabled = tk.BooleanVar(master=self.window, value=posting_enabled)
         self.daily_limit = tk.StringVar(master=self.window, value=daily_limit)
         self.timezone = tk.StringVar(master=self.window, value=timezone)
         ttk.Label(self.body, text="Slot").grid(row=0, column=0, sticky="w", pady=4)
@@ -591,8 +594,10 @@ class AutoShortsWindow:
         )
         ttk.Label(
             frame,
-            text=("Templates editoriais reutilizáveis. Editar a biblioteca não "
-                  "ativa produção nem altera canais existentes."),
+            text=(
+                "Templates editoriais reutilizáveis. Editar a biblioteca não "
+                "ativa produção nem altera canais existentes."
+            ),
         ).grid(row=1, column=0, sticky="w", pady=(2, 12))
         panel = ttk.Frame(frame)
         panel.grid(row=2, column=0, sticky="nsew")
@@ -601,15 +606,23 @@ class AutoShortsWindow:
         self.catalog_tree = ttk.Treeview(
             panel,
             columns=(
-                "status", "name", "origin", "readiness", "prompt", "versions",
+                "status",
+                "name",
+                "origin",
+                "readiness",
+                "prompt",
+                "versions",
                 "channels",
             ),
             show="headings",
         )
         for column, label, width in (
-            ("status", "Estado", 90), ("name", "Tema", 220),
-            ("origin", "Origem", 110), ("versions", "Versões", 70),
-            ("readiness", "Readiness", 90), ("prompt", "Prompt ativo", 260),
+            ("status", "Estado", 90),
+            ("name", "Tema", 220),
+            ("origin", "Origem", 110),
+            ("versions", "Versões", 70),
+            ("readiness", "Readiness", 90),
+            ("prompt", "Prompt ativo", 260),
             ("channels", "3 canais", 80),
         ):
             self.catalog_tree.heading(column, text=label)
@@ -639,11 +652,18 @@ class AutoShortsWindow:
             templates = store.list_theme_templates()
         for item in templates:
             self.catalog_tree.insert(
-                "", "end", iid=item.theme_key,
-                values=(item.status, item.display_name, item.provenance,
-                        "Completo" if item.readiness.ready else "Pendente",
-                        item.base_prompt[:80], len(item.prompt_versions),
-                        len(item.channel_archetypes)),
+                "",
+                "end",
+                iid=item.theme_key,
+                values=(
+                    item.status,
+                    item.display_name,
+                    item.provenance,
+                    "Completo" if item.readiness.ready else "Pendente",
+                    item.base_prompt[:80],
+                    len(item.prompt_versions),
+                    len(item.channel_archetypes),
+                ),
             )
 
     def _selected_catalog_theme(self):
@@ -700,22 +720,36 @@ class AutoShortsWindow:
         ttk.Label(body, text="Nome").grid(row=0, column=0, sticky="w")
         ttk.Entry(body, textvariable=name, width=60).grid(row=0, column=1, sticky="ew")
         ttk.Label(body, text="Estado").grid(row=1, column=0, sticky="w", pady=6)
-        ttk.Combobox(body, textvariable=status, values=tuple(CatalogStatus),
-                     state="readonly").grid(row=1, column=1, sticky="w")
+        ttk.Combobox(
+            body, textvariable=status, values=tuple(CatalogStatus), state="readonly"
+        ).grid(row=1, column=1, sticky="w")
         ttk.Label(body, text="Descrição").grid(row=2, column=0, sticky="nw")
-        description = ScrolledText(body, width=70, height=4, background=FIELD,
-                                   foreground=TEXT, insertbackground=TEXT)
+        description = ScrolledText(
+            body,
+            width=70,
+            height=4,
+            background=FIELD,
+            foreground=TEXT,
+            insertbackground=TEXT,
+        )
         description.grid(row=2, column=1, sticky="nsew")
         description.insert("1.0", template.description)
         ttk.Label(body, text="Prompt ativo").grid(row=3, column=0, sticky="nw", pady=6)
-        prompt = ScrolledText(body, width=70, height=12, background=FIELD,
-                              foreground=TEXT, insertbackground=TEXT)
+        prompt = ScrolledText(
+            body,
+            width=70,
+            height=12,
+            background=FIELD,
+            foreground=TEXT,
+            insertbackground=TEXT,
+        )
         prompt.grid(row=3, column=1, sticky="nsew", pady=6)
         prompt.insert("1.0", template.base_prompt)
 
         def save() -> None:
             updated = replace(
-                template, display_name=name.get().strip(),
+                template,
+                display_name=name.get().strip(),
                 description=description.get("1.0", "end-1c").strip(),
                 base_prompt=prompt.get("1.0", "end-1c").strip(),
                 status=CatalogStatus(status.get()),
@@ -874,6 +908,11 @@ class AutoShortsWindow:
             account_actions, text="Desconectar", command=self.disconnect_youtube_ui
         )
         self.disconnect_youtube_button.pack(side="left", padx=6)
+        ttk.Button(
+            account_actions,
+            text="Gerar identidade",
+            command=self.generate_brand_identity_ui,
+        ).pack(side="left", padx=(10, 0))
         self.auto_accounts.bind(
             "<<TreeviewSelect>>", lambda _event: self._update_youtube_buttons()
         )
@@ -1024,6 +1063,157 @@ class AutoShortsWindow:
         )
         ttk.Button(parent, text="Selecionar...", command=command).grid(
             row=row, column=2, padx=(8, 0)
+        )
+
+    def generate_brand_identity_ui(self) -> None:
+        if self.automation_config is None or not self._current_theme_name():
+            messagebox.showinfo("Identidade", "Selecione um tema operacional.")
+            return
+        theme_profile = self.automation_config.theme(self._current_theme_name())
+        if len(theme_profile.channels) != 3:
+            messagebox.showerror(
+                "Identidade", "A geração coordenada exige exatamente três canais."
+            )
+            return
+        with StateStore(self.state_db_path) as store:
+            template = store.get_theme_template(theme_profile.output_subdirectory)
+        if template is None:
+            messagebox.showerror("Identidade", "Template do tema não encontrado.")
+            return
+        if not messagebox.askyesno(
+            "Gerar identidade",
+            "Fazer uma chamada Gemini para gerar 5 propostas para cada canal?",
+        ):
+            return
+        try:
+            channels = tuple(
+                (template.channel_archetypes[channel.slot - 1], channel)
+                for channel in sorted(
+                    theme_profile.channels, key=lambda item: item.slot
+                )
+            )
+            result = GeminiBrandIdentityProvider().generate(template, channels)
+            with StateStore(self.state_db_path) as store:
+                generation_id = store.save_brand_generation(result)
+            self._show_brand_candidates(generation_id, theme_profile)
+        except Exception as exc:
+            messagebox.showerror("Falha na geração", str(exc))
+
+    def _show_brand_candidates(self, generation_id, theme_profile) -> None:
+        with StateStore(self.state_db_path) as store:
+            candidates = store.brand_candidates(generation_id)
+        window = tk.Toplevel(self.root)
+        window.title("Candidatos de identidade — revisão necessária")
+        window.geometry("1000x620")
+        panel = ttk.Frame(window, padding=12)
+        panel.pack(fill="both", expand=True)
+        tree = ttk.Treeview(
+            panel,
+            columns=("channel", "name", "handles", "tagline"),
+            show="headings",
+            height=15,
+        )
+        for key, label, width in (
+            ("channel", "Canal interno", 110),
+            ("name", "Nome", 180),
+            ("handles", "Handles (não verificados)", 330),
+            ("tagline", "Tagline", 280),
+        ):
+            tree.heading(key, text=label)
+            tree.column(key, width=width, stretch=key in {"handles", "tagline"})
+        names = {item.channel_id: item.name for item in theme_profile.channels}
+        for index, item in enumerate(candidates):
+            tree.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=(
+                    names[item.publishing_channel_id],
+                    item.public_name,
+                    ", ".join(item.handle_candidates),
+                    item.tagline,
+                ),
+            )
+        tree.pack(fill="both", expand=True)
+        detail = ScrolledText(panel, height=10, background=FIELD, foreground=TEXT)
+        detail.pack(fill="x", pady=(8, 0))
+
+        def show(_event=None):
+            selected = tree.selection()
+            if not selected:
+                return
+            item = candidates[int(selected[0])]
+            detail.delete("1.0", "end")
+            detail.insert(
+                "1.0",
+                f"Descrição: {item.description}\n\nPalavras-chave: "
+                f"{', '.join(item.brand_keywords)}\n\nLogo: {item.logo_brief}\n\n"
+                f"Banner: {item.banner_brief}\n\nMotivo: {item.reason}\n\n"
+                "Disponibilidade dos handles: UNKNOWN. Nenhum candidato foi aprovado.",
+            )
+
+        tree.bind("<<TreeviewSelect>>", show)
+        ttk.Button(
+            panel,
+            text="Editar e aprovar selecionado",
+            command=lambda: self._approve_brand_candidate(
+                candidates, tree, theme_profile, window
+            ),
+        ).pack(anchor="e", pady=(8, 0))
+
+    def _approve_brand_candidate(self, candidates, tree, theme_profile, window) -> None:
+        selected = tree.selection()
+        if not selected:
+            messagebox.showinfo("Identidade", "Selecione um candidato.")
+            return
+        candidate = candidates[int(selected[0])]
+        values = {}
+        for key, label, initial in (
+            ("public_name", "Nome público", candidate.public_name),
+            ("handle", "Handle escolhido", candidate.handle_candidates[0]),
+            ("description", "Descrição", candidate.description),
+            ("tagline", "Tagline", candidate.tagline),
+            ("logo_brief", "Brief do logo", candidate.logo_brief),
+            ("banner_brief", "Brief do banner", candidate.banner_brief),
+        ):
+            value = simpledialog.askstring(
+                "Revisar identidade", label, initialvalue=initial, parent=window
+            )
+            if value is None:
+                return
+            values[key] = value.strip()
+        channel = next(
+            item
+            for item in theme_profile.channels
+            if item.channel_id == candidate.publishing_channel_id
+        )
+        palette = channel.visual_profile.palette
+        kit = ChannelBrandKit(
+            publishing_channel_id=channel.channel_id,
+            brand_keywords=candidate.brand_keywords,
+            visual_direction=channel.visual_profile.branding_preset,
+            palette=(
+                palette.primary,
+                palette.secondary,
+                palette.accent,
+                palette.background,
+            ),
+            status=BrandKitStatus.APPROVED,
+            version=0,
+            **values,
+        )
+        if not messagebox.askyesno(
+            "Aprovar identidade",
+            f"Aprovar '{kit.public_name}' exatamente como revisado?",
+            parent=window,
+        ):
+            return
+        with StateStore(self.state_db_path) as store:
+            approved = store.approve_brand_kit(kit)
+        messagebox.showinfo(
+            "Identidade aprovada",
+            f"{approved.public_name} — versão {approved.version} APPROVED",
+            parent=window,
         )
 
     def _sync_analysis_mode(self) -> None:
@@ -1653,9 +1843,7 @@ class AutoShortsWindow:
                 result[11],
                 result[12],
             ),
-            "posting_policy": PostingPolicy(
-                result[13] == "1", daily_limit, result[15]
-            ),
+            "posting_policy": PostingPolicy(result[13] == "1", daily_limit, result[15]),
         }
 
     def _selected_identity_id(self) -> str | None:
@@ -1683,7 +1871,8 @@ class AutoShortsWindow:
         if self.automation_config is None or not identity_id:
             return
         identity = next(
-            x for x in self.automation_config.google_identities
+            x
+            for x in self.automation_config.google_identities
             if x.identity_id == identity_id
         )
         result = _IdentityDialog(
