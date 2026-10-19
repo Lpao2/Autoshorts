@@ -35,6 +35,7 @@ from autoshorts.brand_identity import (
     BrandKitStatus,
     ChannelBrandKit,
     GeminiBrandIdentityProvider,
+    generate_brand_identity_with_retry,
 )
 from autoshorts.channel_setup import (
     ChannelSetupStatus,
@@ -104,6 +105,16 @@ def _brand_generation_error_message(exc: Exception) -> str:
             "salva. Você pode tentar novamente mais tarde."
         )
     return f"Não foi possível gerar propostas. Nenhum dado foi apagado.\n\n{raw}"
+
+
+def _identity_display(identity) -> str:
+    return f"{identity.label} — {identity.email}"
+
+
+def _youtube_action_labels(binding) -> tuple[str, ...]:
+    if binding is None:
+        return ("Conectar YouTube",)
+    return ("Verificar conexão", "Reconectar", "Desconectar")
 
 
 def _binding_display(
@@ -1116,15 +1127,16 @@ class AutoShortsWindow:
         window.transient(self.root)
         body = ttk.Frame(window, padding=18)
         body.pack(fill="both", expand=True)
-        identity = tk.StringVar(
-            window,
-            value=setup.google_identity.identity_id if setup.google_identity else "",
-        )
         labels = {
-            item.identity_id: f"{item.label} — {item.email}"
+            item.identity_id: _identity_display(item)
             for item in self.automation_config.google_identities
             if item.enabled
         }
+        identity_by_display = {label: key for key, label in labels.items()}
+        current_identity_id = (
+            setup.google_identity.identity_id if setup.google_identity else ""
+        )
+        identity = tk.StringVar(window, value=labels.get(current_identity_id, ""))
         ttk.Label(body, text="1. Configuração básica", style="Section.TLabel").pack(
             anchor="w"
         )
@@ -1138,7 +1150,10 @@ class AutoShortsWindow:
         ).pack(anchor="w", pady=6)
         ttk.Label(body, text="Google Identity").pack(anchor="w")
         combo = ttk.Combobox(
-            body, textvariable=identity, values=tuple(labels), state="readonly"
+            body,
+            textvariable=identity,
+            values=tuple(identity_by_display),
+            state="readonly",
         )
         combo.pack(fill="x", pady=(2, 8))
 
@@ -1147,7 +1162,7 @@ class AutoShortsWindow:
                 self.automation_config,
                 theme.name,
                 channel_id,
-                google_identity_id=identity.get() or None,
+                google_identity_id=identity_by_display.get(identity.get()),
             )
             self.refresh_theme_details()
 
@@ -1172,9 +1187,18 @@ class AutoShortsWindow:
             ),
             wraplength=660,
         ).pack(anchor="w")
+        branding_actions = ttk.Frame(body)
+        branding_actions.pack(anchor="w", pady=5)
         ttk.Button(
-            body, text="Gerar propostas", command=self.generate_brand_identity_ui
-        ).pack(anchor="w", pady=5)
+            branding_actions,
+            text="Gerar propostas",
+            command=self.generate_brand_identity_ui,
+        ).pack(side="left")
+        ttk.Button(
+            branding_actions,
+            text="Preencher manualmente",
+            command=lambda: self.manual_brand_kit_ui(setup, window),
+        ).pack(side="left", padx=6)
         ttk.Separator(body).pack(fill="x", pady=14)
         ttk.Label(body, text="3. YouTube", style="Section.TLabel").pack(anchor="w")
         if setup.channel_binding:
@@ -1183,7 +1207,7 @@ class AutoShortsWindow:
                 body,
                 text=(
                     f"Conectado a: {binding.youtube_channel_title}\n"
-                    f"ID do YouTube: {binding.youtube_channel_id}"
+                    f"Status: Conectado\nID do YouTube: {binding.youtube_channel_id}"
                 ),
             ).pack(anchor="w", pady=4)
         elif setup.brand_kit:
@@ -1218,9 +1242,26 @@ class AutoShortsWindow:
             ).pack(side="left")
         else:
             ttk.Label(body, text="Disponível após revisar o branding.").pack(anchor="w")
-        ttk.Button(body, text="Conectar YouTube", command=self.connect_youtube_ui).pack(
-            anchor="w", pady=5
-        )
+        youtube_actions = ttk.Frame(body)
+        youtube_actions.pack(anchor="w", pady=5)
+        if setup.channel_binding:
+            commands = (
+                self.verify_youtube_ui,
+                self.connect_youtube_ui,
+                self.disconnect_youtube_ui,
+            )
+            for label, command in zip(
+                _youtube_action_labels(setup.channel_binding), commands, strict=True
+            ):
+                ttk.Button(youtube_actions, text=label, command=command).pack(
+                    side="left", padx=(0, 6)
+                )
+        else:
+            ttk.Button(
+                youtube_actions,
+                text=_youtube_action_labels(None)[0],
+                command=self.connect_youtube_ui,
+            ).pack(side="left")
         ttk.Separator(body).pack(fill="x", pady=14)
         ttk.Label(body, text="Resumo", style="Section.TLabel").pack(anchor="w")
         ttk.Label(
@@ -1231,6 +1272,104 @@ class AutoShortsWindow:
                 f"Scheduler: NOT CONFIGURED\nStatus: {setup.setup_status}"
             ),
         ).pack(anchor="w", pady=4)
+
+    def manual_brand_kit_ui(self, setup, parent=None) -> None:
+        window = tk.Toplevel(parent or self.root)
+        window.title(f"Identidade manual — {setup.publishing_channel.name}")
+        window.transient(parent or self.root)
+        body = ttk.Frame(window, padding=16)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+        blueprint = setup.archetype.brand_blueprint
+        palette = setup.archetype.palette
+        initial = setup.brand_kit
+        variables = {
+            "public_name": tk.StringVar(
+                window, value=initial.public_name if initial else ""
+            ),
+            "handle": tk.StringVar(window, value=initial.handle if initial else ""),
+            "description": tk.StringVar(
+                window, value=initial.description if initial else ""
+            ),
+            "tagline": tk.StringVar(window, value=initial.tagline if initial else ""),
+            "palette": tk.StringVar(
+                window,
+                value=", ".join(
+                    initial.palette
+                    if initial
+                    else (
+                        palette.primary,
+                        palette.secondary,
+                        palette.accent,
+                        palette.background,
+                    )
+                ),
+            ),
+            "logo_brief": tk.StringVar(
+                window, value=initial.logo_brief if initial else blueprint.logo_brief
+            ),
+            "banner_brief": tk.StringVar(
+                window,
+                value=initial.banner_brief if initial else blueprint.banner_brief,
+            ),
+        }
+        for row, (key, label) in enumerate(
+            (
+                ("public_name", "Nome público"),
+                ("handle", "Handle"),
+                ("description", "Descrição"),
+                ("tagline", "Tagline"),
+                ("palette", "Paleta — 4 cores separadas por vírgula"),
+                ("logo_brief", "Brief do logo"),
+                ("banner_brief", "Brief do banner"),
+            )
+        ):
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Entry(body, textvariable=variables[key], width=65).grid(
+                row=row, column=1, sticky="ew", pady=4
+            )
+        ttk.Label(
+            body,
+            text=(
+                "Os briefs e a paleta começaram no BrandBlueprint. Revise tudo "
+                "antes de aprovar. A disponibilidade do handle permanece UNKNOWN."
+            ),
+            wraplength=650,
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=8)
+
+        def approve() -> None:
+            try:
+                colors = tuple(x.strip() for x in variables["palette"].get().split(","))
+                kit = ChannelBrandKit(
+                    publishing_channel_id=setup.publishing_channel.channel_id,
+                    public_name=variables["public_name"].get().strip(),
+                    handle=variables["handle"].get().strip().lower(),
+                    description=variables["description"].get().strip(),
+                    tagline=variables["tagline"].get().strip(),
+                    brand_keywords=blueprint.keywords,
+                    visual_direction=setup.archetype.visual_direction,
+                    palette=colors,
+                    logo_brief=variables["logo_brief"].get().strip(),
+                    banner_brief=variables["banner_brief"].get().strip(),
+                    status=BrandKitStatus.APPROVED,
+                    version=0,
+                )
+                with StateStore(self.state_db_path) as store:
+                    approved = store.approve_brand_kit(kit)
+            except (ValueError, OSError) as exc:
+                messagebox.showerror("Identidade inválida", str(exc), parent=window)
+                return
+            messagebox.showinfo(
+                "Identidade aprovada",
+                f"{approved.public_name} — versão {approved.version} APPROVED",
+                parent=window,
+            )
+            window.destroy()
+            self.refresh_theme_details()
+
+        ttk.Button(body, text="Aprovar identidade", command=approve).grid(
+            row=8, column=1, sticky="e", pady=(8, 0)
+        )
 
     def generate_brand_identity_ui(self) -> None:
         if self.automation_config is None or not self._current_theme_name():
@@ -1259,14 +1398,47 @@ class AutoShortsWindow:
                     theme_profile.channels, key=lambda item: item.slot
                 )
             )
-            result = GeminiBrandIdentityProvider().generate(template, channels)
+
+            def progress(attempt: int, total: int) -> None:
+                self.auto_status.set(
+                    f"Gerando propostas... Tentativa {attempt} de {total}..."
+                )
+                self.root.update_idletasks()
+
+            result, attempts = generate_brand_identity_with_retry(
+                GeminiBrandIdentityProvider(),
+                template,
+                channels,
+                on_attempt=progress,
+            )
             with StateStore(self.state_db_path) as store:
                 generation_id = store.save_brand_generation(result)
+            self.auto_status.set(
+                f"15 propostas geradas em {attempts} tentativa(s). Revisão necessária."
+            )
             self._show_brand_candidates(generation_id, theme_profile)
         except Exception as exc:
-            messagebox.showerror(
-                "Falha na geração", _brand_generation_error_message(exc)
+            self.auto_status.set("Geração não concluída; dados existentes preservados.")
+            use_manual = messagebox.askyesno(
+                "Gemini indisponível",
+                _brand_generation_error_message(exc)
+                + "\n\nDeseja preencher a identidade manualmente agora?",
             )
+            if use_manual:
+                channel_id = self._selected_channel_id()
+                with StateStore(self.state_db_path) as store:
+                    setups = resolve_theme_channel_setups(
+                        theme_profile,
+                        template,
+                        self.automation_config.google_identities,
+                        store,
+                    )
+                setup = next(
+                    item
+                    for item in setups
+                    if item.publishing_channel.channel_id == channel_id
+                )
+                self.manual_brand_kit_ui(setup)
 
     def _show_brand_candidates(self, generation_id, theme_profile) -> None:
         with StateStore(self.state_db_path) as store:
@@ -1279,9 +1451,11 @@ class AutoShortsWindow:
         tree = ttk.Treeview(
             panel,
             columns=("channel", "name", "handles", "tagline"),
-            show="headings",
+            show="tree headings",
             height=15,
         )
+        tree.heading("#0", text="Grupo")
+        tree.column("#0", width=90, stretch=False)
         for key, label, width in (
             ("channel", "Canal interno", 110),
             ("name", "Nome", 180),
@@ -1291,11 +1465,16 @@ class AutoShortsWindow:
             tree.heading(key, text=label)
             tree.column(key, width=width, stretch=key in {"handles", "tagline"})
         names = {item.channel_id: item.name for item in theme_profile.channels}
+        parents = {}
+        for channel in sorted(theme_profile.channels, key=lambda item: item.slot):
+            parent = f"group-{channel.channel_id}"
+            parents[channel.channel_id] = parent
+            tree.insert("", "end", iid=parent, text=channel.name, open=True)
         for index, item in enumerate(candidates):
             tree.insert(
-                "",
+                parents[item.publishing_channel_id],
                 "end",
-                iid=str(index),
+                iid=f"candidate-{index}",
                 values=(
                     names[item.publishing_channel_id],
                     item.public_name,
@@ -1309,9 +1488,9 @@ class AutoShortsWindow:
 
         def show(_event=None):
             selected = tree.selection()
-            if not selected:
+            if not selected or not selected[0].startswith("candidate-"):
                 return
-            item = candidates[int(selected[0])]
+            item = candidates[int(selected[0].removeprefix("candidate-"))]
             detail.delete("1.0", "end")
             detail.insert(
                 "1.0",
@@ -1332,10 +1511,10 @@ class AutoShortsWindow:
 
     def _approve_brand_candidate(self, candidates, tree, theme_profile, window) -> None:
         selected = tree.selection()
-        if not selected:
+        if not selected or not selected[0].startswith("candidate-"):
             messagebox.showinfo("Identidade", "Selecione um candidato.")
             return
-        candidate = candidates[int(selected[0])]
+        candidate = candidates[int(selected[0].removeprefix("candidate-"))]
         values = {}
         for key, label, initial in (
             ("public_name", "Nome público", candidate.public_name),

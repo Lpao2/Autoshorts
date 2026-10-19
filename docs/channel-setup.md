@@ -28,7 +28,22 @@ O botão **Preparar canal** mostra:
 
 IDs técnicos não são editáveis. Tokens e referências de credencial não aparecem.
 Erros 503 do Gemini informam indisponibilidade temporária, preservam a tela e não
-criam candidatos falsos ou retries automáticos.
+criam candidatos falsos.
+
+Google Identities aparecem pelo nome e email; o `identity_id` permanece interno.
+Quando o YouTube já está conectado, o wizard oferece **Verificar conexão**,
+**Reconectar** e **Desconectar** em vez de destacar uma nova conexão.
+
+Branding também pode ser preenchido manualmente. Nome, handle, descrição,
+tagline, paleta e briefs são revisáveis; paleta e briefs começam no blueprint do
+arquétipo. A aprovação usa a mesma validação e o mesmo histórico versionado dos
+candidatos gerados.
+
+Uma geração é uma operação lógica coordenada para os três canais. Falhas
+transitórias 429, 500, 502, 503, 504, timeout e conexão recebem no máximo três
+tentativas, com esperas de aproximadamente 2 e 6 segundos. Erros determinísticos,
+incluindo 400, 401, 403 e validação de schema, não são repetidos. Nada é persistido
+até a resposta completa de 15 candidatos ser validada.
 
 ## Schema v11
 

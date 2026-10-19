@@ -17,7 +17,12 @@ from autoshorts.automation_config import (  # noqa: E402
     ThemeProfile,
 )
 from autoshorts.automation_store import AutomationStore  # noqa: E402
-from autoshorts.gui import AutoShortsWindow, _brand_generation_error_message  # noqa: E402
+from autoshorts.gui import (  # noqa: E402
+    AutoShortsWindow,
+    _brand_generation_error_message,
+    _identity_display,
+    _youtube_action_labels,
+)
 from autoshorts.state_store import ChannelCredentialBinding, StateStore  # noqa: E402
 
 
@@ -70,6 +75,18 @@ def test_brand_503_message_preserves_existing_data():
     )
     assert "temporariamente indisponível" in message
     assert "Nenhuma proposta foi salva" in message
+
+
+def test_wizard_uses_human_identity_and_connection_actions():
+    identity = GoogleIdentity("google-a", "Google Principal", "owner@example.test")
+    assert _identity_display(identity) == "Google Principal — owner@example.test"
+    assert "google-a" not in _identity_display(identity)
+    assert _youtube_action_labels(None) == ("Conectar YouTube",)
+    assert _youtube_action_labels(object()) == (
+        "Verificar conexão",
+        "Reconectar",
+        "Desconectar",
+    )
 
 
 def test_theme_library_shows_complete_blueprints(window):

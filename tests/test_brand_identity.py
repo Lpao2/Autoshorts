@@ -9,6 +9,7 @@ from autoshorts.brand_identity import (
     BrandKitStatus,
     ChannelBrandKit,
     GeminiBrandIdentityProvider,
+    generate_brand_identity_with_retry,
 )
 from autoshorts.state_store import StateStore
 from autoshorts.transcript_analysis import AnalysisUsage
@@ -142,3 +143,66 @@ def test_provider_returns_fifteen_distinct_candidates():
     result = provider.generate(theme, channels)
     assert len(result.candidates) == 15
     assert len({x.public_name for x in result.candidates}) == 15
+
+
+class FailingProvider:
+    provider_name = "test"
+    model = "test"
+
+    def __init__(self, failures):
+        self.failures = list(failures)
+        self.calls = 0
+
+    def generate(self, _theme, _channels):
+        self.calls += 1
+        error = self.failures.pop(0)
+        if error is not None:
+            raise RuntimeError(error)
+        return BrandGenerationResult((), "test", "test", AnalysisUsage())
+
+
+@pytest.mark.parametrize("error", ["503 UNAVAILABLE", "429 rate limited"])
+def test_transient_brand_error_retries(error):
+    provider = FailingProvider([error, None])
+    result, attempts = generate_brand_identity_with_retry(
+        provider, object(), (), sleep=lambda _seconds: None
+    )
+    assert result.provider == "test"
+    assert attempts == 2
+    assert provider.calls == 2
+
+
+def test_forbidden_brand_error_does_not_retry():
+    provider = FailingProvider(["403 forbidden"])
+    with pytest.raises(RuntimeError, match="403"):
+        generate_brand_identity_with_retry(
+            provider, object(), (), sleep=lambda _seconds: None
+        )
+    assert provider.calls == 1
+
+
+def test_three_transient_failures_stop_without_result():
+    provider = FailingProvider(["503", "timeout", "504"])
+    waits = []
+    with pytest.raises(RuntimeError, match="504"):
+        generate_brand_identity_with_retry(provider, object(), (), sleep=waits.append)
+    assert provider.calls == 3
+    assert waits == [2.0, 6.0]
+
+
+def test_manual_brand_kit_uses_shared_validation():
+    with pytest.raises(ValueError, match="handle"):
+        ChannelBrandKit(
+            "channel",
+            "Nome",
+            "handle inválido",
+            "Descrição",
+            "Tagline",
+            ("gaming",),
+            "visual",
+            ("#000", "#fff", "#f00", "#111"),
+            "logo",
+            "banner",
+            BrandKitStatus.APPROVED,
+            0,
+        )

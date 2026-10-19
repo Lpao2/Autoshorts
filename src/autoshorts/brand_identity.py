@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -80,6 +81,28 @@ class ChannelBrandKit:
     banner_brief: str
     status: BrandKitStatus
     version: int
+
+    def __post_init__(self) -> None:
+        required = (
+            self.publishing_channel_id,
+            self.public_name,
+            self.handle,
+            self.description,
+            self.tagline,
+            self.visual_direction,
+            self.logo_brief,
+            self.banner_brief,
+        )
+        if any(not value.strip() for value in required):
+            raise ValueError("Brand kit fields cannot be empty.")
+        if not re.fullmatch(r"@[a-z0-9._]{3,30}", self.handle):
+            raise ValueError("Brand kit handle must be normalized and start with @.")
+        if not self.brand_keywords:
+            raise ValueError("Brand kit keywords cannot be empty.")
+        if len(self.palette) != 4 or any(not value.strip() for value in self.palette):
+            raise ValueError("Brand kit requires four palette colors.")
+        if self.version < 0:
+            raise ValueError("Brand kit version cannot be negative.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,3 +283,45 @@ class GeminiBrandIdentityProvider:
         return BrandGenerationResult(
             tuple(candidates), self.provider_name, self.model, usage
         )
+
+
+def is_transient_brand_error(exc: Exception) -> bool:
+    text = str(exc).casefold()
+    transient_markers = (
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "unavailable",
+        "timeout",
+        "timed out",
+        "connection reset",
+        "connection aborted",
+        "temporarily unavailable",
+        "high demand",
+    )
+    return any(marker in text for marker in transient_markers)
+
+
+def generate_brand_identity_with_retry(
+    provider: BrandIdentityProvider,
+    theme: ThemeTemplate,
+    channels: tuple[tuple[ChannelArchetype, PublishingChannel], ...],
+    *,
+    on_attempt: Callable[[int, int], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[BrandGenerationResult, int]:
+    """Perform one logical generation with at most three transient attempts."""
+    delays = (0.0, 2.0, 6.0)
+    for attempt, delay in enumerate(delays, 1):
+        if delay:
+            sleep(delay)
+        if on_attempt:
+            on_attempt(attempt, len(delays))
+        try:
+            return provider.generate(theme, channels), attempt
+        except Exception as exc:
+            if not is_transient_brand_error(exc) or attempt == len(delays):
+                raise
+    raise AssertionError("unreachable")
