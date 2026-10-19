@@ -216,6 +216,14 @@ def test_gemini_uses_structured_output_theme_prompt_and_real_usage():
     assert result.usage.estimated_cost_usd == estimate_cost_usd(
         "gemini-3.8-flash", 1000, 150
     )
+    assert provider.model == "gemini-3.8-flash"
+
+
+def test_analysis_model_uses_its_operation_specific_env(monkeypatch):
+    monkeypatch.setenv("AUTOSHORTS_GEMINI_ANALYSIS_MODEL", "analysis-override")
+    monkeypatch.setenv("AUTOSHORTS_GEMINI_BRAND_MODEL", "brand-override")
+    provider = GeminiAnalysisProvider(client=SimpleNamespace())
+    assert provider.model == "analysis-override"
 
 
 def test_prompt_hash_changes_only_when_effective_prompt_changes():

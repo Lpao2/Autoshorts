@@ -16,7 +16,10 @@ class TokenPrice:
 
 # Introductory Gemini 3.8 Flash pricing through 2026-12-31. Thinking tokens
 # are billed as output tokens by Google.
-MODEL_PRICES = {"gemini-3.8-flash": TokenPrice(0.75, 3.75)}
+MODEL_PRICES = {
+    "gemini-3.8-flash": TokenPrice(0.75, 3.75),
+    "gemini-3.5-flash-lite": TokenPrice(0.30, 2.50),
+}
 
 
 def estimate_cost_usd(

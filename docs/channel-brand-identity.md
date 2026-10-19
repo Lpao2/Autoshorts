@@ -27,9 +27,20 @@ Não há verificação de disponibilidade, criação de canal ou geração de im
 
 O histórico de usage não é misturado com análise ou reranking de vídeos.
 
+## Modelos por operação
+
+- análise: `AUTOSHORTS_GEMINI_ANALYSIS_MODEL` (padrão `gemini-3.8-flash`);
+- reranking: `AUTOSHORTS_GEMINI_RERANK_MODEL` (padrão `gemini-3.8-flash`);
+- branding: `AUTOSHORTS_GEMINI_BRAND_MODEL` (padrão
+  `gemini-3.5-flash-lite`, com thinking mínimo).
+
+O modelo gravado e o custo teórico são sempre os da chamada efetivamente feita.
+Branding mantém três tentativas apenas para erros transitórios, sem fallback
+silencioso para outro modelo.
+
 ## Primeiro teste real
 
-A primeira chamada coordenada para LoL A/B/C recebeu `503 UNAVAILABLE` por alta
-demanda temporária do modelo. Não houve segunda chamada, resposta parcial,
-persistência de candidatos ou aprovação. Uma nova tentativa deve ser iniciada
-explicitamente pela ação **Gerar identidade** na GUI.
+As primeiras operações coordenadas para LoL A/B/C receberam `503 UNAVAILABLE`
+por alta demanda temporária. Nenhuma resposta parcial, candidato ou aprovação
+foi persistida. Uma nova operação deve ser iniciada explicitamente pela ação
+**Gerar identidade** na GUI.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from threading import Event
 from typing import Any
@@ -27,6 +28,7 @@ Priorize o que prenderia uma pessoa nos primeiros segundos e funcionaria isolado
 Avalie hook, clareza sem contexto, payoff, energia, reação, humor, surpresa, tensão,
 retenção, inteligibilidade, adequação ao tema, coerência da headline e diversidade
 do conjunto final. Escolha somente IDs existentes e não altere os candidatos."""
+RERANK_MODEL_ENV = "AUTOSHORTS_GEMINI_RERANK_MODEL"
 
 RERANK_SCHEMA = {
     "type": "object",
@@ -56,12 +58,12 @@ RERANK_SCHEMA = {
 class GeminiCandidateReranker(CandidateReranker):
     provider_name = "gemini"
 
-    def __init__(self, *, model: str = DEFAULT_GEMINI_MODEL, client: Any) -> None:
-        self.model = model
+    def __init__(self, *, model: str | None = None, client: Any) -> None:
+        self.model = model or os.environ.get(RERANK_MODEL_ENV, DEFAULT_GEMINI_MODEL)
         self._client = client
 
     @classmethod
-    def configured(cls, *, model: str = DEFAULT_GEMINI_MODEL):
+    def configured(cls, *, model: str | None = None):
         from google import genai
 
         return cls(model=model, client=genai.Client())

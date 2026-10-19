@@ -13,12 +13,12 @@ from typing import Any, Protocol
 
 from autoshorts.analysis_cost import estimate_cost_usd
 from autoshorts.automation_config import PublishingChannel
-from autoshorts.gemini_analysis_provider import (
-    DEFAULT_GEMINI_MODEL,
-    _usage_from_response,
-)
+from autoshorts.gemini_analysis_provider import _usage_from_response
 from autoshorts.theme_catalog import ChannelArchetype, ThemeTemplate
 from autoshorts.transcript_analysis import AnalysisUsage
+
+DEFAULT_GEMINI_BRAND_MODEL = "gemini-3.5-flash-lite"
+BRAND_MODEL_ENV = "AUTOSHORTS_GEMINI_BRAND_MODEL"
 
 
 class BrandKitStatus(StrEnum):
@@ -205,7 +205,7 @@ class GeminiBrandIdentityProvider:
 
     def __init__(self, *, model: str | None = None, client: Any | None = None) -> None:
         self.model = model or os.environ.get(
-            "AUTOSHORTS_GEMINI_MODEL", DEFAULT_GEMINI_MODEL
+            BRAND_MODEL_ENV, DEFAULT_GEMINI_BRAND_MODEL
         )
         api_key = os.environ.get("GEMINI_API_KEY")
         if client is None and not api_key:
@@ -245,7 +245,7 @@ class GeminiBrandIdentityProvider:
                 "system_instruction": SYSTEM_PROMPT,
                 "response_mime_type": "application/json",
                 "response_json_schema": RESPONSE_SCHEMA,
-                "thinking_config": {"thinking_level": "low"},
+                "thinking_config": {"thinking_level": "minimal"},
                 "temperature": 0.7,
             },
         )

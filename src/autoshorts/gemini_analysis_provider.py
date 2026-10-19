@@ -18,6 +18,7 @@ from autoshorts.transcript_analysis import (
 from autoshorts.transcription import Transcript
 
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+ANALYSIS_MODEL_ENV = "AUTOSHORTS_GEMINI_ANALYSIS_MODEL"
 
 
 class GeminiAnalysisError(ValueError):
@@ -78,7 +79,8 @@ class GeminiAnalysisProvider:
 
     def __init__(self, *, model: str | None = None, client: Any | None = None) -> None:
         self.model = model or os.environ.get(
-            "AUTOSHORTS_GEMINI_MODEL", DEFAULT_GEMINI_MODEL
+            ANALYSIS_MODEL_ENV,
+            os.environ.get("AUTOSHORTS_GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
         )
         api_key = os.environ.get("GEMINI_API_KEY")
         if client is None and not api_key:

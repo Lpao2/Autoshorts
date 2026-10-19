@@ -2,8 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from autoshorts.analysis_cost import estimate_cost_usd
 from autoshorts.automation_config import PublishingChannel
 from autoshorts.brand_identity import (
+    DEFAULT_GEMINI_BRAND_MODEL,
     BrandCandidate,
     BrandGenerationResult,
     BrandKitStatus,
@@ -57,9 +59,11 @@ def test_generation_persistence_and_separate_usage(tmp_path):
         generation_id = store.save_brand_generation(result)
         assert len(store.brand_candidates(generation_id)) == 15
         row = store.connection.execute(
-            "SELECT operation FROM brand_generations WHERE id = ?", (generation_id,)
+            "SELECT operation, model FROM brand_generations WHERE id = ?",
+            (generation_id,),
         ).fetchone()
         assert row[0] == "brand_generation"
+        assert row[1] == "model"
         assert (
             store.connection.execute("SELECT COUNT(*) FROM ai_usage").fetchone()[0] == 0
         )
@@ -94,6 +98,7 @@ def test_approval_versions_and_one_active(tmp_path):
 
 class Models:
     def generate_content(self, **kwargs):
+        self.kwargs = kwargs
         channels = []
         for channel in ("a", "b", "c"):
             channels.append(
@@ -139,10 +144,26 @@ def test_provider_returns_fifteen_distinct_candidates():
         (theme.channel_archetypes[i], PublishingChannel(x, f"LoL {x.upper()}", i + 1))
         for i, x in enumerate(("a", "b", "c"))
     )
-    provider = GeminiBrandIdentityProvider(client=SimpleNamespace(models=Models()))
+    models = Models()
+    provider = GeminiBrandIdentityProvider(client=SimpleNamespace(models=models))
     result = provider.generate(theme, channels)
     assert len(result.candidates) == 15
     assert len({x.public_name for x in result.candidates}) == 15
+    assert provider.model == DEFAULT_GEMINI_BRAND_MODEL
+    assert models.kwargs["model"] == "gemini-3.5-flash-lite"
+    assert models.kwargs["config"]["thinking_config"] == {
+        "thinking_level": "minimal"
+    }
+    assert result.model == "gemini-3.5-flash-lite"
+    assert result.usage.estimated_cost_usd == estimate_cost_usd(
+        "gemini-3.5-flash-lite", 10, 25
+    )
+
+
+def test_brand_model_env_override(monkeypatch):
+    monkeypatch.setenv("AUTOSHORTS_GEMINI_BRAND_MODEL", "brand-override")
+    provider = GeminiBrandIdentityProvider(client=SimpleNamespace(models=Models()))
+    assert provider.model == "brand-override"
 
 
 class FailingProvider:

@@ -208,4 +208,12 @@ def test_gemini_rerank_prompt_uses_theme_and_omits_original_scores(tmp_path):
     assert "priorize humor" in prompt
     assert "SCORE" not in prompt.upper()
     assert str(candidates[0].selection.score) not in prompt
+    assert provider.model == "gemini-3.8-flash"
     store.close()
+
+
+def test_rerank_model_uses_its_operation_specific_env(monkeypatch):
+    monkeypatch.setenv("AUTOSHORTS_GEMINI_RERANK_MODEL", "rerank-override")
+    monkeypatch.setenv("AUTOSHORTS_GEMINI_BRAND_MODEL", "brand-override")
+    provider = GeminiCandidateReranker(client=SimpleNamespace())
+    assert provider.model == "rerank-override"
