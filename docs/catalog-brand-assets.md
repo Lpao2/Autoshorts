@@ -46,11 +46,13 @@ A fila ignora versões `VALIDATED` ou `APPROVED`, portanto retoma apenas itens
 pendentes. A concorrência é deliberadamente limitada a um worker enquanto a
 execução compartilha uma conexão SQLite.
 
-O schema v16 mantém versão, tamanho, preview e path de entrega e acrescenta
-`resolved_visual_direction_json` a `brand_asset_metadata`. Geração termina em
+O schema v17 mantém versão, tamanho, preview e path de entrega, inclui
+`resolved_visual_direction_json` e acrescenta provenance da importação externa
+(`source_package`, arquivo, cópia preservada, checksum, dimensões e transformação)
+a `brand_asset_metadata`. Geração termina em
 `VALIDATED`; aprovação e rejeição são ações humanas separadas na Biblioteca de
-temas. Assets anteriores à v16 permanecem com esse campo nulo, sem provenance
-retroativa inventada.
+temas. Assets antigos permanecem com os campos introduzidos depois de sua
+criação nulos, sem provenance retroativa inventada.
 
 `FakeBrandImageProvider` cobre testes sem rede. `PreparedFileBrandImageProvider`
 integra imagens reais produzidas por um provider fora do processo, normalizando

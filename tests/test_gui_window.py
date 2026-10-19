@@ -103,12 +103,17 @@ def test_theme_library_shows_complete_blueprints(window):
         "prompt",
         "versions",
         "channels",
+        "logos",
+        "banners",
+        "approved_assets",
     )
     rows = [
         app.catalog_tree.item(row, "values") for row in app.catalog_tree.get_children()
     ]
     assert all(row[3] == "Completo" for row in rows)
     assert all(int(row[6]) == 3 for row in rows)
+    assert all("/3" in row[7] and "/3" in row[8] for row in rows)
+    assert all("/6" in row[9] for row in rows)
 
 
 def test_brand_asset_status_summary_and_library_dialog(window):
@@ -196,6 +201,9 @@ def test_catalog_exposes_triads_visual_review(window):
     assert "Importar logo" in text
     assert "Importar banner" in text
     assert "Importar ambos" in text
+    assert "Rejeitar logo" in text
+    assert "Rejeitar banner" in text
+    assert "Visualizar histórico" in text
     assert "Aprovar todos deste tema" in text
     assert "Regenerar logo" in text
     assert "Regenerar banner" in text

@@ -668,6 +668,9 @@ class AutoShortsWindow:
                 "prompt",
                 "versions",
                 "channels",
+                "logos",
+                "banners",
+                "approved_assets",
             ),
             show="headings",
         )
@@ -679,6 +682,9 @@ class AutoShortsWindow:
             ("readiness", "Readiness", 90),
             ("prompt", "Prompt ativo", 260),
             ("channels", "3 canais", 80),
+            ("logos", "Logos", 85),
+            ("banners", "Banners", 85),
+            ("approved_assets", "Aprovados", 90),
         ):
             self.catalog_tree.heading(column, text=label)
             self.catalog_tree.column(column, width=width, stretch=column == "name")
@@ -713,7 +719,36 @@ class AutoShortsWindow:
             self.catalog_tree.delete(item)
         with StateStore(self.state_db_path) as store:
             templates = store.list_theme_templates()
+            summaries = {}
+            for template in templates:
+                plans = store.planned_channel_brands(template.theme_key)
+                logos = banners = approved = 0
+                for plan in plans:
+                    assets = store.brand_assets(plan.brand_plan_id)
+                    for asset_type in BrandAssetType:
+                        versions = [
+                            item for item in assets if item.asset_type == asset_type
+                        ]
+                        current = (
+                            max(versions, key=lambda item: item.version)
+                            if versions
+                            else None
+                        )
+                        if current:
+                            if asset_type == BrandAssetType.LOGO:
+                                logos += 1
+                            else:
+                                banners += 1
+                            if current.status == BrandAssetStatus.APPROVED:
+                                approved += 1
+                summaries[template.theme_key] = (
+                    logos,
+                    banners,
+                    approved,
+                    len(plans),
+                )
         for item in templates:
+            logos, banners, approved, plan_count = summaries[item.theme_key]
             self.catalog_tree.insert(
                 "",
                 "end",
@@ -726,6 +761,9 @@ class AutoShortsWindow:
                     item.base_prompt[:80],
                     len(item.prompt_versions),
                     len(item.channel_archetypes),
+                    f"{logos}/{plan_count}",
+                    f"{banners}/{plan_count}",
+                    f"{approved}/{plan_count * 2}",
                 ),
             )
 
@@ -1144,27 +1182,13 @@ class AutoShortsWindow:
         refresh()
 
     def review_brand_asset_triads(self) -> None:
-        """Review the three channel brands for each still-unapproved theme."""
+        """Review the three channel brands for every catalog theme."""
         with StateStore(self.state_db_path) as store:
-            themes = []
-            for template in store.list_theme_templates():
-                plans = store.planned_channel_brands(template.theme_key)
-                if not plans:
-                    continue
-                all_approved = all(
-                    all(
-                        (
-                            asset := store.latest_valid_brand_asset(
-                                plan.brand_plan_id, asset_type
-                            )
-                        )
-                        and asset.status == BrandAssetStatus.APPROVED
-                        for asset_type in BrandAssetType
-                    )
-                    for plan in plans
-                )
-                if not all_approved:
-                    themes.append(template)
+            themes = [
+                template
+                for template in store.list_theme_templates()
+                if store.planned_channel_brands(template.theme_key)
+            ]
         if not themes:
             messagebox.showinfo("Revisão visual", "Todos os temas estão aprovados.")
             return
@@ -1193,29 +1217,81 @@ class AutoShortsWindow:
             template = themes[index.get()]
             with StateStore(self.state_db_path) as store:
                 plans = store.planned_channel_brands(template.theme_key)
-                assets = {
-                    (plan.brand_plan_id, asset_type): store.latest_valid_brand_asset(
-                        plan.brand_plan_id, asset_type
-                    )
-                    for plan in plans
-                    for asset_type in BrandAssetType
-                }
+                assets = {}
+                for plan in plans:
+                    versions = store.brand_assets(plan.brand_plan_id)
+                    for asset_type in BrandAssetType:
+                        matching = [
+                            item for item in versions if item.asset_type == asset_type
+                        ]
+                        assets[(plan.brand_plan_id, asset_type)] = (
+                            max(matching, key=lambda item: item.version)
+                            if matching
+                            else None
+                        )
             return template, plans, assets
 
-        def approve(plan, asset_types) -> None:
+        def review(plan, asset_types, status: BrandAssetStatus) -> None:
             with StateStore(self.state_db_path) as store:
                 for asset_type in asset_types:
-                    asset = store.latest_valid_brand_asset(
-                        plan.brand_plan_id, asset_type
-                    )
+                    versions = [
+                        item
+                        for item in store.brand_assets(plan.brand_plan_id)
+                        if item.asset_type == asset_type
+                    ]
+                    asset = max(versions, key=lambda item: item.version, default=None)
                     if asset:
                         store.set_brand_asset_status(
                             plan.brand_plan_id,
                             asset_type,
                             asset.version,
-                            BrandAssetStatus.APPROVED,
+                            status,
                         )
             render()
+
+        def history(plan) -> None:
+            with StateStore(self.state_db_path) as store:
+                assets = store.brand_assets(plan.brand_plan_id)
+            window = tk.Toplevel(dialog)
+            window.title(f"Histórico — {plan.public_name}")
+            window.transient(dialog)
+            tree = ttk.Treeview(
+                window,
+                columns=("type", "version", "status", "origin", "source"),
+                show="headings",
+                height=max(4, len(assets)),
+            )
+            for column, label, width in (
+                ("type", "Asset", 80),
+                ("version", "Versão", 70),
+                ("status", "Status", 100),
+                ("origin", "Origem", 150),
+                ("source", "Source", 300),
+            ):
+                tree.heading(column, text=label)
+                tree.column(column, width=width, stretch=column == "source")
+            for asset in assets:
+                tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        asset.asset_type.value,
+                        f"v{asset.version}",
+                        asset.status.value,
+                        asset.provider,
+                        asset.source_file or "—",
+                    ),
+                )
+            tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+            def open_previews() -> None:
+                for asset in assets:
+                    if asset.preview_path and asset.preview_path.is_file():
+                        webbrowser.open(asset.preview_path.resolve().as_uri())
+
+            ttk.Button(
+                window, text="Abrir previews", command=open_previews
+            ).pack(pady=(0, 10))
 
         def regenerate(plan, asset_type) -> None:
             if self.brand_image_provider is None:
@@ -1323,18 +1399,48 @@ class AutoShortsWindow:
                 ttk.Button(
                     row,
                     text="Aprovar logo",
-                    command=lambda item=plan: approve(item, (BrandAssetType.LOGO,)),
+                    command=lambda item=plan: review(
+                        item,
+                        (BrandAssetType.LOGO,),
+                        BrandAssetStatus.APPROVED,
+                    ),
                 ).pack(side="left", padx=2)
                 ttk.Button(
                     row,
                     text="Aprovar banner",
-                    command=lambda item=plan: approve(item, (BrandAssetType.BANNER,)),
+                    command=lambda item=plan: review(
+                        item,
+                        (BrandAssetType.BANNER,),
+                        BrandAssetStatus.APPROVED,
+                    ),
                 ).pack(side="left", padx=2)
                 ttk.Button(
                     card,
                     text="Aprovar ambos",
-                    command=lambda item=plan: approve(item, tuple(BrandAssetType)),
+                    command=lambda item=plan: review(
+                        item, tuple(BrandAssetType), BrandAssetStatus.APPROVED
+                    ),
                 ).pack(pady=2)
+                reject_row = ttk.Frame(card)
+                reject_row.pack(pady=2)
+                ttk.Button(
+                    reject_row,
+                    text="Rejeitar logo",
+                    command=lambda item=plan: review(
+                        item,
+                        (BrandAssetType.LOGO,),
+                        BrandAssetStatus.REJECTED,
+                    ),
+                ).pack(side="left", padx=2)
+                ttk.Button(
+                    reject_row,
+                    text="Rejeitar banner",
+                    command=lambda item=plan: review(
+                        item,
+                        (BrandAssetType.BANNER,),
+                        BrandAssetStatus.REJECTED,
+                    ),
+                ).pack(side="left", padx=2)
                 import_row = ttk.Frame(card)
                 import_row.pack(pady=2)
                 ttk.Button(
@@ -1357,6 +1463,11 @@ class AutoShortsWindow:
                     command=lambda item=plan: import_plan(
                         item, tuple(BrandAssetType)
                     ),
+                ).pack(pady=2)
+                ttk.Button(
+                    card,
+                    text="Visualizar histórico",
+                    command=lambda item=plan: history(item),
                 ).pack(pady=2)
                 regenerate_row = ttk.Frame(card)
                 regenerate_row.pack(pady=2)
@@ -1382,7 +1493,14 @@ class AutoShortsWindow:
         def approve_theme() -> None:
             template, plans, assets = current_context()
             if any(
-                assets[(plan.brand_plan_id, asset_type)] is None
+                (
+                    assets[(plan.brand_plan_id, asset_type)] is None
+                    or assets[(plan.brand_plan_id, asset_type)].status
+                    not in {
+                        BrandAssetStatus.VALIDATED,
+                        BrandAssetStatus.APPROVED,
+                    }
+                )
                 for plan in plans
                 for asset_type in BrandAssetType
             ):
@@ -1399,7 +1517,9 @@ class AutoShortsWindow:
             ):
                 return
             for plan in plans:
-                approve(plan, tuple(BrandAssetType))
+                review(
+                    plan, tuple(BrandAssetType), BrandAssetStatus.APPROVED
+                )
 
         previous = ttk.Button(
             navigation, text="Tema anterior", command=lambda: move(-1)

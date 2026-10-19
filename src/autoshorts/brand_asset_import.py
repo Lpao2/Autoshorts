@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -47,17 +47,33 @@ class ExternalAssetBatchResult:
     failed: tuple[ExternalAssetImportFailure, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ExternalAssetProvenance:
+    source_package: str
+    source_file: str
+    source_preserved_path: Path
+    source_checksum: str
+    source_width: int
+    source_height: int
+    canonical_transform: str
+
+
 class _StrictExternalFileProvider:
     provider_name = "external-import"
     model = "external"
 
-    def __init__(self, source_file: Path) -> None:
+    def __init__(
+        self,
+        source_file: Path,
+        provenance: ExternalAssetProvenance | None = None,
+    ) -> None:
         self.source_file = source_file
+        self.provenance = provenance
 
     def _generate(self, brand, asset_type, output_path, prompt):
         shutil.copyfile(self.source_file, output_path)
         width, height = validate_brand_asset(output_path, asset_type)
-        return GeneratedBrandAsset(
+        asset = GeneratedBrandAsset(
             brand_plan_id=brand.brand_plan_id,
             asset_type=asset_type,
             file_path=output_path,
@@ -70,6 +86,19 @@ class _StrictExternalFileProvider:
             checksum=_checksum(output_path),
             status=BrandAssetStatus.GENERATED,
             created_at=datetime.now(UTC).isoformat(),
+        )
+        if self.provenance is None:
+            return asset
+        provenance = self.provenance
+        return replace(
+            asset,
+            source_package=provenance.source_package,
+            source_file=provenance.source_file,
+            source_preserved_path=provenance.source_preserved_path,
+            source_checksum=provenance.source_checksum,
+            source_width=provenance.source_width,
+            source_height=provenance.source_height,
+            canonical_transform=provenance.canonical_transform,
         )
 
     def generate_logo(self, planned_brand, *, output_path, prompt):
@@ -121,6 +150,8 @@ class BrandAssetImportService:
         brand_plan: PlannedChannelBrand,
         asset_type: BrandAssetType,
         source_file: Path,
+        *,
+        provenance: ExternalAssetProvenance | None = None,
     ) -> ExternalAssetImportResult:
         request = self.request(brand_plan, asset_type, source_file)
         brand_plan = self._catalog_plan(request.brand_plan_id)
@@ -141,7 +172,7 @@ class BrandAssetImportService:
         archetype = next(
             item for item in theme.channel_archetypes if item.slot == brand_plan.slot
         )
-        provider = _StrictExternalFileProvider(request.source_file)
+        provider = _StrictExternalFileProvider(request.source_file, provenance)
         asset = BrandAssetService(self.project_root, self.store, provider).generate(
             brand_plan,
             theme,

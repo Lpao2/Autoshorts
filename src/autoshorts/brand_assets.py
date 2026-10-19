@@ -56,6 +56,13 @@ class GeneratedBrandAsset:
     preview_path: Path | None = None
     delivery_path: Path | None = None
     resolved_visual_direction: ResolvedAssetVisualDirection | None = None
+    source_package: str | None = None
+    source_file: str | None = None
+    source_preserved_path: Path | None = None
+    source_checksum: str | None = None
+    source_width: int | None = None
+    source_height: int | None = None
+    canonical_transform: str | None = None
 
 
 class BrandImageProvider(Protocol):
@@ -493,6 +500,9 @@ def _asset_manifest(asset: GeneratedBrandAsset) -> dict[str, object]:
     payload["file_path"] = str(asset.file_path)
     payload["preview_path"] = str(asset.preview_path) if asset.preview_path else None
     payload["delivery_path"] = str(asset.delivery_path) if asset.delivery_path else None
+    payload["source_preserved_path"] = (
+        str(asset.source_preserved_path) if asset.source_preserved_path else None
+    )
     payload["resolved_visual_direction"] = (
         asset.resolved_visual_direction.as_dict()
         if asset.resolved_visual_direction
@@ -526,5 +536,26 @@ def _asset_from_manifest(payload: dict[str, object]) -> GeneratedBrandAsset:
             payload["resolved_visual_direction"]
         )
         if payload.get("resolved_visual_direction")
+        else None,
+        source_package=str(payload["source_package"])
+        if payload.get("source_package")
+        else None,
+        source_file=str(payload["source_file"])
+        if payload.get("source_file")
+        else None,
+        source_preserved_path=Path(str(payload["source_preserved_path"]))
+        if payload.get("source_preserved_path")
+        else None,
+        source_checksum=str(payload["source_checksum"])
+        if payload.get("source_checksum")
+        else None,
+        source_width=int(payload["source_width"])
+        if payload.get("source_width") is not None
+        else None,
+        source_height=int(payload["source_height"])
+        if payload.get("source_height") is not None
+        else None,
+        canonical_transform=str(payload["canonical_transform"])
+        if payload.get("canonical_transform")
         else None,
     )

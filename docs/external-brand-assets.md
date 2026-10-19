@@ -20,6 +20,27 @@ O diretório é resolvido por `brand_plan_id`, não pelo nome público. O
 ignorados; um `brand_plan_id` inexistente ou colocado sob o tema errado bloqueia
 a leitura do lote com mensagem clara.
 
+## Pacote final e preparação canônica
+
+Para pacotes externos já organizados, `BrandAssetPackageService` executa um
+dry-run antes de qualquer escrita. A pasta do canal pode usar o
+`brand_plan_id` exato (preferencial) ou um nome público com correspondência
+normalizada exata e não ambígua. Não há fuzzy matching. ZIPs passam por
+extração limitada, sem caminhos absolutos, `..`, links simbólicos ou entradas
+criptografadas.
+
+A preparação é explícita no relatório: logos quadrados podem receber resize
+Lanczos; banners já próximos de 16:9 podem receber resize proporcional e crop
+central mínimo. Logos não quadrados e banners distantes de 16:9 ficam em
+`NEEDS_ATTENTION`. Os originais são copiados como somente leitura para
+`data/branding-import-sources/`; os canônicos ficam separados em
+`data/branding-import-prepared/`. O importador estrito continua sem fazer
+transformações silenciosas.
+
+O schema v17 registra pacote, nome relativo, cópia preservada, SHA-256 e
+dimensões da fonte, além da transformação canônica. O manifest consolidado
+reúne essa provenance com versão, status e caminhos de cada logo/banner.
+
 ## Manifest JSON
 
 Caminhos relativos são resolvidos a partir do diretório do manifest. Cada item

@@ -44,7 +44,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 class VideoStatus(StrEnum):
@@ -1101,8 +1101,11 @@ class StateStore:
                 """INSERT INTO brand_asset_metadata
                 (brand_plan_id, asset_type, file_path, provider, model, prompt,
                  width, height, checksum, created_at, status, version, file_size,
-                 preview_path, delivery_path, resolved_visual_direction_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 preview_path, delivery_path, resolved_visual_direction_json,
+                 source_package, source_file, source_preserved_path,
+                 source_checksum, source_width, source_height, canonical_transform)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(brand_plan_id, asset_type, version) DO NOTHING""",
                 (
                     asset.brand_plan_id,
@@ -1123,6 +1126,15 @@ class StateStore:
                     json.dumps(asset.resolved_visual_direction.as_dict())
                     if asset.resolved_visual_direction
                     else None,
+                    asset.source_package,
+                    asset.source_file,
+                    str(asset.source_preserved_path)
+                    if asset.source_preserved_path
+                    else None,
+                    asset.source_checksum,
+                    asset.source_width,
+                    asset.source_height,
+                    asset.canonical_transform,
                 ),
             )
 
@@ -1756,6 +1768,10 @@ class StateStore:
                     status TEXT NOT NULL, version INTEGER NOT NULL,
                     file_size INTEGER NOT NULL, preview_path TEXT,
                     delivery_path TEXT, resolved_visual_direction_json TEXT,
+                    source_package TEXT, source_file TEXT,
+                    source_preserved_path TEXT, source_checksum TEXT,
+                    source_width INTEGER, source_height INTEGER,
+                    canonical_transform TEXT,
                     UNIQUE(brand_plan_id, asset_type, version),
                     FOREIGN KEY (brand_plan_id)
                         REFERENCES planned_channel_brands(brand_plan_id)
@@ -1812,6 +1828,9 @@ class StateStore:
             version = 15
         if version == 15:
             self._migrate_v15_to_v16()
+            version = 16
+        if version == 16:
+            self._migrate_v16_to_v17()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -2164,6 +2183,23 @@ class StateStore:
                 """
             )
 
+    def _migrate_v16_to_v17(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE brand_asset_metadata ADD COLUMN source_package TEXT;
+                ALTER TABLE brand_asset_metadata ADD COLUMN source_file TEXT;
+                ALTER TABLE brand_asset_metadata
+                    ADD COLUMN source_preserved_path TEXT;
+                ALTER TABLE brand_asset_metadata ADD COLUMN source_checksum TEXT;
+                ALTER TABLE brand_asset_metadata ADD COLUMN source_width INTEGER;
+                ALTER TABLE brand_asset_metadata ADD COLUMN source_height INTEGER;
+                ALTER TABLE brand_asset_metadata
+                    ADD COLUMN canonical_transform TEXT;
+                PRAGMA user_version = 17;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -2198,6 +2234,15 @@ def _brand_asset_record(row):
         )
         if row["resolved_visual_direction_json"]
         else None,
+        row["source_package"],
+        row["source_file"],
+        Path(row["source_preserved_path"])
+        if row["source_preserved_path"]
+        else None,
+        row["source_checksum"],
+        row["source_width"],
+        row["source_height"],
+        row["canonical_transform"],
     )
 
 
