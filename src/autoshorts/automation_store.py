@@ -7,19 +7,26 @@ import os
 import re
 from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
 from autoshorts.automation_config import (
     AccountProfile,
     AutomationConfig,
     Creator,
+    EditorialProfile,
+    GoogleIdentity,
+    PostingPolicy,
+    PublishingChannel,
     ThemePolicy,
     ThemeProfile,
+    VisualProfile,
     automation_config_from_dict,
     automation_config_to_dict,
     load_automation_config,
     validate_account,
     validate_creator,
     validate_output_subdirectory,
+    validate_theme_channels,
 )
 
 CONFIG_ENV = "AUTOSHORTS_AUTOMATION_CONFIG"
@@ -229,18 +236,22 @@ class AutomationStore:
         slot: int,
         enabled: bool = True,
     ) -> AutomationConfig:
-        theme = config.theme(theme_name)
-        if len(theme.accounts) >= 3:
-            raise ValueError("Um tema pode ter no máximo 3 contas.")
         clean_name, clean_email = validate_account(name, email)
-        self._ensure_unique_account(theme, clean_name)
-        accounts = (
-            *theme.accounts,
-            AccountProfile(clean_name, clean_email, slot, enabled),
+        identity_id = f"legacy-{uuid4()}"
+        config = replace(
+            config,
+            google_identities=(
+                *config.google_identities,
+                GoogleIdentity(identity_id, clean_name, clean_email),
+            ),
         )
-        self._validate_enabled_accounts(accounts)
-        return self.save(
-            self._replace_theme(config, theme_name, replace(theme, accounts=accounts))
+        return self.add_channel(
+            config,
+            theme_name,
+            name=clean_name,
+            slot=slot,
+            enabled=enabled,
+            google_identity_id=identity_id,
         )
 
     def edit_account(
@@ -255,33 +266,143 @@ class AutomationStore:
         enabled: bool,
     ) -> AutomationConfig:
         theme = config.theme(theme_name)
-        current = next(
-            (item for item in theme.accounts if item.name == original_name), None
-        )
-        if current is None:
-            raise KeyError(f"Account not found: {original_name}")
+        channel = next((x for x in theme.channels if x.name == original_name), None)
+        if channel is None:
+            raise KeyError(f"Publishing channel not found: {original_name}")
         clean_name, clean_email = validate_account(name, email)
-        self._ensure_unique_account(theme, clean_name, excluding=original_name)
-        updated = replace(
-            current, name=clean_name, email=clean_email, slot=slot, enabled=enabled
-        )
-        accounts = tuple(
-            updated if item.name == original_name else item for item in theme.accounts
-        )
-        self._validate_enabled_accounts(accounts)
-        return self.save(
-            self._replace_theme(config, theme_name, replace(theme, accounts=accounts))
+        if channel.google_identity_id:
+            config = self.edit_google_identity(
+                config,
+                channel.google_identity_id,
+                label=clean_name,
+                email=clean_email,
+                enabled=True,
+            )
+        return self.edit_channel(
+            config,
+            theme_name,
+            channel.channel_id,
+            name=clean_name,
+            slot=slot,
+            enabled=enabled,
+            google_identity_id=channel.google_identity_id,
         )
 
     def remove_account(
         self, config: AutomationConfig, theme_name: str, account_name: str
     ) -> AutomationConfig:
         theme = config.theme(theme_name)
-        if not any(item.name == account_name for item in theme.accounts):
-            raise KeyError(f"Account not found: {account_name}")
-        accounts = tuple(item for item in theme.accounts if item.name != account_name)
+        channel = next((x for x in theme.channels if x.name == account_name), None)
+        if channel is None:
+            raise KeyError(f"Publishing channel not found: {account_name}")
+        return self.remove_channel(config, theme_name, channel.channel_id)
+
+    def add_google_identity(
+        self, config: AutomationConfig, *, label: str, email: str, enabled: bool = True
+    ) -> AutomationConfig:
+        clean_label, clean_email = validate_account(label, email)
+        identity = GoogleIdentity(str(uuid4()), clean_label, clean_email, enabled)
         return self.save(
-            self._replace_theme(config, theme_name, replace(theme, accounts=accounts))
+            replace(config, google_identities=(*config.google_identities, identity))
+        )
+
+    def edit_google_identity(
+        self,
+        config: AutomationConfig,
+        identity_id: str,
+        *,
+        label: str,
+        email: str,
+        enabled: bool,
+    ) -> AutomationConfig:
+        clean_label, clean_email = validate_account(label, email)
+        if not any(x.identity_id == identity_id for x in config.google_identities):
+            raise KeyError(f"Google identity not found: {identity_id}")
+        identities = tuple(
+            replace(x, label=clean_label, email=clean_email, enabled=enabled)
+            if x.identity_id == identity_id
+            else x
+            for x in config.google_identities
+        )
+        return self.save(replace(config, google_identities=identities))
+
+    def remove_google_identity(
+        self, config: AutomationConfig, identity_id: str
+    ) -> AutomationConfig:
+        if any(
+            channel.google_identity_id == identity_id
+            for theme in config.themes
+            for channel in theme.channels
+        ):
+            raise ValueError("Google identity is still referenced by a channel.")
+        identities = tuple(
+            x for x in config.google_identities if x.identity_id != identity_id
+        )
+        if len(identities) == len(config.google_identities):
+            raise KeyError(f"Google identity not found: {identity_id}")
+        return self.save(replace(config, google_identities=identities))
+
+    def add_channel(
+        self,
+        config: AutomationConfig,
+        theme_name: str,
+        *,
+        name: str,
+        slot: int,
+        enabled: bool = True,
+        google_identity_id: str | None = None,
+        editorial_profile: EditorialProfile | None = None,
+        visual_profile: VisualProfile | None = None,
+        posting_policy: PostingPolicy | None = None,
+    ) -> AutomationConfig:
+        theme = config.theme(theme_name)
+        if len(theme.channels) >= 3:
+            raise ValueError("Um tema pode ter no máximo 3 canais.")
+        channel = PublishingChannel(
+            str(uuid4()),
+            name.strip(),
+            slot,
+            enabled,
+            google_identity_id,
+            editorial_profile=editorial_profile or EditorialProfile(),
+            visual_profile=visual_profile or VisualProfile(),
+            posting_policy=posting_policy or PostingPolicy(),
+        )
+        channels = (*theme.channels, channel)
+        validate_theme_channels(channels)
+        return self.save(
+            self._replace_theme(config, theme_name, replace(theme, channels=channels))
+        )
+
+    def edit_channel(
+        self,
+        config: AutomationConfig,
+        theme_name: str,
+        channel_id: str,
+        **changes: object,
+    ) -> AutomationConfig:
+        theme = config.theme(theme_name)
+        current = next((x for x in theme.channels if x.channel_id == channel_id), None)
+        if current is None:
+            raise KeyError(f"Publishing channel not found: {channel_id}")
+        updated = replace(current, **changes)
+        channels = tuple(
+            updated if x.channel_id == channel_id else x for x in theme.channels
+        )
+        validate_theme_channels(channels)
+        return self.save(
+            self._replace_theme(config, theme_name, replace(theme, channels=channels))
+        )
+
+    def remove_channel(
+        self, config: AutomationConfig, theme_name: str, channel_id: str
+    ) -> AutomationConfig:
+        theme = config.theme(theme_name)
+        channels = tuple(x for x in theme.channels if x.channel_id != channel_id)
+        if len(channels) == len(theme.channels):
+            raise KeyError(f"Publishing channel not found: {channel_id}")
+        return self.save(
+            self._replace_theme(config, theme_name, replace(theme, channels=channels))
         )
 
     @staticmethod

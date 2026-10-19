@@ -180,6 +180,7 @@ def test_queue_three_shorts_and_video_atomically(tmp_path):
         assert [item.rank for item in metadata] == [1, 2, 3]
         assert [item.account_slot for item in metadata] == [1, 2, 3]
         assert metadata[0].headline == "Headline 1"
+        assert metadata[0].publishing_channel_id == "a1@example.test"
         assert metadata[0].candidate_id == "candidate-3"
         assert metadata[0].youtube_id == "video-1"
         assert metadata[0].creator_name == "Arthur"
@@ -314,3 +315,43 @@ def test_migrates_v2_to_v3_without_losing_video_or_shorts(tmp_path):
         assert store.schema_version == SCHEMA_VERSION
         assert store.get_video("old").status == VideoStatus.DOWNLOADED
         assert store.get_transcript("old") is None
+
+
+def test_migrates_v6_channel_reference_without_losing_legacy_identifier(tmp_path):
+    path = tmp_path / "v6.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE videos (
+            youtube_id TEXT PRIMARY KEY, source_url TEXT NOT NULL,
+            creator_name TEXT NOT NULL, theme_name TEXT NOT NULL, title TEXT NOT NULL,
+            status TEXT NOT NULL, discovered_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            processed_at TEXT, error TEXT
+        );
+        CREATE TABLE shorts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, youtube_id TEXT NOT NULL,
+            clip_index INTEGER NOT NULL, account_slot INTEGER,
+            account_identifier TEXT, status TEXT NOT NULL, file_path TEXT NOT NULL,
+            queue_path TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            posted_at TEXT, error TEXT, title TEXT NOT NULL DEFAULT '',
+            headline TEXT NOT NULL DEFAULT '', generator_score REAL,
+            editorial_score REAL, candidate_id TEXT, duration_seconds REAL
+        );
+        INSERT INTO videos VALUES (
+            'old', 'url', 'creator', 'theme', 'title', 'QUEUED',
+            'created', 'updated', NULL, NULL
+        );
+        INSERT INTO shorts VALUES (
+            1, 'old', 1, 1, 'legacy@example.test', 'QUEUED', '/tmp/01.mp4',
+            '/tmp/q01.mp4', 'created', 'updated', NULL, NULL, '', '', NULL,
+            NULL, NULL, NULL
+        );
+        PRAGMA user_version = 6;
+        """
+    )
+    connection.close()
+    with StateStore(path) as store:
+        row = store.shorts_for_video("old")[0]
+        assert store.schema_version == 7
+        assert row.account_identifier == "legacy@example.test"
+        assert row.publishing_channel_id == "legacy@example.test"

@@ -6,6 +6,8 @@ from autoshorts.automation_config import (
     AccountProfile,
     AutomationConfig,
     Creator,
+    EditorialProfile,
+    GoogleIdentity,
     ThemePolicy,
     ThemeProfile,
 )
@@ -143,7 +145,7 @@ def test_environment_overrides_default_config_path(tmp_path, monkeypatch):
     assert default_automation_config_path(tmp_path / "project") == selected
 
 
-def test_accounts_and_policy_persist_and_reload(tmp_path):
+def test_legacy_accounts_migrate_to_channels_and_policy_persists(tmp_path):
     store = AutomationStore(tmp_path / "automation.json")
     config = AutomationConfig(
         (
@@ -161,49 +163,47 @@ def test_accounts_and_policy_persist_and_reload(tmp_path):
         )
     )
     store.save(config)
-    loaded = store.load().theme("LoL")
-    assert loaded.accounts == config.theme("LoL").accounts
+    loaded_config = store.load()
+    loaded = loaded_config.theme("LoL")
+    assert [(item.name, item.slot) for item in loaded.channels] == [("A", 1), ("B", 2)]
+    assert loaded.accounts == ()
     assert loaded.policy == ThemePolicy(3, 30, 3)
 
 
-def test_account_crud_preserves_slot_order_and_limit(tmp_path):
+def test_channel_crud_preserves_slot_order_and_limit(tmp_path):
     store = AutomationStore(tmp_path / "automation.json")
     config = store.add_theme(
         AutomationConfig(()), name="LoL", output_subdirectory="lol"
     )
     for index in range(1, 4):
-        config = store.add_account(
+        config = store.add_channel(
             config,
             "LoL",
-            name=f"Account {index}",
-            email=f"a{index}@example.test",
+            name=f"Channel {index}",
             slot=index,
         )
-    assert [item.name for item in config.theme("LoL").accounts] == [
-        "Account 1",
-        "Account 2",
-        "Account 3",
+    assert [item.name for item in config.theme("LoL").channels] == [
+        "Channel 1",
+        "Channel 2",
+        "Channel 3",
     ]
     with pytest.raises(ValueError, match="máximo 3"):
-        store.add_account(
-            config, "LoL", name="Account 4", email="a4@example.test", slot=1
-        )
-    config = store.edit_account(
+        store.add_channel(config, "LoL", name="Channel 4", slot=1)
+    channel_id = config.theme("LoL").channels[1].channel_id
+    config = store.edit_channel(
         config,
         "LoL",
-        "Account 2",
+        channel_id,
         name="Middle",
-        email="middle@example.test",
         slot=2,
         enabled=False,
+        editorial_profile=EditorialProfile(tone="calmo"),
     )
-    assert config.theme("LoL").accounts[1] == AccountProfile(
-        "Middle", "middle@example.test", 2, False
-    )
-    config = store.remove_account(config, "LoL", "Middle")
-    assert [item.name for item in config.theme("LoL").accounts] == [
-        "Account 1",
-        "Account 3",
+    assert config.theme("LoL").channels[1].editorial_profile.tone == "calmo"
+    config = store.remove_channel(config, "LoL", channel_id)
+    assert [item.name for item in config.theme("LoL").channels] == [
+        "Channel 1",
+        "Channel 3",
     ]
 
 
@@ -231,35 +231,57 @@ def test_legacy_accounts_gain_slots_and_save_them(tmp_path):
     config = store.load()
     assert [item.slot for item in config.theme("LoL").accounts] == [1, 2, 3]
     store.save(config)
-    assert [
-        item["slot"] for item in json.loads(path.read_text())["themes"][0]["accounts"]
-    ] == [1, 2, 3]
+    persisted = json.loads(path.read_text())
+    assert "accounts" not in persisted["themes"][0]
+    assert [item["slot"] for item in persisted["themes"][0]["channels"]] == [1, 2, 3]
+    assert len(persisted["google_identities"]) == 3
 
 
-def test_removing_slot_two_does_not_renumber_slot_three(tmp_path):
+def test_removing_channel_slot_two_does_not_renumber_slot_three(tmp_path):
     store = AutomationStore(tmp_path / "automation.json")
     config = store.add_theme(
         AutomationConfig(()), name="LoL", output_subdirectory="lol"
     )
     for slot in (1, 2, 3):
-        config = store.add_account(
-            config, "LoL", name=f"A{slot}", email=f"a{slot}@example.test", slot=slot
-        )
-    config = store.remove_account(config, "LoL", "A2")
-    assert [(item.name, item.slot) for item in config.theme("LoL").accounts] == [
+        config = store.add_channel(config, "LoL", name=f"A{slot}", slot=slot)
+    middle_id = config.theme("LoL").channels[1].channel_id
+    config = store.remove_channel(config, "LoL", middle_id)
+    assert [(item.name, item.slot) for item in config.theme("LoL").channels] == [
         ("A1", 1),
         ("A3", 3),
     ]
 
 
-def test_enabled_account_slots_must_be_unique(tmp_path):
+def test_enabled_channel_slots_must_be_unique(tmp_path):
     store = AutomationStore(tmp_path / "automation.json")
     config = store.add_theme(
         AutomationConfig(()), name="LoL", output_subdirectory="lol"
     )
-    config = store.add_account(config, "LoL", name="A", email="a@example.test", slot=1)
-    with pytest.raises(ValueError, match="mesmo slot"):
-        store.add_account(config, "LoL", name="B", email="b@example.test", slot=1)
+    config = store.add_channel(config, "LoL", name="A", slot=1)
+    with pytest.raises(ValueError, match="slots must be unique"):
+        store.add_channel(config, "LoL", name="B", slot=1)
+
+
+def test_google_identity_can_serve_multiple_channels_and_cannot_be_removed(tmp_path):
+    store = AutomationStore(tmp_path / "automation.json")
+    config = AutomationConfig(
+        (), (GoogleIdentity("google-a", "Google A", "a@example.test"),)
+    )
+    config = store.add_theme(config, name="LoL", output_subdirectory="lol")
+    for slot in (1, 2):
+        config = store.add_channel(
+            config,
+            "LoL",
+            name=f"LoL {slot}",
+            slot=slot,
+            google_identity_id="google-a",
+        )
+    assert all(
+        item.google_identity_id == "google-a"
+        for item in config.theme("LoL").channels
+    )
+    with pytest.raises(ValueError, match="referenced"):
+        store.remove_google_identity(config, "google-a")
 
 
 @pytest.mark.parametrize("slot", [0, 4, -1])

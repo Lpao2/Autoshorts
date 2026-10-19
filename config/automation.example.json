@@ -1,6 +1,15 @@
 {
+  "google_identities": [
+    {
+      "identity_id": "google-a",
+      "label": "Google A",
+      "email": "a@example.test",
+      "enabled": true
+    }
+  ],
   "themes": [
     {
+      "theme_id": "theme-tecnologia",
       "name": "tecnologia",
       "enabled": true,
       "prompt": "",
@@ -17,24 +26,37 @@
           "enabled": true
         }
       ],
-      "accounts": [
+      "channels": [
         {
-          "name": "Conta A",
-          "email": "a@example.test",
+          "channel_id": "channel-tecnologia-a",
+          "name": "Tecnologia A",
           "slot": 1,
-          "enabled": true
-        },
-        {
-          "name": "Conta B",
-          "email": "b@example.test",
-          "slot": 2,
-          "enabled": true
-        },
-        {
-          "name": "Conta C",
-          "email": "c@example.test",
-          "slot": 3,
-          "enabled": true
+          "enabled": true,
+          "google_identity_id": "google-a",
+          "youtube_channel_id": null,
+          "youtube_channel_title": null,
+          "editorial_profile": {
+            "prompt_append": "Priorize explicações claras.",
+            "headline_style": "direta",
+            "tone": "didático"
+          },
+          "visual_profile": {
+            "palette": {
+              "primary": "#ffffff",
+              "secondary": "#000000",
+              "accent": "#3b82f6",
+              "background": "#0f172a"
+            },
+            "crop_preset": "default",
+            "caption_preset": "default",
+            "branding_preset": "none"
+          },
+          "posting_policy": {
+            "enabled": false,
+            "daily_limit": null,
+            "timezone": "America/Sao_Paulo",
+            "posting_windows": []
+          }
         }
       ]
     }

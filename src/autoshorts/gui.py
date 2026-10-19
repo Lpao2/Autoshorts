@@ -13,7 +13,14 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import cast
 
-from autoshorts.automation_config import AutomationConfig, ThemePolicy
+from autoshorts.automation_config import (
+    AutomationConfig,
+    ColorPalette,
+    EditorialProfile,
+    PostingPolicy,
+    ThemePolicy,
+    VisualProfile,
+)
 from autoshorts.automation_events import AutomationEvent
 from autoshorts.automation_jobs import AutomationController
 from autoshorts.automation_pipeline import AutomationRequest
@@ -228,13 +235,48 @@ class _CreatorDialog(_EntityDialog):
         self.window.destroy()
 
 
-class _AccountDialog(_EntityDialog):
-    def __init__(self, parent, *, name="", email="", slot=1, enabled=True):
-        super().__init__(parent, "Conta de destino")
+class _ChannelDialog(_EntityDialog):
+    def __init__(
+        self,
+        parent,
+        *,
+        identities=(),
+        name="",
+        slot=1,
+        enabled=True,
+        identity_id="",
+        prompt_append="",
+        headline_style="",
+        tone="",
+        primary="#ffffff",
+        secondary="#000000",
+        accent="#3b82f6",
+        crop_preset="default",
+        caption_preset="default",
+        branding_preset="none",
+        posting_enabled=False,
+        daily_limit="",
+        timezone="America/Sao_Paulo",
+    ):
+        super().__init__(parent, "Canal de publicação")
         self.name = tk.StringVar(master=self.window, value=name)
-        self.email = tk.StringVar(master=self.window, value=email)
         self.slot = tk.IntVar(master=self.window, value=slot)
         self.enabled = tk.BooleanVar(master=self.window, value=enabled)
+        self.identity_id = tk.StringVar(master=self.window, value=identity_id)
+        self.prompt_append = tk.StringVar(master=self.window, value=prompt_append)
+        self.headline_style = tk.StringVar(master=self.window, value=headline_style)
+        self.tone = tk.StringVar(master=self.window, value=tone)
+        self.primary = tk.StringVar(master=self.window, value=primary)
+        self.secondary = tk.StringVar(master=self.window, value=secondary)
+        self.accent = tk.StringVar(master=self.window, value=accent)
+        self.crop_preset = tk.StringVar(master=self.window, value=crop_preset)
+        self.caption_preset = tk.StringVar(master=self.window, value=caption_preset)
+        self.branding_preset = tk.StringVar(master=self.window, value=branding_preset)
+        self.posting_enabled = tk.BooleanVar(
+            master=self.window, value=posting_enabled
+        )
+        self.daily_limit = tk.StringVar(master=self.window, value=daily_limit)
+        self.timezone = tk.StringVar(master=self.window, value=timezone)
         ttk.Label(self.body, text="Slot").grid(row=0, column=0, sticky="w", pady=4)
         ttk.Combobox(
             self.body,
@@ -243,27 +285,92 @@ class _AccountDialog(_EntityDialog):
             state="readonly",
             width=6,
         ).grid(row=0, column=1, sticky="w", pady=4)
-        for row, (label, variable) in enumerate(
-            (("Nome", self.name), ("Email identificador", self.email)), start=1
-        ):
-            ttk.Label(self.body, text=label).grid(row=row, column=0, sticky="w", pady=4)
-            ttk.Entry(self.body, textvariable=variable, width=52).grid(
-                row=row, column=1, sticky="ew", pady=4
-            )
-        ttk.Checkbutton(self.body, text="Ativa", variable=self.enabled).grid(
-            row=3, column=1, sticky="w", pady=4
+        fields = (
+            ("Nome", self.name),
+            ("Google Identity", self.identity_id),
+            ("Prompt adicional", self.prompt_append),
+            ("Estilo da headline", self.headline_style),
+            ("Tom", self.tone),
+            ("Cor primária", self.primary),
+            ("Cor secundária", self.secondary),
+            ("Cor de destaque", self.accent),
+            ("Crop preset", self.crop_preset),
+            ("Caption preset", self.caption_preset),
+            ("Branding preset", self.branding_preset),
+            ("Limite diário (vazio = nenhum)", self.daily_limit),
+            ("Timezone", self.timezone),
         )
-        ttk.Label(
+        for row, (label, variable) in enumerate(fields, start=1):
+            ttk.Label(self.body, text=label).grid(row=row, column=0, sticky="w", pady=4)
+            if variable is self.identity_id:
+                ttk.Combobox(
+                    self.body,
+                    textvariable=variable,
+                    values=("", *identities),
+                    state="readonly",
+                    width=49,
+                ).grid(row=row, column=1, sticky="ew", pady=4)
+            else:
+                ttk.Entry(self.body, textvariable=variable, width=52).grid(
+                    row=row, column=1, sticky="ew", pady=4
+                )
+        ttk.Checkbutton(self.body, text="Ativa", variable=self.enabled).grid(
+            row=14, column=1, sticky="w", pady=4
+        )
+        ttk.Checkbutton(
             self.body,
-            text="O slot define a associação: Short 1→Conta 1, 2→2, 3→3.",
-        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            text="Posting habilitado (scheduler ainda não implementado)",
+            variable=self.posting_enabled,
+        ).grid(row=15, column=1, sticky="w", pady=4)
         self.actions(self._save)
 
     def _save(self) -> None:
         self.result = (
             self.name.get(),
-            self.email.get(),
             str(self.slot.get()),
+            "1" if self.enabled.get() else "0",
+            self.identity_id.get(),
+            self.prompt_append.get(),
+            self.headline_style.get(),
+            self.tone.get(),
+            self.primary.get(),
+            self.secondary.get(),
+            self.accent.get(),
+            self.crop_preset.get(),
+            self.caption_preset.get(),
+            self.branding_preset.get(),
+            "1" if self.posting_enabled.get() else "0",
+            self.daily_limit.get(),
+            self.timezone.get(),
+        )
+        self.window.destroy()
+
+
+class _IdentityDialog(_EntityDialog):
+    def __init__(self, parent, *, label="", email="", enabled=True):
+        super().__init__(parent, "Google Identity")
+        self.label = tk.StringVar(master=self.window, value=label)
+        self.email = tk.StringVar(master=self.window, value=email)
+        self.enabled = tk.BooleanVar(master=self.window, value=enabled)
+        for row, (text, variable) in enumerate(
+            (("Nome", self.label), ("Email administrativo", self.email))
+        ):
+            ttk.Label(self.body, text=text).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Entry(self.body, textvariable=variable, width=52).grid(
+                row=row, column=1, sticky="ew", pady=4
+            )
+        ttk.Checkbutton(self.body, text="Ativa", variable=self.enabled).grid(
+            row=2, column=1, sticky="w", pady=4
+        )
+        ttk.Label(self.body, text="Sem senha, token ou OAuth.").grid(
+            row=3, column=0, columnspan=2, sticky="w"
+        )
+        self.actions(self._save)
+
+    def _save(self) -> None:
+        self.result = (
+            self.label.get(),
+            self.email.get(),
             "1" if self.enabled.get() else "0",
         )
         self.window.destroy()
@@ -538,13 +645,15 @@ class AutoShortsWindow:
         ttk.Button(
             creator_actions, text="Remover", command=self.remove_creator_ui
         ).pack(side="left")
-        ttk.Label(frame, text="Contas").grid(row=4, column=0, sticky="nw", pady=4)
+        ttk.Label(frame, text="Canais deste tema").grid(
+            row=4, column=0, sticky="nw", pady=4
+        )
         accounts_panel = ttk.Frame(frame)
         accounts_panel.grid(row=4, column=1, columnspan=2, sticky="nsew", pady=4)
         accounts_panel.columnconfigure(0, weight=1)
         self.auto_accounts = ttk.Treeview(
             accounts_panel,
-            columns=("slot", "enabled", "name", "email"),
+            columns=("slot", "enabled", "name", "identity", "youtube", "style"),
             show="headings",
             height=3,
             selectmode="browse",
@@ -552,26 +661,58 @@ class AutoShortsWindow:
         for column, label, width in (
             ("slot", "Slot", 48),
             ("enabled", "Ativo", 55),
-            ("name", "Conta", 180),
-            ("email", "Email", 360),
+            ("name", "Canal", 150),
+            ("identity", "Google Identity", 150),
+            ("youtube", "YouTube Channel", 130),
+            ("style", "Estilo", 130),
         ):
             self.auto_accounts.heading(column, text=label)
-            self.auto_accounts.column(column, width=width, stretch=column == "email")
+            self.auto_accounts.column(column, width=width, stretch=column == "style")
         self.auto_accounts.grid(row=0, column=0, sticky="nsew")
         account_actions = ttk.Frame(accounts_panel)
         account_actions.grid(row=1, column=0, sticky="ew", pady=(5, 0))
-        ttk.Button(account_actions, text="Adicionar", command=self.add_account_ui).pack(
+        ttk.Button(account_actions, text="Adicionar", command=self.add_channel_ui).pack(
             side="left"
         )
-        ttk.Button(account_actions, text="Editar", command=self.edit_account_ui).pack(
+        ttk.Button(account_actions, text="Editar", command=self.edit_channel_ui).pack(
             side="left", padx=6
         )
         ttk.Button(
-            account_actions, text="Remover", command=self.remove_account_ui
+            account_actions, text="Remover", command=self.remove_channel_ui
         ).pack(side="left")
         ttk.Label(
             account_actions, text="Short 1→Slot 1  •  Short 2→Slot 2  •  Short 3→Slot 3"
         ).pack(side="right")
+        ttk.Label(
+            accounts_panel, text="Google Identities", style="Section.TLabel"
+        ).grid(row=2, column=0, sticky="w", pady=(10, 4))
+        self.auto_identities = ttk.Treeview(
+            accounts_panel,
+            columns=("enabled", "label", "email", "channels"),
+            show="headings",
+            height=3,
+            selectmode="browse",
+        )
+        for column, label, width in (
+            ("enabled", "Ativa", 55),
+            ("label", "Nome", 150),
+            ("email", "Email", 280),
+            ("channels", "Canais", 65),
+        ):
+            self.auto_identities.heading(column, text=label)
+            self.auto_identities.column(column, width=width, stretch=column == "email")
+        self.auto_identities.grid(row=3, column=0, sticky="nsew")
+        identity_actions = ttk.Frame(accounts_panel)
+        identity_actions.grid(row=4, column=0, sticky="w", pady=(5, 0))
+        ttk.Button(
+            identity_actions, text="Adicionar identity", command=self.add_identity_ui
+        ).pack(side="left")
+        ttk.Button(
+            identity_actions, text="Editar identity", command=self.edit_identity_ui
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            identity_actions, text="Remover identity", command=self.remove_identity_ui
+        ).pack(side="left")
         limits = ttk.Frame(frame)
         limits.grid(row=5, column=0, columnspan=3, sticky="ew", pady=5)
         ttk.Label(limits, text="Vídeos por criador:").pack(side="left")
@@ -844,7 +985,7 @@ class AutoShortsWindow:
             self.automation_config = None
             self.auto_theme_combo.configure(values=[])
             self.auto_theme.set("")
-            for tree in (self.auto_creators, self.auto_accounts):
+            for tree in (self.auto_creators, self.auto_accounts, self.auto_identities):
                 for row in tree.get_children():
                     tree.delete(row)
             self.auto_status.set(f"Configuração inválida: {exc}")
@@ -880,24 +1021,56 @@ class AutoShortsWindow:
         if self.automation_config is None or not self.auto_theme.get():
             return
         theme = self.automation_config.theme(self._current_theme_name())
-        for account in sorted(theme.accounts, key=lambda item: item.slot):
+        identities = {
+            item.identity_id: item for item in self.automation_config.google_identities
+        }
+        for channel in sorted(theme.channels, key=lambda item: item.slot):
+            identity = identities.get(channel.google_identity_id)
             self.auto_accounts.insert(
                 "",
                 "end",
-                iid=f"account-{account.slot}-{account.name}",
+                iid=channel.channel_id,
                 values=(
-                    account.slot,
-                    "✓" if account.enabled else "—",
-                    account.name,
-                    account.email,
+                    channel.slot,
+                    "✓" if channel.enabled else "—",
+                    channel.name,
+                    identity.label if identity else "não vinculada",
+                    channel.youtube_channel_title or "não conectado",
+                    channel.editorial_profile.tone or "padrão",
                 ),
-                tags=("enabled" if account.enabled else "disabled",),
+                tags=("enabled" if channel.enabled else "disabled",),
             )
         self.auto_accounts.tag_configure("disabled", foreground=MUTED)
+
+    def refresh_identities(self) -> None:
+        for row in self.auto_identities.get_children():
+            self.auto_identities.delete(row)
+        if self.automation_config is None:
+            return
+        for identity in self.automation_config.google_identities:
+            count = sum(
+                channel.google_identity_id == identity.identity_id
+                for theme in self.automation_config.themes
+                for channel in theme.channels
+            )
+            self.auto_identities.insert(
+                "",
+                "end",
+                iid=identity.identity_id,
+                values=(
+                    "✓" if identity.enabled else "—",
+                    identity.label,
+                    identity.email,
+                    count,
+                ),
+                tags=("enabled" if identity.enabled else "disabled",),
+            )
+        self.auto_identities.tag_configure("disabled", foreground=MUTED)
 
     def refresh_theme_details(self) -> None:
         self.refresh_creators()
         self.refresh_accounts()
+        self.refresh_identities()
         if self.automation_config is None or not self._current_theme_name():
             return
         policy = self.automation_config.theme(self._current_theme_name()).policy
@@ -1062,88 +1235,182 @@ class AutoShortsWindow:
         self._set_theme(theme_name)
         self.refresh_theme_details()
 
-    def _selected_account_name(self) -> str | None:
+    def _selected_channel_id(self) -> str | None:
         selected = self.auto_accounts.selection()
-        if not selected:
-            return None
-        values = self.auto_accounts.item(selected[0], "values")
-        return str(values[2]) if values else None
+        return selected[0] if selected else None
 
-    def add_account_ui(self) -> None:
+    def add_channel_ui(self) -> None:
         theme_name = self._current_theme_name()
         if self.automation_config is None or not theme_name:
-            messagebox.showinfo("Conta", "Crie ou selecione um tema primeiro.")
+            messagebox.showinfo("Canal", "Crie ou selecione um tema primeiro.")
             return
-        result = _AccountDialog(self.root).show()
+        identity_ids = tuple(
+            x.identity_id for x in self.automation_config.google_identities
+        )
+        result = _ChannelDialog(self.root, identities=identity_ids).show()
         if not result:
             return
-        name, email, slot, enabled = result
         try:
-            self.automation_config = self.automation_store.add_account(
+            profiles = self._channel_profiles(result)
+            self.automation_config = self.automation_store.add_channel(
                 self.automation_config,
                 theme_name,
-                name=name,
-                email=email,
-                slot=int(slot),
-                enabled=enabled == "1",
+                name=result[0],
+                slot=int(result[1]),
+                enabled=result[2] == "1",
+                google_identity_id=result[3] or None,
+                **profiles,
             )
         except (OSError, ValueError) as exc:
-            messagebox.showerror("Conta inválida", str(exc))
+            messagebox.showerror("Canal inválido", str(exc))
             return
         self.load_automation_config_ui(silent=True)
         self._set_theme(theme_name)
         self.refresh_theme_details()
 
-    def edit_account_ui(self) -> None:
+    def edit_channel_ui(self) -> None:
         theme_name = self._current_theme_name()
-        account_name = self._selected_account_name()
-        if self.automation_config is None or not theme_name or not account_name:
-            messagebox.showinfo("Conta", "Selecione uma conta para editar.")
+        channel_id = self._selected_channel_id()
+        if self.automation_config is None or not theme_name or not channel_id:
+            messagebox.showinfo("Canal", "Selecione um canal para editar.")
             return
         theme = self.automation_config.theme(theme_name)
-        account = next(item for item in theme.accounts if item.name == account_name)
-        result = _AccountDialog(
+        channel = next(item for item in theme.channels if item.channel_id == channel_id)
+        result = _ChannelDialog(
             self.root,
-            name=account.name,
-            email=account.email,
-            slot=account.slot,
-            enabled=account.enabled,
+            identities=tuple(
+                x.identity_id for x in self.automation_config.google_identities
+            ),
+            name=channel.name,
+            slot=channel.slot,
+            enabled=channel.enabled,
+            identity_id=channel.google_identity_id or "",
+            prompt_append=channel.editorial_profile.prompt_append,
+            headline_style=channel.editorial_profile.headline_style,
+            tone=channel.editorial_profile.tone,
+            primary=channel.visual_profile.palette.primary,
+            secondary=channel.visual_profile.palette.secondary,
+            accent=channel.visual_profile.palette.accent,
+            crop_preset=channel.visual_profile.crop_preset,
+            caption_preset=channel.visual_profile.caption_preset,
+            branding_preset=channel.visual_profile.branding_preset,
+            posting_enabled=channel.posting_policy.enabled,
+            daily_limit=channel.posting_policy.daily_limit or "",
+            timezone=channel.posting_policy.timezone,
         ).show()
         if not result:
             return
-        name, email, slot, enabled = result
         try:
-            self.automation_config = self.automation_store.edit_account(
+            self.automation_config = self.automation_store.edit_channel(
                 self.automation_config,
                 theme_name,
-                account_name,
-                name=name,
-                email=email,
-                slot=int(slot),
-                enabled=enabled == "1",
+                channel_id,
+                name=result[0].strip(),
+                slot=int(result[1]),
+                enabled=result[2] == "1",
+                google_identity_id=result[3] or None,
+                **self._channel_profiles(result),
             )
         except (OSError, ValueError) as exc:
-            messagebox.showerror("Conta inválida", str(exc))
+            messagebox.showerror("Canal inválido", str(exc))
             return
         self.load_automation_config_ui(silent=True)
         self._set_theme(theme_name)
         self.refresh_theme_details()
 
-    def remove_account_ui(self) -> None:
+    def remove_channel_ui(self) -> None:
         theme_name = self._current_theme_name()
-        account_name = self._selected_account_name()
-        if self.automation_config is None or not theme_name or not account_name:
+        channel_id = self._selected_channel_id()
+        if self.automation_config is None or not theme_name or not channel_id:
             return
         if not messagebox.askyesno(
-            "Remover conta", f"Remover '{account_name}' do tema '{theme_name}'?"
+            "Remover canal", "Remover o canal selecionado deste tema?"
         ):
             return
-        self.automation_config = self.automation_store.remove_account(
-            self.automation_config, theme_name, account_name
+        self.automation_config = self.automation_store.remove_channel(
+            self.automation_config, theme_name, channel_id
         )
         self.load_automation_config_ui(silent=True)
         self._set_theme(theme_name)
         self.refresh_theme_details()
+
+    @staticmethod
+    def _channel_profiles(result: tuple[str, ...]) -> dict[str, object]:
+        daily_limit = int(result[14]) if result[14].strip() else None
+        return {
+            "editorial_profile": EditorialProfile(result[4], result[5], result[6]),
+            "visual_profile": VisualProfile(
+                ColorPalette(result[7], result[8], result[9]),
+                result[10],
+                result[11],
+                result[12],
+            ),
+            "posting_policy": PostingPolicy(
+                result[13] == "1", daily_limit, result[15]
+            ),
+        }
+
+    def _selected_identity_id(self) -> str | None:
+        selected = self.auto_identities.selection()
+        return selected[0] if selected else None
+
+    def add_identity_ui(self) -> None:
+        result = _IdentityDialog(self.root).show()
+        if not result or self.automation_config is None:
+            return
+        try:
+            self.automation_config = self.automation_store.add_google_identity(
+                self.automation_config,
+                label=result[0],
+                email=result[1],
+                enabled=result[2] == "1",
+            )
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Google Identity inválida", str(exc))
+            return
+        self.load_automation_config_ui(silent=True)
+
+    def edit_identity_ui(self) -> None:
+        identity_id = self._selected_identity_id()
+        if self.automation_config is None or not identity_id:
+            return
+        identity = next(
+            x for x in self.automation_config.google_identities
+            if x.identity_id == identity_id
+        )
+        result = _IdentityDialog(
+            self.root,
+            label=identity.label,
+            email=identity.email,
+            enabled=identity.enabled,
+        ).show()
+        if not result:
+            return
+        try:
+            self.automation_config = self.automation_store.edit_google_identity(
+                self.automation_config,
+                identity_id,
+                label=result[0],
+                email=result[1],
+                enabled=result[2] == "1",
+            )
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Google Identity inválida", str(exc))
+            return
+        self.load_automation_config_ui(silent=True)
+
+    def remove_identity_ui(self) -> None:
+        identity_id = self._selected_identity_id()
+        if self.automation_config is None or not identity_id:
+            return
+        try:
+            self.automation_config = self.automation_store.remove_google_identity(
+                self.automation_config, identity_id
+            )
+        except (KeyError, ValueError) as exc:
+            messagebox.showerror("Google Identity em uso", str(exc))
+            return
+        self.load_automation_config_ui(silent=True)
 
     def validate_automation(self) -> None:
         quantity = self.auto_quantity.get()

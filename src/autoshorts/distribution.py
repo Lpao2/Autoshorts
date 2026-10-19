@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Generic, TypeVar
 from uuid import uuid4
 
-from autoshorts.automation_config import AccountProfile
+from autoshorts.automation_config import PublishingChannel
 
 ClipT = TypeVar("ClipT")
 
@@ -27,7 +27,12 @@ class ShortAssignment(Generic[ClipT]):
     clip_index: int
     account_slot: int
     clip: ClipT
-    account: AccountProfile
+    channel: PublishingChannel
+
+    @property
+    def account(self) -> PublishingChannel:
+        """Deprecated alias retained for callers migrating from AccountProfile."""
+        return self.channel
 
 
 class LinkMethod(StrEnum):
@@ -42,13 +47,13 @@ class DistributedShort:
     method: LinkMethod
 
 
-def assign_shorts_to_accounts(
-    clips: Sequence[ClipT], accounts: Sequence[AccountProfile]
+def assign_shorts_to_channels(
+    clips: Sequence[ClipT], channels: Sequence[PublishingChannel]
 ) -> tuple[ShortAssignment[ClipT], ...]:
-    """Map each clip index to the enabled account with the same persistent slot."""
+    """Map each clip rank to the enabled publishing channel with the same slot."""
     if len(clips) != 3:
         raise ValueError("Exactly 3 shorts are required for distribution.")
-    enabled_by_slot = {account.slot: account for account in accounts if account.enabled}
+    enabled_by_slot = {channel.slot: channel for channel in channels if channel.enabled}
     if set(enabled_by_slot) != {1, 2, 3}:
         missing = sorted({1, 2, 3} - set(enabled_by_slot))
         detail = (
@@ -57,12 +62,19 @@ def assign_shorts_to_accounts(
             else ""
         )
         raise ValueError(f"Enabled account slots 1, 2 and 3 are required.{detail}")
-    if sum(account.enabled for account in accounts) != 3:
-        raise ValueError("Enabled account slots must be unique.")
+    if sum(channel.enabled for channel in channels) != 3:
+        raise ValueError("Enabled publishing channel slots must be unique.")
     return tuple(
         ShortAssignment(index, index, clip, enabled_by_slot[index])
         for index, clip in enumerate(clips, start=1)
     )
+
+
+def assign_shorts_to_accounts(
+    clips: Sequence[ClipT], channels: Sequence[PublishingChannel]
+) -> tuple[ShortAssignment[ClipT], ...]:
+    """Deprecated alias for assign_shorts_to_channels."""
+    return assign_shorts_to_channels(clips, channels)
 
 
 def link_or_copy(source: str | Path, destination: str | Path) -> LinkMethod:
@@ -101,7 +113,7 @@ def distribute_short_files(
         for assignment in assignments:
             account_directory = (
                 f"slot-{assignment.account_slot}-"
-                f"{_safe_component(assignment.account.name)}"
+                f"{_safe_component(assignment.channel.name)}"
             )
             destination = (
                 root

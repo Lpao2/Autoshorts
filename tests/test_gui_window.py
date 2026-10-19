@@ -7,9 +7,11 @@ from test_render_integration import make_settings, synthetic_video  # noqa: F401
 
 pytest.importorskip("tkinter")
 from autoshorts.automation_config import (  # noqa: E402
-    AccountProfile,
     AutomationConfig,
     Creator,
+    EditorialProfile,
+    GoogleIdentity,
+    PublishingChannel,
     ThemeProfile,
 )
 from autoshorts.automation_store import AutomationStore  # noqa: E402
@@ -146,12 +148,19 @@ def test_automatic_tab_reflects_saved_creators_and_disabled_state(window, tmp_pa
                         Creator("Inactive", "https://example.com/inactive", False),
                     ),
                     "lol",
-                    accounts=(
-                        AccountProfile("Account A", "a@example.test", 1),
-                        AccountProfile("Account B", "b@example.test", 2, False),
+                    channels=(
+                        PublishingChannel(
+                            "lol-a",
+                            "LoL A",
+                            1,
+                            google_identity_id="google-a",
+                            editorial_profile=EditorialProfile(tone="Humor"),
+                        ),
+                        PublishingChannel("lol-b", "LoL B", 2, False),
                     ),
                 ),
-            )
+            ),
+            (GoogleIdentity("google-a", "Google A", "a@example.test"),),
         )
     )
     app.auto_config_path.set(str(path))
@@ -165,6 +174,10 @@ def test_automatic_tab_reflects_saved_creators_and_disabled_state(window, tmp_pa
     assert app.auto_creators.selection() == (rows[0],)
     account_rows = app.auto_accounts.get_children()
     assert [app.auto_accounts.item(row, "values") for row in account_rows] == [
-        ("1", "✓", "Account A", "a@example.test"),
-        ("2", "—", "Account B", "b@example.test"),
+        ("1", "✓", "LoL A", "Google A", "não conectado", "Humor"),
+        ("2", "—", "LoL B", "não vinculada", "não conectado", "padrão"),
+    ]
+    identity_rows = app.auto_identities.get_children()
+    assert [app.auto_identities.item(row, "values") for row in identity_rows] == [
+        ("✓", "Google A", "a@example.test", "1")
     ]

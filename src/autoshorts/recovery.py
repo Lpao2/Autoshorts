@@ -10,7 +10,7 @@ from autoshorts.automation_config import ThemeProfile
 from autoshorts.config import Settings
 from autoshorts.distribution import (
     ShortArtifact,
-    assign_shorts_to_accounts,
+    assign_shorts_to_channels,
     distribute_short_files,
 )
 from autoshorts.media_probe import MediaProbeError, probe_media
@@ -365,7 +365,7 @@ def resume_rendered_distribution(
         ShortArtifact(index, path)
         for index, path in enumerate(plan.reusable_artifacts, start=1)
     )
-    assignments = assign_shorts_to_accounts(artifacts, theme.accounts)
+    assignments = assign_shorts_to_channels(artifacts, theme.channels)
     distributed = distribute_short_files(assignments, accounts_root, plan.youtube_id)
     try:
         store.record_queued_shorts(
@@ -374,7 +374,7 @@ def resume_rendered_distribution(
                 QueuedShort(
                     item.assignment.clip_index,
                     item.assignment.account_slot,
-                    item.assignment.account.email,
+                    item.assignment.channel.channel_id,
                     item.queue_path,
                 )
                 for item in distributed
@@ -435,7 +435,7 @@ def resume_analyzed_production(
         rendered_short_records(paths, analysis_path, analysis, transcript),
     )
     artifacts = tuple(ShortArtifact(index, path) for index, path in enumerate(paths, 1))
-    assignments = assign_shorts_to_accounts(artifacts, theme.accounts)
+    assignments = assign_shorts_to_channels(artifacts, theme.channels)
     distributed = distribute_short_files(
         assignments, theme_root / "accounts", youtube_id
     )
@@ -446,7 +446,7 @@ def resume_analyzed_production(
                 QueuedShort(
                     item.assignment.clip_index,
                     item.assignment.account_slot,
-                    item.assignment.account.email,
+                    item.assignment.channel.channel_id,
                     item.queue_path,
                 )
                 for item in distributed

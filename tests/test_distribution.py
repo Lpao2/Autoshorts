@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from autoshorts.automation_config import AccountProfile
+from autoshorts.automation_config import PublishingChannel
 from autoshorts.distribution import (
     LinkMethod,
     ShortArtifact,
@@ -13,21 +13,21 @@ from autoshorts.distribution import (
 )
 
 
-def accounts():
+def channels():
     return tuple(
-        AccountProfile(f"Account {index}", f"a{index}@example.test", index)
+        PublishingChannel(f"channel-{index}", f"Channel {index}", index)
         for index in range(1, 4)
     )
 
 
 def test_assigns_three_shorts_to_matching_account_slots():
     assignments = assign_shorts_to_accounts(
-        ("one", "two", "three"), tuple(reversed(accounts()))
+        ("one", "two", "three"), tuple(reversed(channels()))
     )
-    assert [(item.clip, item.account.name) for item in assignments] == [
-        ("one", "Account 1"),
-        ("two", "Account 2"),
-        ("three", "Account 3"),
+    assert [(item.clip, item.channel.channel_id) for item in assignments] == [
+        ("one", "channel-1"),
+        ("two", "channel-2"),
+        ("three", "channel-3"),
     ]
     assert [item.account_slot for item in assignments] == [1, 2, 3]
 
@@ -35,11 +35,11 @@ def test_assigns_three_shorts_to_matching_account_slots():
 @pytest.mark.parametrize("clips", [(), (1,), (1, 2), (1, 2, 3, 4)])
 def test_distribution_requires_exactly_three_shorts(clips):
     with pytest.raises(ValueError, match="Exactly 3 shorts"):
-        assign_shorts_to_accounts(clips, accounts())
+        assign_shorts_to_accounts(clips, channels())
 
 
 def test_distribution_requires_three_enabled_accounts():
-    disabled = (*accounts()[:2], AccountProfile("Off", "off@example.test", 3, False))
+    disabled = (*channels()[:2], PublishingChannel("off", "Off", 3, False))
     with pytest.raises(ValueError, match="slots 1, 2 and 3"):
         assign_shorts_to_accounts((1, 2, 3), disabled)
 
@@ -72,7 +72,7 @@ def test_distributes_files_into_account_queues(tmp_path):
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(str(index).encode())
         clips.append(ShortArtifact(index, path))
-    assignments = assign_shorts_to_accounts(clips, accounts())
+    assignments = assign_shorts_to_accounts(clips, channels())
     distributed = distribute_short_files(assignments, tmp_path / "accounts", "video")
     assert [item.queue_path.name for item in distributed] == [
         "video_01.mp4",
@@ -81,9 +81,9 @@ def test_distributes_files_into_account_queues(tmp_path):
     ]
     assert all(item.queue_path.is_file() for item in distributed)
     assert [item.queue_path.parent.parent.name for item in distributed] == [
-        "slot-1-Account_1",
-        "slot-2-Account_2",
-        "slot-3-Account_3",
+        "slot-1-Channel_1",
+        "slot-2-Channel_2",
+        "slot-3-Channel_3",
     ]
 
 
@@ -94,7 +94,7 @@ def test_partial_distribution_cleans_created_queue_files(tmp_path, monkeypatch):
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(b"video")
         clips.append(ShortArtifact(index, path))
-    assignments = assign_shorts_to_accounts(clips, accounts())
+    assignments = assign_shorts_to_accounts(clips, channels())
     real = link_or_copy
 
     def fail_third(source, destination):

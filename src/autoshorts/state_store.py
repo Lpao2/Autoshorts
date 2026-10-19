@@ -12,7 +12,7 @@ from pathlib import Path
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class VideoStatus(StrEnum):
@@ -92,7 +92,7 @@ class RenderedShort:
 class QueuedShort:
     clip_index: int
     account_slot: int
-    account_identifier: str
+    publishing_channel_id: str
     queue_path: Path
 
 
@@ -103,6 +103,7 @@ class ShortRecord:
     clip_index: int
     account_slot: int | None
     account_identifier: str | None
+    publishing_channel_id: str | None
     status: ShortStatus
     file_path: Path
     queue_path: Path | None
@@ -126,6 +127,7 @@ class QueueMetadata:
     rank: int
     account_slot: int
     account_identifier: str
+    publishing_channel_id: str
     title: str
     headline: str
     generator_score: float | None
@@ -524,13 +526,15 @@ class StateStore:
                 cursor = self.connection.execute(
                     """
                     UPDATE shorts
-                    SET account_slot = ?, account_identifier = ?, status = ?,
+                    SET account_slot = ?, account_identifier = ?,
+                        publishing_channel_id = ?, status = ?,
                         queue_path = ?, updated_at = ?
                     WHERE youtube_id = ? AND clip_index = ? AND status = ?
                     """,
                     (
                         item.account_slot,
-                        item.account_identifier,
+                        item.publishing_channel_id,
+                        item.publishing_channel_id,
                         ShortStatus.QUEUED,
                         str(item.queue_path),
                         now,
@@ -570,6 +574,7 @@ class StateStore:
                 rank=row["clip_index"],
                 account_slot=row["account_slot"],
                 account_identifier=row["account_identifier"],
+                publishing_channel_id=row["publishing_channel_id"],
                 title=row["title"],
                 headline=row["headline"],
                 generator_score=row["generator_score"],
@@ -632,6 +637,7 @@ class StateStore:
                     clip_index INTEGER NOT NULL CHECK (clip_index BETWEEN 1 AND 3),
                     account_slot INTEGER CHECK (account_slot BETWEEN 1 AND 3),
                     account_identifier TEXT,
+                    publishing_channel_id TEXT,
                     status TEXT NOT NULL,
                     file_path TEXT NOT NULL,
                     queue_path TEXT,
@@ -701,6 +707,9 @@ class StateStore:
             version = 5
         if version == 5:
             self._migrate_v5_to_v6()
+            version = 6
+        if version == 6:
+            self._migrate_v6_to_v7()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -805,6 +814,18 @@ class StateStore:
                 """
             )
 
+    def _migrate_v6_to_v7(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE shorts ADD COLUMN publishing_channel_id TEXT;
+                UPDATE shorts
+                SET publishing_channel_id = account_identifier
+                WHERE publishing_channel_id IS NULL;
+                PRAGMA user_version = 7;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -832,6 +853,7 @@ def _short_record(row: sqlite3.Row) -> ShortRecord:
         clip_index=row["clip_index"],
         account_slot=row["account_slot"],
         account_identifier=row["account_identifier"],
+        publishing_channel_id=row["publishing_channel_id"],
         status=ShortStatus(row["status"]),
         file_path=Path(row["file_path"]),
         queue_path=Path(row["queue_path"]) if row["queue_path"] else None,

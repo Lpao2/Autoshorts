@@ -30,7 +30,7 @@ from autoshorts.collection import (
 from autoshorts.config import Settings
 from autoshorts.distribution import (
     ShortArtifact,
-    assign_shorts_to_accounts,
+    assign_shorts_to_channels,
     distribute_short_files,
 )
 from autoshorts.pipeline import PipelineResult, run_pipeline
@@ -573,7 +573,7 @@ def run_automation(
                         )
                     )
                     stage = "queue"
-                    assignments = assign_shorts_to_accounts(artifacts, theme.accounts)
+                    assignments = assign_shorts_to_channels(artifacts, theme.channels)
                     distributed = ()
                     try:
                         distributed = distribute_short_files(
@@ -585,7 +585,7 @@ def run_automation(
                                 QueuedShort(
                                     item.assignment.clip_index,
                                     item.assignment.account_slot,
-                                    item.assignment.account.email,
+                                    item.assignment.channel.channel_id,
                                     item.queue_path,
                                 )
                                 for item in distributed
