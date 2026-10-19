@@ -13,6 +13,9 @@ from autoshorts.automation_config import (
 from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.state_store import StateStore
 from autoshorts.youtube_oauth import (
+    YOUTUBE_READONLY_SCOPE,
+    YOUTUBE_SCOPES,
+    YOUTUBE_UPLOAD_SCOPE,
     PendingChannelConnection,
     YouTubeChannelIdentity,
     YouTubeConnectionService,
@@ -30,13 +33,17 @@ class Backend:
         self.channel = YouTubeChannelIdentity(channel_id, title)
         self.authorize_calls = 0
         self.load_calls = 0
+        self.authorize_scopes = None
+        self.load_scopes = None
 
     def authorize(self, client_secret_path, scopes):
         self.authorize_calls += 1
+        self.authorize_scopes = scopes
         return Credentials("secret-access-token")
 
     def load(self, payload, scopes):
         self.load_calls += 1
+        self.load_scopes = scopes
         return Credentials(json.loads(payload)["token"], refreshed=True)
 
     def serialize(self, credentials):
@@ -84,6 +91,19 @@ def service(tmp_path, monkeypatch, *, backend=None, app_config=None):
 def connect(target, channel_id="lol-a"):
     pending = target.begin_connection(channel_id)
     return target.confirm_connection(pending)
+
+
+def test_oauth_requests_exactly_upload_and_readonly_scopes(tmp_path, monkeypatch):
+    backend = Backend()
+    target, state, _ = service(tmp_path, monkeypatch, backend=backend)
+    pending = target.begin_connection("lol-a")
+    assert backend.authorize_scopes == YOUTUBE_SCOPES
+    assert set(YOUTUBE_SCOPES) == {YOUTUBE_UPLOAD_SCOPE, YOUTUBE_READONLY_SCOPE}
+    assert "https://www.googleapis.com/auth/youtube" not in YOUTUBE_SCOPES
+    target.confirm_connection(pending)
+    target.verify_binding("lol-a")
+    assert backend.load_scopes == YOUTUBE_SCOPES
+    state.close()
 
 
 def test_credential_store_permissions_and_path_safety(tmp_path):

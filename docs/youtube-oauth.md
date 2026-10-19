@@ -25,11 +25,14 @@ faz upload, publicação ou agendamento.
 8. Abra a GUI, selecione um canal e use **Conectar YouTube**.
 
 O navegador abre o fluxo oficial para aplicativos instalados, usando redirect
-loopback em `127.0.0.1`. O AutoShorts pede acesso offline e o único scope é
-`https://www.googleapis.com/auth/youtube.upload`. A mesma credencial é usada em
-`channels.list(part="snippet", mine=true)` para confirmar o canal autenticado.
-Não foi adicionado `youtube.readonly` porque essa identificação funciona dentro
-do escopo já necessário para o upload futuro.
+loopback em `127.0.0.1`. O AutoShorts pede acesso offline e exatamente dois
+scopes de menor privilégio:
+
+- `https://www.googleapis.com/auth/youtube.upload`, para o upload futuro;
+- `https://www.googleapis.com/auth/youtube.readonly`, necessário para identificar
+  e verificar o canal por `channels.list(part="snippet", mine=true)`.
+
+O scope amplo `https://www.googleapis.com/auth/youtube` não é solicitado.
 
 ## Confirmação explícita
 

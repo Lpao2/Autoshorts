@@ -15,7 +15,8 @@ from autoshorts.state_store import ChannelCredentialBinding, StateStore
 
 CLIENT_SECRET_ENV = "AUTOSHORTS_GOOGLE_CLIENT_SECRET"
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
-YOUTUBE_SCOPES = (YOUTUBE_UPLOAD_SCOPE,)
+YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+YOUTUBE_SCOPES = (YOUTUBE_UPLOAD_SCOPE, YOUTUBE_READONLY_SCOPE)
 
 
 @dataclass(frozen=True, slots=True)
