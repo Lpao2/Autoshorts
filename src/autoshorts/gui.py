@@ -705,6 +705,11 @@ class AutoShortsWindow:
         template = self._selected_catalog_theme()
         if template is None:
             return
+        with StateStore(self.state_db_path) as store:
+            plans = {
+                item.slot: item
+                for item in store.planned_channel_brands(template.theme_key)
+            }
         archetypes = "\n\n".join(
             f"CANAL {item.slot}: {item.name}\n"
             f"Foco: {', '.join(item.editorial_focus)}\n"
@@ -714,7 +719,16 @@ class AutoShortsWindow:
             f"{', '.join(item.content_avoid)}\nPaleta: "
             f"{item.palette.primary}, {item.palette.secondary}, "
             f"{item.palette.accent}\nMarca: "
-            f"{', '.join(item.brand_blueprint.keywords)}"
+            f"{', '.join(item.brand_blueprint.keywords)}\n"
+            + (
+                f"Brand Plan: {plans[item.slot].public_name} — "
+                f"{plans[item.slot].preferred_handle}\n"
+                f"Backups: {', '.join(plans[item.slot].backup_handles)}\n"
+                f"Tagline: {plans[item.slot].tagline}\n"
+                f"Status: {plans[item.slot].status}"
+                if item.slot in plans
+                else "Brand Plan: ainda não planejado"
+            )
             for item in template.channel_archetypes
         )
         source = template.source_strategy

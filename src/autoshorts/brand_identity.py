@@ -119,6 +119,7 @@ class ChannelBrandKit:
     banner_brief: str
     status: BrandKitStatus
     version: int
+    source_plan_id: str | None = None
 
     def __post_init__(self) -> None:
         required = (

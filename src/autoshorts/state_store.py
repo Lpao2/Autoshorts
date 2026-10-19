@@ -19,6 +19,11 @@ from autoshorts.brand_identity import (
     ChannelBrandKit,
     HandleAvailability,
 )
+from autoshorts.brand_planning import (
+    PlannedBrandStatus,
+    PlannedChannelBrand,
+    PlannedIdentityAssignment,
+)
 from autoshorts.theme_catalog import (
     AuthorizationStatus,
     BrandBlueprint,
@@ -37,7 +42,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 class VideoStatus(StrEnum):
@@ -786,6 +791,205 @@ class StateStore:
             for row in rows
         )
 
+    def save_catalog_brand_generation(
+        self, theme_key: str, result: BrandGenerationResult
+    ) -> int:
+        usage = result.usage
+        now = _now()
+        with self.connection:
+            cursor = self.connection.execute(
+                """INSERT INTO catalog_brand_generations
+                (theme_key, provider, model, status, input_tokens, output_tokens,
+                 thinking_tokens, total_tokens, duration_seconds,
+                 theoretical_cost_usd, created_at, updated_at)
+                VALUES (?, ?, ?, 'GENERATED', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    theme_key,
+                    result.provider,
+                    result.model,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.thinking_tokens,
+                    usage.total_tokens,
+                    usage.duration_seconds,
+                    usage.estimated_cost_usd,
+                    now,
+                    now,
+                ),
+            )
+            generation_id = int(cursor.lastrowid)
+            for candidate in result.candidates:
+                self.connection.execute(
+                    """INSERT INTO catalog_brand_candidates
+                    (generation_id, target_id, public_name, handles_json,
+                     description, tagline, keywords_json, logo_brief,
+                     banner_brief, reason, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        generation_id,
+                        candidate.publishing_channel_id,
+                        candidate.public_name,
+                        json.dumps(candidate.handle_candidates, ensure_ascii=False),
+                        candidate.description,
+                        candidate.tagline,
+                        json.dumps(candidate.brand_keywords, ensure_ascii=False),
+                        candidate.logo_brief,
+                        candidate.banner_brief,
+                        candidate.reason,
+                        now,
+                    ),
+                )
+        return generation_id
+
+    def catalog_brand_generation(self, theme_key: str):
+        return self.connection.execute(
+            "SELECT * FROM catalog_brand_generations WHERE theme_key = ?",
+            (theme_key,),
+        ).fetchone()
+
+    def catalog_brand_candidates(
+        self, generation_id: int
+    ) -> tuple[BrandCandidate, ...]:
+        rows = self.connection.execute(
+            "SELECT * FROM catalog_brand_candidates "
+            "WHERE generation_id = ? ORDER BY id",
+            (generation_id,),
+        ).fetchall()
+        return tuple(
+            BrandCandidate(
+                row["target_id"],
+                row["public_name"],
+                tuple(json.loads(row["handles_json"])),
+                row["description"],
+                row["tagline"],
+                tuple(json.loads(row["keywords_json"])),
+                row["logo_brief"],
+                row["banner_brief"],
+                row["reason"],
+            )
+            for row in rows
+        )
+
+    def save_planned_channel_brands(
+        self,
+        generation_id: int,
+        plans: tuple[PlannedChannelBrand, ...],
+        assignments: tuple[PlannedIdentityAssignment, ...],
+        *,
+        rerank_usage: AnalysisUsage,
+    ) -> None:
+        now = _now()
+        with self.connection:
+            for plan in plans:
+                self.connection.execute(
+                    """INSERT INTO planned_channel_brands
+                    (brand_plan_id, theme_key, slot, public_name, preferred_handle,
+                     backup_handles_json, handle_availability, description, tagline,
+                     brand_keywords_json, visual_direction, palette_json, logo_brief,
+                     banner_brief, status, provider, model, version,
+                     source_generation_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?)
+                    ON CONFLICT(brand_plan_id) DO UPDATE SET
+                      public_name=excluded.public_name,
+                      preferred_handle=excluded.preferred_handle,
+                      backup_handles_json=excluded.backup_handles_json,
+                      description=excluded.description, tagline=excluded.tagline,
+                      brand_keywords_json=excluded.brand_keywords_json,
+                      visual_direction=excluded.visual_direction,
+                      palette_json=excluded.palette_json,
+                      logo_brief=excluded.logo_brief,
+                      banner_brief=excluded.banner_brief,
+                      status=excluded.status, provider=excluded.provider,
+                      model=excluded.model, version=planned_channel_brands.version + 1,
+                      source_generation_id=excluded.source_generation_id,
+                      updated_at=excluded.updated_at""",
+                    (
+                        plan.brand_plan_id,
+                        plan.theme_key,
+                        plan.slot,
+                        plan.public_name,
+                        plan.preferred_handle,
+                        json.dumps(plan.backup_handles, ensure_ascii=False),
+                        plan.handle_availability,
+                        plan.description,
+                        plan.tagline,
+                        json.dumps(plan.brand_keywords, ensure_ascii=False),
+                        plan.visual_direction,
+                        json.dumps(plan.palette),
+                        plan.logo_brief,
+                        plan.banner_brief,
+                        plan.status,
+                        plan.provider,
+                        plan.model,
+                        plan.version,
+                        generation_id,
+                        now,
+                        now,
+                    ),
+                )
+            for assignment in assignments:
+                self.connection.execute(
+                    """INSERT INTO planned_identity_assignments
+                    (brand_plan_id, planned_identity_id, created_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(brand_plan_id) DO UPDATE SET
+                      planned_identity_id=excluded.planned_identity_id""",
+                    (assignment.brand_plan_id, assignment.planned_identity_id, now),
+                )
+            self.connection.execute(
+                """UPDATE catalog_brand_generations SET
+                status='RERANKED', rerank_input_tokens=?, rerank_output_tokens=?,
+                rerank_thinking_tokens=?, rerank_total_tokens=?,
+                rerank_duration_seconds=?, rerank_theoretical_cost_usd=?, updated_at=?
+                WHERE id=?""",
+                (
+                    rerank_usage.input_tokens,
+                    rerank_usage.output_tokens,
+                    rerank_usage.thinking_tokens,
+                    rerank_usage.total_tokens,
+                    rerank_usage.duration_seconds,
+                    rerank_usage.estimated_cost_usd,
+                    now,
+                    generation_id,
+                ),
+            )
+
+    def planned_channel_brands(
+        self, theme_key: str | None = None
+    ) -> tuple[PlannedChannelBrand, ...]:
+        sql = "SELECT * FROM planned_channel_brands"
+        params = ()
+        if theme_key is not None:
+            sql += " WHERE theme_key = ?"
+            params = (theme_key,)
+        sql += " ORDER BY theme_key, slot"
+        rows = self.connection.execute(sql, params).fetchall()
+        return tuple(
+            PlannedChannelBrand(
+                row["brand_plan_id"],
+                row["theme_key"],
+                row["slot"],
+                row["public_name"],
+                row["preferred_handle"],
+                tuple(json.loads(row["backup_handles_json"])),
+                row["description"],
+                row["tagline"],
+                tuple(json.loads(row["brand_keywords_json"])),
+                row["visual_direction"],
+                tuple(json.loads(row["palette_json"])),
+                row["logo_brief"],
+                row["banner_brief"],
+                PlannedBrandStatus(row["status"]),
+                HandleAvailability(row["handle_availability"]),
+                row["provider"],
+                row["model"],
+                row["version"],
+                row["source_generation_id"],
+            )
+            for row in rows
+        )
+
     def approve_brand_kit(self, kit: ChannelBrandKit) -> ChannelBrandKit:
         if kit.status != BrandKitStatus.APPROVED:
             raise ValueError("Approval requires APPROVED status.")
@@ -805,8 +1009,8 @@ class StateStore:
                 """INSERT INTO channel_brand_kits
                 (publishing_channel_id, public_name, handle, description,
                  tagline, brand_keywords_json, visual_direction, palette_json,
-                 logo_brief, banner_brief, status, version, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, ?)""",
+                 logo_brief, banner_brief, status, version, source_plan_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, ?, ?)""",
                 (
                     kit.publishing_channel_id,
                     kit.public_name,
@@ -819,6 +1023,7 @@ class StateStore:
                     kit.logo_brief,
                     kit.banner_brief,
                     version,
+                    kit.source_plan_id,
                     now,
                 ),
             )
@@ -848,6 +1053,7 @@ class StateStore:
             banner_brief=row["banner_brief"],
             status=BrandKitStatus(row["status"]),
             version=row["version"],
+            source_plan_id=row["source_plan_id"],
         )
 
     def get_theme_template(self, theme_key: str) -> ThemeTemplate | None:
@@ -1271,12 +1477,70 @@ class StateStore:
                     visual_direction TEXT NOT NULL, palette_json TEXT NOT NULL,
                     logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
                     status TEXT NOT NULL, version INTEGER NOT NULL,
+                    source_plan_id TEXT,
                     created_at TEXT NOT NULL,
                     UNIQUE (publishing_channel_id, version)
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_approved_brand
                     ON channel_brand_kits(publishing_channel_id)
                     WHERE status = 'APPROVED';
+                CREATE TABLE IF NOT EXISTS catalog_brand_generations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_key TEXT NOT NULL UNIQUE,
+                    provider TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                    thinking_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+                    duration_seconds REAL NOT NULL, theoretical_cost_usd REAL NOT NULL,
+                    rerank_input_tokens INTEGER NOT NULL DEFAULT 0,
+                    rerank_output_tokens INTEGER NOT NULL DEFAULT 0,
+                    rerank_thinking_tokens INTEGER NOT NULL DEFAULT 0,
+                    rerank_total_tokens INTEGER NOT NULL DEFAULT 0,
+                    rerank_duration_seconds REAL NOT NULL DEFAULT 0,
+                    rerank_theoretical_cost_usd REAL NOT NULL DEFAULT 0,
+                    error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS catalog_brand_candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    generation_id INTEGER NOT NULL,
+                    target_id TEXT NOT NULL, public_name TEXT NOT NULL,
+                    handles_json TEXT NOT NULL, description TEXT NOT NULL,
+                    tagline TEXT NOT NULL, keywords_json TEXT NOT NULL,
+                    logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
+                    reason TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY (generation_id) REFERENCES catalog_brand_generations(id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS planned_channel_brands (
+                    brand_plan_id TEXT PRIMARY KEY, theme_key TEXT NOT NULL,
+                    slot INTEGER NOT NULL, public_name TEXT NOT NULL,
+                    preferred_handle TEXT NOT NULL, backup_handles_json TEXT NOT NULL,
+                    handle_availability TEXT NOT NULL, description TEXT NOT NULL,
+                    tagline TEXT NOT NULL, brand_keywords_json TEXT NOT NULL,
+                    visual_direction TEXT NOT NULL, palette_json TEXT NOT NULL,
+                    logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
+                    status TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+                    version INTEGER NOT NULL, source_generation_id INTEGER,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(theme_key, slot)
+                );
+                CREATE TABLE IF NOT EXISTS planned_identity_assignments (
+                    brand_plan_id TEXT PRIMARY KEY, planned_identity_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS brand_asset_metadata (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, brand_plan_id TEXT NOT NULL,
+                    asset_type TEXT NOT NULL, file_path TEXT NOT NULL,
+                    provider TEXT NOT NULL, model TEXT NOT NULL, prompt TEXT NOT NULL,
+                    width INTEGER NOT NULL, height INTEGER NOT NULL,
+                    checksum TEXT NOT NULL, created_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    FOREIGN KEY (brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id)
+                        ON DELETE CASCADE
+                );
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -1313,6 +1577,9 @@ class StateStore:
             version = 11
         if version == 11:
             self._migrate_v11_to_v12()
+            version = 12
+        if version == 12:
+            self._migrate_v12_to_v13()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -1549,6 +1816,72 @@ class StateStore:
                     ADD COLUMN status TEXT NOT NULL DEFAULT 'SUCCEEDED';
                 ALTER TABLE brand_generations ADD COLUMN error TEXT;
                 PRAGMA user_version = 12;
+                """
+            )
+
+    def _migrate_v12_to_v13(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE channel_brand_kits ADD COLUMN source_plan_id TEXT;
+                CREATE TABLE catalog_brand_generations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_key TEXT NOT NULL UNIQUE,
+                    provider TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                    thinking_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+                    duration_seconds REAL NOT NULL, theoretical_cost_usd REAL NOT NULL,
+                    rerank_input_tokens INTEGER NOT NULL DEFAULT 0,
+                    rerank_output_tokens INTEGER NOT NULL DEFAULT 0,
+                    rerank_thinking_tokens INTEGER NOT NULL DEFAULT 0,
+                    rerank_total_tokens INTEGER NOT NULL DEFAULT 0,
+                    rerank_duration_seconds REAL NOT NULL DEFAULT 0,
+                    rerank_theoretical_cost_usd REAL NOT NULL DEFAULT 0,
+                    error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE catalog_brand_candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    generation_id INTEGER NOT NULL,
+                    target_id TEXT NOT NULL, public_name TEXT NOT NULL,
+                    handles_json TEXT NOT NULL, description TEXT NOT NULL,
+                    tagline TEXT NOT NULL, keywords_json TEXT NOT NULL,
+                    logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
+                    reason TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY (generation_id) REFERENCES catalog_brand_generations(id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE planned_channel_brands (
+                    brand_plan_id TEXT PRIMARY KEY, theme_key TEXT NOT NULL,
+                    slot INTEGER NOT NULL, public_name TEXT NOT NULL,
+                    preferred_handle TEXT NOT NULL, backup_handles_json TEXT NOT NULL,
+                    handle_availability TEXT NOT NULL, description TEXT NOT NULL,
+                    tagline TEXT NOT NULL, brand_keywords_json TEXT NOT NULL,
+                    visual_direction TEXT NOT NULL, palette_json TEXT NOT NULL,
+                    logo_brief TEXT NOT NULL, banner_brief TEXT NOT NULL,
+                    status TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+                    version INTEGER NOT NULL, source_generation_id INTEGER,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(theme_key, slot)
+                );
+                CREATE TABLE planned_identity_assignments (
+                    brand_plan_id TEXT PRIMARY KEY, planned_identity_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE brand_asset_metadata (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, brand_plan_id TEXT NOT NULL,
+                    asset_type TEXT NOT NULL, file_path TEXT NOT NULL,
+                    provider TEXT NOT NULL, model TEXT NOT NULL, prompt TEXT NOT NULL,
+                    width INTEGER NOT NULL, height INTEGER NOT NULL,
+                    checksum TEXT NOT NULL, created_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    FOREIGN KEY (brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id)
+                        ON DELETE CASCADE
+                );
+                PRAGMA user_version = 13;
                 """
             )
 
