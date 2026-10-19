@@ -174,8 +174,8 @@ def test_automatic_tab_reflects_saved_creators_and_disabled_state(window, tmp_pa
     assert app.auto_creators.selection() == (rows[0],)
     account_rows = app.auto_accounts.get_children()
     assert [app.auto_accounts.item(row, "values") for row in account_rows] == [
-        ("1", "✓", "LoL A", "Google A", "não conectado", "Humor"),
-        ("2", "—", "LoL B", "não vinculada", "não conectado", "padrão"),
+        ("1", "✓", "LoL A", "Google A", "—", "Não conectado"),
+        ("2", "—", "LoL B", "não vinculada", "—", "Não conectado"),
     ]
     identity_rows = app.auto_identities.get_children()
     assert [app.auto_identities.item(row, "values") for row in identity_rows] == [

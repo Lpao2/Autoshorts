@@ -12,7 +12,7 @@ from pathlib import Path
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class VideoStatus(StrEnum):
@@ -156,6 +156,19 @@ class AnalysisRecord:
     model: str
     prompt_hash: str
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelCredentialBinding:
+    publishing_channel_id: str
+    google_identity_id: str
+    provider: str
+    credential_ref: str
+    youtube_channel_id: str
+    youtube_channel_title: str
+    connected_at: str
+    last_verified_at: str
+    status: str
 
 
 def default_state_db_path(project_root: Path | None = None) -> Path:
@@ -555,6 +568,55 @@ class StateStore:
         ).fetchall()
         return tuple(_short_record(row) for row in rows)
 
+    def get_channel_binding(
+        self, publishing_channel_id: str
+    ) -> ChannelCredentialBinding | None:
+        row = self.connection.execute(
+            "SELECT * FROM channel_bindings WHERE publishing_channel_id = ?",
+            (publishing_channel_id,),
+        ).fetchone()
+        return _channel_binding(row) if row else None
+
+    def save_channel_binding(self, binding: ChannelCredentialBinding) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO channel_bindings (
+                    publishing_channel_id, google_identity_id, provider,
+                    credential_ref, youtube_channel_id, youtube_channel_title,
+                    connected_at, last_verified_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(publishing_channel_id) DO UPDATE SET
+                    google_identity_id = excluded.google_identity_id,
+                    provider = excluded.provider,
+                    credential_ref = excluded.credential_ref,
+                    youtube_channel_id = excluded.youtube_channel_id,
+                    youtube_channel_title = excluded.youtube_channel_title,
+                    connected_at = excluded.connected_at,
+                    last_verified_at = excluded.last_verified_at,
+                    status = excluded.status
+                """,
+                (
+                    binding.publishing_channel_id,
+                    binding.google_identity_id,
+                    binding.provider,
+                    binding.credential_ref,
+                    binding.youtube_channel_id,
+                    binding.youtube_channel_title,
+                    binding.connected_at,
+                    binding.last_verified_at,
+                    binding.status,
+                ),
+            )
+
+    def delete_channel_binding(self, publishing_channel_id: str) -> bool:
+        with self.connection:
+            cursor = self.connection.execute(
+                "DELETE FROM channel_bindings WHERE publishing_channel_id = ?",
+                (publishing_channel_id,),
+            )
+        return cursor.rowcount == 1
+
     def queued_metadata(self, youtube_id: str) -> tuple[QueueMetadata, ...]:
         """Return complete publication metadata in editorial rank order."""
         rows = self.connection.execute(
@@ -689,6 +751,17 @@ class StateStore:
                         ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage(created_at);
+                CREATE TABLE IF NOT EXISTS channel_bindings (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    google_identity_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    credential_ref TEXT NOT NULL,
+                    youtube_channel_id TEXT NOT NULL,
+                    youtube_channel_title TEXT NOT NULL,
+                    connected_at TEXT NOT NULL,
+                    last_verified_at TEXT NOT NULL,
+                    status TEXT NOT NULL
+                );
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -710,6 +783,9 @@ class StateStore:
             version = 6
         if version == 6:
             self._migrate_v6_to_v7()
+            version = 7
+        if version == 7:
+            self._migrate_v7_to_v8()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -826,6 +902,25 @@ class StateStore:
                 """
             )
 
+    def _migrate_v7_to_v8(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE channel_bindings (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    google_identity_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    credential_ref TEXT NOT NULL,
+                    youtube_channel_id TEXT NOT NULL,
+                    youtube_channel_title TEXT NOT NULL,
+                    connected_at TEXT NOT NULL,
+                    last_verified_at TEXT NOT NULL,
+                    status TEXT NOT NULL
+                );
+                PRAGMA user_version = 8;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -889,4 +984,18 @@ def _analysis_record(row: sqlite3.Row) -> AnalysisRecord:
         model=row["model"],
         prompt_hash=row["prompt_hash"],
         created_at=row["created_at"],
+    )
+
+
+def _channel_binding(row: sqlite3.Row) -> ChannelCredentialBinding:
+    return ChannelCredentialBinding(
+        publishing_channel_id=row["publishing_channel_id"],
+        google_identity_id=row["google_identity_id"],
+        provider=row["provider"],
+        credential_ref=row["credential_ref"],
+        youtube_channel_id=row["youtube_channel_id"],
+        youtube_channel_title=row["youtube_channel_title"],
+        connected_at=row["connected_at"],
+        last_verified_at=row["last_verified_at"],
+        status=row["status"],
     )

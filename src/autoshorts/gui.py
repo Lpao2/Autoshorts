@@ -31,6 +31,7 @@ from autoshorts.automation_store import (
 )
 from autoshorts.collection import YouTubeAccess, resolve_deno
 from autoshorts.config import OverwritePolicy, Settings, load_settings
+from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.fake_analysis import fake_analysis_provider
 from autoshorts.faster_whisper_provider import FasterWhisperProvider
 from autoshorts.gemini_analysis_provider import GeminiAnalysisProvider
@@ -39,7 +40,8 @@ from autoshorts.gui_jobs import JobController, JobRequest
 from autoshorts.pipeline import PipelineResult
 from autoshorts.render_events import RenderEvent
 from autoshorts.render_plan import RenderPlan
-from autoshorts.state_store import default_state_db_path
+from autoshorts.state_store import StateStore, default_state_db_path
+from autoshorts.youtube_oauth import YouTubeConnectionService
 
 LABELS = {
     "rendering": "Renderizando",
@@ -383,6 +385,8 @@ class AutoShortsWindow:
         self.automation_controller = AutomationController(
             settings, state_db_path=default_state_db_path()
         )
+        self.state_db_path = default_state_db_path()
+        self.credential_store = FilesystemCredentialStore()
         self.automation_config: AutomationConfig | None = None
         self.automation_running = False
         self.automation_finishing = False
@@ -653,7 +657,7 @@ class AutoShortsWindow:
         accounts_panel.columnconfigure(0, weight=1)
         self.auto_accounts = ttk.Treeview(
             accounts_panel,
-            columns=("slot", "enabled", "name", "identity", "youtube", "style"),
+            columns=("slot", "enabled", "name", "identity", "youtube", "status"),
             show="headings",
             height=3,
             selectmode="browse",
@@ -664,10 +668,10 @@ class AutoShortsWindow:
             ("name", "Canal", 150),
             ("identity", "Google Identity", 150),
             ("youtube", "YouTube Channel", 130),
-            ("style", "Estilo", 130),
+            ("status", "Status", 110),
         ):
             self.auto_accounts.heading(column, text=label)
-            self.auto_accounts.column(column, width=width, stretch=column == "style")
+            self.auto_accounts.column(column, width=width, stretch=column == "youtube")
         self.auto_accounts.grid(row=0, column=0, sticky="nsew")
         account_actions = ttk.Frame(accounts_panel)
         account_actions.grid(row=1, column=0, sticky="ew", pady=(5, 0))
@@ -680,6 +684,18 @@ class AutoShortsWindow:
         ttk.Button(
             account_actions, text="Remover", command=self.remove_channel_ui
         ).pack(side="left")
+        ttk.Button(
+            account_actions, text="Conectar YouTube", command=self.connect_youtube_ui
+        ).pack(side="left", padx=(16, 0))
+        ttk.Button(
+            account_actions, text="Verificar conexão", command=self.verify_youtube_ui
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            account_actions, text="Reconectar", command=self.connect_youtube_ui
+        ).pack(side="left")
+        ttk.Button(
+            account_actions, text="Desconectar", command=self.disconnect_youtube_ui
+        ).pack(side="left", padx=6)
         ttk.Label(
             account_actions, text="Short 1→Slot 1  •  Short 2→Slot 2  •  Short 3→Slot 3"
         ).pack(side="right")
@@ -1024,8 +1040,14 @@ class AutoShortsWindow:
         identities = {
             item.identity_id: item for item in self.automation_config.google_identities
         }
+        with StateStore(self.state_db_path) as state_store:
+            bindings = {
+                channel.channel_id: state_store.get_channel_binding(channel.channel_id)
+                for channel in theme.channels
+            }
         for channel in sorted(theme.channels, key=lambda item: item.slot):
             identity = identities.get(channel.google_identity_id)
+            binding = bindings[channel.channel_id]
             self.auto_accounts.insert(
                 "",
                 "end",
@@ -1035,8 +1057,13 @@ class AutoShortsWindow:
                     "✓" if channel.enabled else "—",
                     channel.name,
                     identity.label if identity else "não vinculada",
-                    channel.youtube_channel_title or "não conectado",
-                    channel.editorial_profile.tone or "padrão",
+                    (
+                        f"{binding.youtube_channel_id} / "
+                        f"{binding.youtube_channel_title}"
+                        if binding
+                        else "—"
+                    ),
+                    binding.status.title() if binding else "Não conectado",
                 ),
                 tags=("enabled" if channel.enabled else "disabled",),
             )
@@ -1332,6 +1359,75 @@ class AutoShortsWindow:
         )
         self.load_automation_config_ui(silent=True)
         self._set_theme(theme_name)
+        self.refresh_theme_details()
+
+    def connect_youtube_ui(self) -> None:
+        channel_id = self._selected_channel_id()
+        if self.automation_config is None or not channel_id:
+            messagebox.showinfo("YouTube", "Selecione um canal de publicação.")
+            return
+        try:
+            with StateStore(self.state_db_path) as state_store:
+                service = YouTubeConnectionService(
+                    self.automation_config,
+                    state_store,
+                    self.credential_store,
+                )
+                pending = service.begin_connection(channel_id)
+                confirmed = messagebox.askyesno(
+                    "Confirmar canal YouTube",
+                    "Você está conectando:\n\n"
+                    f"Canal: {pending.channel.title}\n"
+                    f"Channel ID: {pending.channel.channel_id}\n\n"
+                    "Confirmar este binding?",
+                )
+                if not confirmed:
+                    return
+                service.confirm_connection(pending)
+        except Exception as exc:
+            messagebox.showerror("Conexão YouTube", str(exc))
+            return
+        self.refresh_theme_details()
+        messagebox.showinfo("YouTube", "Canal conectado e binding confirmado.")
+
+    def verify_youtube_ui(self) -> None:
+        channel_id = self._selected_channel_id()
+        if self.automation_config is None or not channel_id:
+            return
+        try:
+            with StateStore(self.state_db_path) as state_store:
+                service = YouTubeConnectionService(
+                    self.automation_config,
+                    state_store,
+                    self.credential_store,
+                )
+                binding = service.verify_binding(channel_id)
+        except Exception as exc:
+            messagebox.showerror("Verificação YouTube", str(exc))
+            return
+        self.refresh_theme_details()
+        messagebox.showinfo(
+            "YouTube",
+            f"Conexão válida: {binding.youtube_channel_title}\n"
+            f"{binding.youtube_channel_id}",
+        )
+
+    def disconnect_youtube_ui(self) -> None:
+        channel_id = self._selected_channel_id()
+        if self.automation_config is None or not channel_id:
+            return
+        if not messagebox.askyesno(
+            "Desconectar YouTube",
+            "Remover a credencial e o binding deste canal?",
+        ):
+            return
+        with StateStore(self.state_db_path) as state_store:
+            service = YouTubeConnectionService(
+                self.automation_config,
+                state_store,
+                self.credential_store,
+            )
+            service.disconnect(channel_id)
         self.refresh_theme_details()
 
     @staticmethod

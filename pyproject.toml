@@ -15,6 +15,10 @@ dev = ["pytest>=8,<9", "ruff>=0.8,<1"]
 automation = ["yt-dlp>=2026.8,<2027", "yt-dlp-ejs>=0.8,<1"]
 transcription = ["faster-whisper>=1.2,<2", "av>=11,<19"]
 analysis = ["google-genai>=2.31,<3"]
+youtube-oauth = [
+  "google-auth-oauthlib>=1.2,<2",
+  "google-api-python-client>=2.149,<3",
+]
 
 [project.scripts]
 autoshorts = "autoshorts.main:main"

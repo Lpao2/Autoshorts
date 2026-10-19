@@ -352,6 +352,23 @@ def test_migrates_v6_channel_reference_without_losing_legacy_identifier(tmp_path
     connection.close()
     with StateStore(path) as store:
         row = store.shorts_for_video("old")[0]
-        assert store.schema_version == 7
+        assert store.schema_version == SCHEMA_VERSION
         assert row.account_identifier == "legacy@example.test"
         assert row.publishing_channel_id == "legacy@example.test"
+
+
+def test_migrates_v7_to_v8_with_non_secret_channel_bindings_table(tmp_path):
+    path = tmp_path / "v7.db"
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA user_version = 7")
+    connection.close()
+    with StateStore(path) as store:
+        columns = {
+            row[1]
+            for row in store.connection.execute("PRAGMA table_info(channel_bindings)")
+        }
+        assert store.schema_version == SCHEMA_VERSION
+        assert "credential_ref" in columns
+        assert "youtube_channel_id" in columns
+        assert "access_token" not in columns
+        assert "refresh_token" not in columns
