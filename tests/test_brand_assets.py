@@ -96,8 +96,15 @@ def test_prompt_uses_catalog_context_without_handle(tmp_path):
     assert plan.public_name in prompt
     assert plan.banner_brief in prompt
     assert plan.preferred_handle not in prompt
+    assert plan.tagline not in prompt
     assert "zona segura central de 1235x338" in prompt
     assert "logos existentes" in prompt.casefold()
+    assert "minimal brand design" in prompt.casefold()
+    assert "use generous negative space" in prompt.casefold()
+    assert "limited number of visual elements" in prompt.casefold()
+    assert "visual density" in prompt.casefold()
+    assert "ai-generated artwork" in prompt.casefold()
+    assert "sem tagline" in prompt.casefold()
 
 
 def test_fake_provider_paths_validation_checksum_preview_and_resume(tmp_path):

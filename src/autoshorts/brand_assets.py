@@ -94,12 +94,15 @@ def brand_asset_prompt(
     brand: PlannedChannelBrand,
 ) -> str:
     width, height = ASSET_SPECS[asset_type]
+    tagline_context = (
+        f"Tagline: {brand.tagline}. " if asset_type == BrandAssetType.LOGO else ""
+    )
     shared = (
         f"Tema: {theme.display_name}. Contexto: {theme.description}\n"
         f"Arquétipo editorial: {archetype.name}. Tom: {archetype.tone}. "
         f"Público: {archetype.audience}.\n"
         f"Marca: {brand.public_name}. Descrição: {brand.description}. "
-        f"Tagline: {brand.tagline}. Palavras-chave: "
+        f"{tagline_context}Palavras-chave: "
         f"{', '.join(brand.brand_keywords)}.\n"
         f"Direção visual: {brand.visual_direction}. Paleta: "
         f"{', '.join(brand.palette)}.\n"
@@ -115,12 +118,23 @@ def brand_asset_prompt(
     else:
         specific = (
             f"Brief: {brand.banner_brief}\n"
-            "Crie um banner 16:9 em 2560x1440. Mantenha todos os elementos "
-            "essenciais na zona segura central de 1235x338 pixels. O banner deve "
-            "compartilhar paleta, motivos, linguagem e tom com o logo, mas não ser "
-            "um logo esticado. Pode usar apenas o nome e a tagline se ficarem "
-            f"perfeitamente legíveis: '{brand.public_name}' / '{brand.tagline}'. "
-            "Não coloque informação importante nas extremidades."
+            "Minimal brand design. Use generous negative space. Use one dominant "
+            "graphic motif and, optionally, one very subtle secondary motif. Use a "
+            "limited number of visual elements. Avoid the visual density and "
+            "ornamental complexity commonly associated with AI-generated artwork. "
+            "Prefer intentional graphic-design composition, restrained shapes, "
+            "flat or subtly dimensional forms, strong hierarchy, and a visually "
+            "calm area. The result must look like clean brand design or motion "
+            "graphics, not concept art, an AI illustration, a gaming wallpaper, or "
+            "cinematic key art. Avoid particles, explosions, sparks, multiple light "
+            "beams, accumulated geometry, floating objects, pseudo HUD, pseudo UI, "
+            "fractals, collage, excessive texture, excessive glow, excessive "
+            "gradients, complex scenery, depth of field, and volumetric effects.\n"
+            "Crie um banner 16:9 em 2560x1440. Mantenha o motivo dominante e o nome "
+            "na zona segura central de 1235x338 pixels. O banner deve compartilhar "
+            "paleta, linguagem e tom com o logo, mas não ser um logo esticado. Use "
+            f"somente o nome exato '{brand.public_name}', sem tagline, slogan, "
+            "handle ou URL. Não coloque informação importante nas extremidades."
         )
     return f"{_GLOBAL_RULES}\n\n{shared}{specific}\nSaída: {width}x{height}."
 
@@ -368,6 +382,7 @@ class BrandAssetService:
         asset_type: BrandAssetType,
         *,
         regenerate: bool = False,
+        prompt_override: str | None = None,
     ) -> GeneratedBrandAsset:
         if brand.status != PlannedBrandStatus.APPROVED:
             raise ValueError("Only approved brand plans can generate assets.")
@@ -384,7 +399,9 @@ class BrandAssetService:
         )
         try:
             master = staging / "master.png"
-            prompt = brand_asset_prompt(asset_type, theme, archetype, brand)
+            prompt = prompt_override or brand_asset_prompt(
+                asset_type, theme, archetype, brand
+            )
             if asset_type == BrandAssetType.LOGO:
                 generated = self.provider.generate_logo(
                     brand, output_path=master, prompt=prompt

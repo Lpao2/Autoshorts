@@ -22,6 +22,12 @@ central de 1235×338. Masters nunca são sobrescritos. Uma regeneração cria a
 próxima versão e apenas uma versão por Brand Plan/tipo pode ficar `APPROVED`;
 aprovar outra versão transforma a anterior em `RETIRED`.
 
+O prompt global de banners usa linguagem de design de marca minimalista: fundo
+forte, um motivo dominante, nome e espaço negativo generoso. Ele limita elementos
+decorativos e rejeita explicitamente densidade típica de concept art, wallpaper,
+pseudo UI/HUD e ilustração excessivamente ornamentada. Tagline, handle e URL não
+entram nos banners.
+
 O manifest no filesystem permite reconciliar uma publicação concluída antes de
 seu INSERT no SQLite. Pastas `.tmp-*` são descartadas e nunca contam como asset.
 A fila ignora versões `VALIDATED` ou `APPROVED`, portanto retoma apenas itens

@@ -17,8 +17,10 @@ from autoshorts.automation_config import (  # noqa: E402
     ThemeProfile,
 )
 from autoshorts.automation_store import AutomationStore  # noqa: E402
+from autoshorts.brand_assets import BrandAssetStatus, BrandAssetType  # noqa: E402
 from autoshorts.gui import (  # noqa: E402
     AutoShortsWindow,
+    _asset_version_history,
     _brand_generation_error_message,
     _identity_display,
     _latest_asset_statuses,
@@ -112,6 +114,25 @@ def test_theme_library_shows_complete_blueprints(window):
 def test_brand_asset_status_summary_and_library_dialog(window):
     app, root, _errors = window
     assert _latest_asset_statuses(()) == {"LOGO": "PENDING", "BANNER": "PENDING"}
+    assert _asset_version_history(()) == {
+        "LOGO": "PENDING",
+        "BANNER": "PENDING",
+    }
+    history = _asset_version_history(
+        (
+            SimpleNamespace(
+                asset_type=BrandAssetType.BANNER,
+                version=1,
+                status=BrandAssetStatus.VALIDATED,
+            ),
+            SimpleNamespace(
+                asset_type=BrandAssetType.BANNER,
+                version=2,
+                status=BrandAssetStatus.VALIDATED,
+            ),
+        )
+    )
+    assert history["BANNER"] == "v1 VALIDATED · v2 VALIDATED"
     first = app.catalog_tree.get_children()[0]
     app.catalog_tree.selection_set(first)
     app.view_brand_assets()

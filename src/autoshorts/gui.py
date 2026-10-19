@@ -130,6 +130,19 @@ def _latest_asset_statuses(assets) -> dict[str, str]:
     return result
 
 
+def _asset_version_history(assets) -> dict[str, str]:
+    result = {asset_type.value: "PENDING" for asset_type in BrandAssetType}
+    for asset_type in BrandAssetType:
+        versions = [
+            f"v{asset.version} {asset.status.value}"
+            for asset in assets
+            if asset.asset_type == asset_type
+        ]
+        if versions:
+            result[asset_type.value] = " · ".join(versions)
+    return result
+
+
 def _binding_display(
     binding: ChannelCredentialBinding | None,
 ) -> tuple[str, str]:
@@ -812,7 +825,7 @@ class AutoShortsWindow:
                 plans = store.planned_channel_brands(template.theme_key)
                 for plan in plans:
                     assets = store.brand_assets(plan.brand_plan_id)
-                    statuses = _latest_asset_statuses(assets)
+                    statuses = _asset_version_history(assets)
                     latest = assets[-1] if assets else None
                     tree.insert(
                         "",
@@ -889,10 +902,7 @@ class AutoShortsWindow:
             if plan is None:
                 return
             with StateStore(self.state_db_path) as store:
-                for asset_type in BrandAssetType:
-                    asset = store.latest_valid_brand_asset(
-                        plan.brand_plan_id, asset_type
-                    )
+                for asset in store.brand_assets(plan.brand_plan_id):
                     if asset and asset.preview_path:
                         webbrowser.open(asset.preview_path.resolve().as_uri())
 
