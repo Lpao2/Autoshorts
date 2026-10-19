@@ -71,6 +71,10 @@ def test_migrates_v14_and_rejects_only_future_schema(tmp_path):
             "SELECT name FROM pragma_table_info('brand_asset_metadata') "
             "WHERE name='version'"
         ).fetchone()
+        assert store.connection.execute(
+            "SELECT name FROM pragma_table_info('brand_asset_metadata') "
+            "WHERE name='resolved_visual_direction_json'"
+        ).fetchone()
 
     future = tmp_path / "future.db"
     connection = sqlite3.connect(future)

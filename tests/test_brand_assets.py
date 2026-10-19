@@ -103,15 +103,25 @@ def test_prompt_uses_catalog_context_without_handle(tmp_path):
     assert "use generous negative space" in prompt.casefold()
     assert "limited number of visual elements" in prompt.casefold()
     assert "visual density" in prompt.casefold()
+    assert "resolved visual mood" in prompt.casefold()
+    assert "contrast" in prompt.casefold()
+    assert "energy" in prompt.casefold()
     assert "ai-generated artwork" in prompt.casefold()
     assert "sem tagline" in prompt.casefold()
+    assert "alto contraste" not in prompt.casefold()
 
 
 def test_fake_provider_paths_validation_checksum_preview_and_resume(tmp_path):
     with StateStore(tmp_path / "state.db") as store:
         theme, archetype, plan = setup_brand(store)
         service = BrandAssetService(tmp_path, store, FakeBrandImageProvider())
-        logo = service.generate(plan, theme, archetype, BrandAssetType.LOGO)
+        logo = service.generate(
+            plan,
+            theme,
+            archetype,
+            BrandAssetType.LOGO,
+            prompt_override="Manual art direction without adaptive boilerplate",
+        )
         assert (
             logo.file_path
             == brand_asset_version_directory(tmp_path, plan, BrandAssetType.LOGO, 1)
@@ -122,6 +132,17 @@ def test_fake_provider_paths_validation_checksum_preview_and_resume(tmp_path):
         assert (logo.width, logo.height) == (1024, 1024)
         assert len(logo.checksum) == 64
         assert logo.status == BrandAssetStatus.VALIDATED
+        assert "Resolved visual mood" in logo.prompt
+        assert "Manual art direction" in logo.prompt
+        assert logo.resolved_visual_direction is not None
+        persisted = store.brand_asset(plan.brand_plan_id, BrandAssetType.LOGO, 1)
+        assert (
+            persisted.resolved_visual_direction == logo.resolved_visual_direction
+        )
+        manifest = json.loads((logo.file_path.parent / "manifest.json").read_text())
+        assert manifest["resolved_visual_direction"] == (
+            logo.resolved_visual_direction.as_dict()
+        )
         assert service.generate(plan, theme, archetype, BrandAssetType.LOGO) == logo
         assert len(store.brand_assets(plan.brand_plan_id)) == 1
 

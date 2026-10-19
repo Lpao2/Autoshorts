@@ -17,6 +17,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from autoshorts.asset_visual_direction import (
+    ResolvedAssetVisualDirection,
+    resolve_asset_visual_direction,
+)
 from autoshorts.brand_planning import PlannedBrandStatus, PlannedChannelBrand
 from autoshorts.theme_catalog import ChannelArchetype, ThemeTemplate
 
@@ -51,6 +55,7 @@ class GeneratedBrandAsset:
     version: int = 0
     preview_path: Path | None = None
     delivery_path: Path | None = None
+    resolved_visual_direction: ResolvedAssetVisualDirection | None = None
 
 
 class BrandImageProvider(Protocol):
@@ -83,8 +88,8 @@ BANNER_MAX_BYTES = 6 * 1024 * 1024
 _GLOBAL_RULES = """Crie uma identidade visual original e não oficial.
 Não reproduza logos existentes, trade dress, personagens protegidos, brasões
 oficiais de times ou marcas oficiais de jogos. Não inclua watermark do gerador,
-mockup de produto, UI do YouTube, URL ou @handle. Preserve alto contraste,
-leitura clara e uma composição profissional."""
+mockup de produto, UI do YouTube, URL ou @handle. Preserve o nível de contraste
+resolvido, leitura clara e uma composição profissional."""
 
 
 def brand_asset_prompt(
@@ -92,8 +97,12 @@ def brand_asset_prompt(
     theme: ThemeTemplate,
     archetype: ChannelArchetype,
     brand: PlannedChannelBrand,
+    resolved_direction: ResolvedAssetVisualDirection | None = None,
 ) -> str:
     width, height = ASSET_SPECS[asset_type]
+    resolved = resolved_direction or resolve_asset_visual_direction(
+        theme, archetype, brand
+    )
     tagline_context = (
         f"Tagline: {brand.tagline}. " if asset_type == BrandAssetType.LOGO else ""
     )
@@ -104,14 +113,13 @@ def brand_asset_prompt(
         f"Marca: {brand.public_name}. Descrição: {brand.description}. "
         f"{tagline_context}Palavras-chave: "
         f"{', '.join(brand.brand_keywords)}.\n"
-        f"Direção visual: {brand.visual_direction}. Paleta: "
-        f"{', '.join(brand.palette)}.\n"
+        f"Paleta: {', '.join(brand.palette)}.\n"
     )
     if asset_type == BrandAssetType.LOGO:
         specific = (
             f"Brief: {brand.logo_brief}\n"
             "Crie um master quadrado 1024x1024, logo-brand, símbolo ou monograma "
-            "icônico, composição simples, alto contraste, poucos elementos e "
+            "icônico, composição simples, contraste apropriado, poucos elementos e "
             "legibilidade em tamanho pequeno. Prefira não usar texto; se "
             f"indispensável, use somente o nome exato '{brand.public_name}'."
         )
@@ -136,7 +144,10 @@ def brand_asset_prompt(
             f"somente o nome exato '{brand.public_name}', sem tagline, slogan, "
             "handle ou URL. Não coloque informação importante nas extremidades."
         )
-    return f"{_GLOBAL_RULES}\n\n{shared}{specific}\nSaída: {width}x{height}."
+    return (
+        f"{_GLOBAL_RULES}\n\n{resolved.prompt_block()}\n\n"
+        f"{shared}{specific}\nSaída: {width}x{height}."
+    )
 
 
 def brand_asset_root(project_root: Path, brand: PlannedChannelBrand) -> Path:
@@ -399,9 +410,17 @@ class BrandAssetService:
         )
         try:
             master = staging / "master.png"
-            prompt = prompt_override or brand_asset_prompt(
-                asset_type, theme, archetype, brand
-            )
+            resolved_direction = resolve_asset_visual_direction(theme, archetype, brand)
+            if prompt_override:
+                prompt = f"{resolved_direction.prompt_block()}\n\n{prompt_override}"
+            else:
+                prompt = brand_asset_prompt(
+                    asset_type,
+                    theme,
+                    archetype,
+                    brand,
+                    resolved_direction,
+                )
             if asset_type == BrandAssetType.LOGO:
                 generated = self.provider.generate_logo(
                     brand, output_path=master, prompt=prompt
@@ -430,6 +449,7 @@ class BrandAssetService:
                 version=version,
                 preview_path=final / "preview.png",
                 delivery_path=delivery,
+                resolved_visual_direction=resolved_direction,
             )
             manifest = _asset_manifest(final_asset)
             (staging / "manifest.json").write_text(
@@ -473,6 +493,11 @@ def _asset_manifest(asset: GeneratedBrandAsset) -> dict[str, object]:
     payload["file_path"] = str(asset.file_path)
     payload["preview_path"] = str(asset.preview_path) if asset.preview_path else None
     payload["delivery_path"] = str(asset.delivery_path) if asset.delivery_path else None
+    payload["resolved_visual_direction"] = (
+        asset.resolved_visual_direction.as_dict()
+        if asset.resolved_visual_direction
+        else None
+    )
     return payload
 
 
@@ -496,5 +521,10 @@ def _asset_from_manifest(payload: dict[str, object]) -> GeneratedBrandAsset:
         else None,
         delivery_path=Path(str(payload["delivery_path"]))
         if payload.get("delivery_path")
+        else None,
+        resolved_visual_direction=ResolvedAssetVisualDirection.from_dict(
+            payload["resolved_visual_direction"]
+        )
+        if payload.get("resolved_visual_direction")
         else None,
     )

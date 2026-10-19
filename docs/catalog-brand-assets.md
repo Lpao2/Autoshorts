@@ -22,11 +22,23 @@ central de 1235×338. Masters nunca são sobrescritos. Uma regeneração cria a
 próxima versão e apenas uma versão por Brand Plan/tipo pode ficar `APPROVED`;
 aprovar outra versão transforma a anterior em `RETIRED`.
 
-O prompt global de banners usa linguagem de design de marca minimalista: fundo
-forte, um motivo dominante, nome e espaço negativo generoso. Ele limita elementos
+O prompt global de banners usa linguagem de design de marca minimalista: um
+motivo dominante, nome e espaço negativo generoso. Ele limita elementos
 decorativos e rejeita explicitamente densidade típica de concept art, wallpaper,
 pseudo UI/HUD e ilustração excessivamente ornamentada. Tagline, handle e URL não
 entram nos banners.
+
+Antes de compor prompts de logo ou banner, o resolver puro
+`ResolvedAssetVisualDirection` combina descrição e tags do tema, estratégia de
+fontes, tom e instruções do arquétipo, direção visual, audiência, preferências,
+descrição, keywords, palette e briefs do Brand Plan. Ele resolve mood, contraste,
+densidade, linguagem de formas, energia e temperatura. O nome do tema não entra
+como atalho. Minimalismo e energia são eixos independentes: uma marca energética
+pode continuar esparsa, com uma única forma forte e muito espaço negativo.
+
+A direção resolvida é incluída explicitamente no prompt, inclusive quando há um
+prompt manual complementar, e é persistida no manifest e no SQLite. Assim, cada
+geração futura pode ser reproduzida e auditada sem acoplamento ao provider.
 
 O manifest no filesystem permite reconciliar uma publicação concluída antes de
 seu INSERT no SQLite. Pastas `.tmp-*` são descartadas e nunca contam como asset.
@@ -34,9 +46,11 @@ A fila ignora versões `VALIDATED` ou `APPROVED`, portanto retoma apenas itens
 pendentes. A concorrência é deliberadamente limitada a um worker enquanto a
 execução compartilha uma conexão SQLite.
 
-O schema v15 estende `brand_asset_metadata` com versão, tamanho, preview e path
-de entrega. Geração termina em `VALIDATED`; aprovação e rejeição são ações
-humanas separadas na Biblioteca de temas.
+O schema v16 mantém versão, tamanho, preview e path de entrega e acrescenta
+`resolved_visual_direction_json` a `brand_asset_metadata`. Geração termina em
+`VALIDATED`; aprovação e rejeição são ações humanas separadas na Biblioteca de
+temas. Assets anteriores à v16 permanecem com esse campo nulo, sem provenance
+retroativa inventada.
 
 `FakeBrandImageProvider` cobre testes sem rede. `PreparedFileBrandImageProvider`
 integra imagens reais produzidas por um provider fora do processo, normalizando

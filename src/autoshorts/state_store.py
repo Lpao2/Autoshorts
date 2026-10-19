@@ -44,7 +44,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 class VideoStatus(StrEnum):
@@ -1101,8 +1101,8 @@ class StateStore:
                 """INSERT INTO brand_asset_metadata
                 (brand_plan_id, asset_type, file_path, provider, model, prompt,
                  width, height, checksum, created_at, status, version, file_size,
-                 preview_path, delivery_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 preview_path, delivery_path, resolved_visual_direction_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(brand_plan_id, asset_type, version) DO NOTHING""",
                 (
                     asset.brand_plan_id,
@@ -1120,6 +1120,9 @@ class StateStore:
                     asset.file_size,
                     str(asset.preview_path) if asset.preview_path else None,
                     str(asset.delivery_path) if asset.delivery_path else None,
+                    json.dumps(asset.resolved_visual_direction.as_dict())
+                    if asset.resolved_visual_direction
+                    else None,
                 ),
             )
 
@@ -1752,7 +1755,7 @@ class StateStore:
                     checksum TEXT NOT NULL, created_at TEXT NOT NULL,
                     status TEXT NOT NULL, version INTEGER NOT NULL,
                     file_size INTEGER NOT NULL, preview_path TEXT,
-                    delivery_path TEXT,
+                    delivery_path TEXT, resolved_visual_direction_json TEXT,
                     UNIQUE(brand_plan_id, asset_type, version),
                     FOREIGN KEY (brand_plan_id)
                         REFERENCES planned_channel_brands(brand_plan_id)
@@ -1806,6 +1809,9 @@ class StateStore:
             version = 14
         if version == 14:
             self._migrate_v14_to_v15()
+            version = 15
+        if version == 15:
+            self._migrate_v15_to_v16()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -2148,12 +2154,23 @@ class StateStore:
                 """
             )
 
+    def _migrate_v15_to_v16(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE brand_asset_metadata
+                    ADD COLUMN resolved_visual_direction_json TEXT;
+                PRAGMA user_version = 16;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
 def _brand_asset_record(row):
+    from autoshorts.asset_visual_direction import ResolvedAssetVisualDirection
     from autoshorts.brand_assets import (
         BrandAssetStatus,
         BrandAssetType,
@@ -2176,6 +2193,11 @@ def _brand_asset_record(row):
         row["version"],
         Path(row["preview_path"]) if row["preview_path"] else None,
         Path(row["delivery_path"]) if row["delivery_path"] else None,
+        ResolvedAssetVisualDirection.from_dict(
+            json.loads(row["resolved_visual_direction_json"])
+        )
+        if row["resolved_visual_direction_json"]
+        else None,
     )
 
 
