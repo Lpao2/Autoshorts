@@ -1,3 +1,7 @@
+from dataclasses import replace
+
+import pytest
+
 from autoshorts.automation_config import PublishingChannel
 from autoshorts.brand_identity import (
     BrandCandidate,
@@ -112,10 +116,7 @@ def test_persists_sixty_plans_with_recovery_and_no_fake_channels(tmp_path):
                 ),
             )
             ranking = BrandRerankResult(
-                tuple(
-                    (slot, f"Marca {theme_index} {slot} 0")
-                    for slot in (1, 2, 3)
-                ),
+                tuple((slot, f"Marca {theme_index} {slot} 0") for slot in (1, 2, 3)),
                 tuple((slot, "Razão") for slot in (1, 2, 3)),
                 "test",
                 "test",
@@ -138,10 +139,40 @@ def test_persists_sixty_plans_with_recovery_and_no_fake_channels(tmp_path):
                 rerank_usage=ranking.usage,
             )
         assert len(store.planned_channel_brands()) == 60
-        assert store.connection.execute(
-            "SELECT COUNT(*) FROM catalog_brand_candidates"
-        ).fetchone()[0] == 300
         assert (
-            store.catalog_brand_generation(themes[0].theme_key)["status"]
-            == "RERANKED"
+            store.connection.execute(
+                "SELECT COUNT(*) FROM catalog_brand_candidates"
+            ).fetchone()[0]
+            == 300
         )
+        assert (
+            store.catalog_brand_generation(themes[0].theme_key)["status"] == "RERANKED"
+        )
+
+        approved = tuple(
+            replace(item, status=PlannedBrandStatus.APPROVED)
+            for item in store.planned_channel_brands()
+        )
+        store.approve_planned_channel_brands(
+            approved, provenance="HUMAN_REVIEW", review_note="Test review"
+        )
+        assert {item.status for item in store.planned_channel_brands()} == {
+            PlannedBrandStatus.APPROVED
+        }
+        assert {item.version for item in store.planned_channel_brands()} == {2}
+        history = store.connection.execute(
+            "SELECT snapshot_json, provenance FROM planned_channel_brand_history"
+        ).fetchall()
+        assert len(history) == 60
+        assert {row["provenance"] for row in history} == {"HUMAN_REVIEW"}
+        assert all("PROPOSED_FOR_REVIEW" in row["snapshot_json"] for row in history)
+
+
+def test_review_rejects_an_incomplete_plan_set(tmp_path):
+    with StateStore(tmp_path / "state.db") as store:
+        with pytest.raises(ValueError, match="complete existing"):
+            store.approve_planned_channel_brands(
+                (replace(plan(), status=PlannedBrandStatus.APPROVED),),
+                provenance="HUMAN_REVIEW",
+                review_note="Incomplete review",
+            )

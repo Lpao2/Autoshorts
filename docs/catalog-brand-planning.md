@@ -3,7 +3,10 @@
 `PlannedChannelBrand` pertence a um `ThemeTemplate` e slot, não a um canal
 operacional. Seus IDs são estáveis e seus handles permanecem `UNKNOWN`. O estado
 `PROPOSED_FOR_REVIEW` significa que o vencedor automático ainda requer decisão
-humana; não equivale a um `ChannelBrandKit` aprovado.
+humana; não equivale a um `ChannelBrandKit` aprovado. Após a revisão completa,
+`APPROVED` libera o plano para a futura geração de assets sem materializar um
+canal operacional. O schema v14 arquiva a versão anterior em
+`planned_channel_brand_history`, com provenance e nota da revisão.
 
 Cada tema possui uma geração coordenada de 15 candidatos e um reranking conjunto
 de três vencedores. Geração, candidatos, usage e reranking ficam persistidos por

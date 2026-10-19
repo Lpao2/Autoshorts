@@ -18,11 +18,13 @@ from autoshorts.brand_identity import (
     BrandKitStatus,
     ChannelBrandKit,
     HandleAvailability,
+    normalize_handle_candidate,
 )
 from autoshorts.brand_planning import (
     PlannedBrandStatus,
     PlannedChannelBrand,
     PlannedIdentityAssignment,
+    global_brand_collisions,
 )
 from autoshorts.theme_catalog import (
     AuthorizationStatus,
@@ -42,7 +44,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 class VideoStatus(StrEnum):
@@ -990,6 +992,105 @@ class StateStore:
             for row in rows
         )
 
+    def approve_planned_channel_brands(
+        self,
+        plans: tuple[PlannedChannelBrand, ...],
+        *,
+        provenance: str,
+        review_note: str,
+    ) -> None:
+        """Atomically archive and approve a complete human-reviewed brand plan set."""
+        current = self.planned_channel_brands()
+        if not current or {item.brand_plan_id for item in plans} != {
+            item.brand_plan_id for item in current
+        }:
+            raise ValueError(
+                "Review must include the complete existing brand plan set."
+            )
+        if any(
+            item.status != PlannedBrandStatus.PROPOSED_FOR_REVIEW for item in current
+        ):
+            raise ValueError("Only plans proposed for review can be approved.")
+        if any(item.status != PlannedBrandStatus.APPROVED for item in plans):
+            raise ValueError("Every reviewed plan must have APPROVED status.")
+        if any(
+            item.handle_availability != HandleAvailability.UNKNOWN for item in plans
+        ):
+            raise ValueError("Manual review must not infer handle availability.")
+
+        def normalize(value: str) -> str:
+            return "".join(
+                character for character in value.casefold() if character.isalnum()
+            )
+
+        names = [normalize(item.public_name) for item in plans]
+        preferred = [normalize(item.preferred_handle) for item in plans]
+        if len(names) != len(set(names)):
+            raise ValueError("Reviewed public names must be globally unique.")
+        if len(preferred) != len(set(preferred)):
+            raise ValueError("Reviewed preferred handles must be globally unique.")
+        for item in plans:
+            handles = (item.preferred_handle, *item.backup_handles)
+            if any(normalize_handle_candidate(handle) != handle for handle in handles):
+                raise ValueError("Every reviewed handle must already be normalized.")
+            normalized = [normalize(handle) for handle in handles]
+            if len(handles) != 3 or len(normalized) != len(set(normalized)):
+                raise ValueError(
+                    "Each plan must have three distinct normalized handles."
+                )
+        if global_brand_collisions(plans):
+            raise ValueError("Reviewed plans must pass global collision validation.")
+
+        now = _now()
+        by_id = {item.brand_plan_id: item for item in plans}
+        with self.connection:
+            for previous in current:
+                reviewed = by_id[previous.brand_plan_id]
+                snapshot = json.dumps(asdict(previous), ensure_ascii=False)
+                self.connection.execute(
+                    """INSERT INTO planned_channel_brand_history
+                    (brand_plan_id, version, snapshot_json, provenance, review_note,
+                     archived_at)
+                    VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        previous.brand_plan_id,
+                        previous.version,
+                        snapshot,
+                        provenance,
+                        review_note,
+                        now,
+                    ),
+                )
+                self.connection.execute(
+                    """UPDATE planned_channel_brands SET
+                    public_name=?, preferred_handle=?, backup_handles_json=?,
+                    handle_availability=?, description=?, tagline=?,
+                    brand_keywords_json=?, visual_direction=?, palette_json=?,
+                    logo_brief=?, banner_brief=?, status=?, provider=?, model=?,
+                    version=?, source_generation_id=?, updated_at=?
+                    WHERE brand_plan_id=?""",
+                    (
+                        reviewed.public_name,
+                        reviewed.preferred_handle,
+                        json.dumps(reviewed.backup_handles, ensure_ascii=False),
+                        reviewed.handle_availability,
+                        reviewed.description,
+                        reviewed.tagline,
+                        json.dumps(reviewed.brand_keywords, ensure_ascii=False),
+                        reviewed.visual_direction,
+                        json.dumps(reviewed.palette),
+                        reviewed.logo_brief,
+                        reviewed.banner_brief,
+                        reviewed.status,
+                        reviewed.provider,
+                        reviewed.model,
+                        previous.version + 1,
+                        previous.source_generation_id,
+                        now,
+                        previous.brand_plan_id,
+                    ),
+                )
+
     def approve_brand_kit(self, kit: ChannelBrandKit) -> ChannelBrandKit:
         if kit.status != BrandKitStatus.APPROVED:
             raise ValueError("Approval requires APPROVED status.")
@@ -1530,6 +1631,16 @@ class StateStore:
                         REFERENCES planned_channel_brands(brand_plan_id)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS planned_channel_brand_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    brand_plan_id TEXT NOT NULL, version INTEGER NOT NULL,
+                    snapshot_json TEXT NOT NULL, provenance TEXT NOT NULL,
+                    review_note TEXT NOT NULL, archived_at TEXT NOT NULL,
+                    UNIQUE(brand_plan_id, version),
+                    FOREIGN KEY (brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id)
+                        ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS brand_asset_metadata (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, brand_plan_id TEXT NOT NULL,
                     asset_type TEXT NOT NULL, file_path TEXT NOT NULL,
@@ -1580,6 +1691,9 @@ class StateStore:
             version = 12
         if version == 12:
             self._migrate_v12_to_v13()
+            version = 13
+        if version == 13:
+            self._migrate_v13_to_v14()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -1882,6 +1996,24 @@ class StateStore:
                         ON DELETE CASCADE
                 );
                 PRAGMA user_version = 13;
+                """
+            )
+
+    def _migrate_v13_to_v14(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE planned_channel_brand_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    brand_plan_id TEXT NOT NULL, version INTEGER NOT NULL,
+                    snapshot_json TEXT NOT NULL, provenance TEXT NOT NULL,
+                    review_note TEXT NOT NULL, archived_at TEXT NOT NULL,
+                    UNIQUE(brand_plan_id, version),
+                    FOREIGN KEY (brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id)
+                        ON DELETE CASCADE
+                );
+                PRAGMA user_version = 14;
                 """
             )
 
