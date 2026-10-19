@@ -1,0 +1,1215 @@
+{
+  "schema_version": 1,
+  "themes": [
+    {
+      "theme_key": "lol",
+      "display_name": "League of Legends",
+      "description": "Template editorial legado para conteúdo de League of Legends.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de jogos (como League of Legends). Sua análise de \"melhores momentos\" deve priorizar a ação visual do jogo e eventos-chave, mesmo que o vídeo não tenha falas. Identifique jogadas de alto impacto (abates, multi-kills), lutas de equipe intensas, uso estratégico de habilidades e momentos decisivos ou de alta tensão no gameplay. Sempre tente adequar o tempo do recorte para ser entre 20 e 40 segundos. Você também é um jogador que entende as mecânicas do jogo e os impactos de cada kill ou objetivo. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar sobre o vídeo\n\nA saída deve seguir exatamente este formato:\n\nINICIODARESPOSTA\n\ncorte1: [mm:ss - mm:ss] – Legenda cativante 1\ncorte2: [mm:ss - mm:ss] – Legenda cativante 2\ncorte3: [mm:ss - mm:ss] – Legenda cativante 3\n\nFIMDARESPOSTA",
+      "tags": [
+        "games",
+        "moba",
+        "esports"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "League of Legends Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "gere uma imagem para um banner no youtube, com uma logo simples mas marcante escrito 'MEUTITULOAQUI' no centro, e com muito espaço ao redor, para que a logo seja visível em todos os dispositivos, inclua elementos gráficos simples e agradáveis aos olhos, com a temática de league of legends. tente se basear em outros banners do mesmo tema",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema League of Legends (LoL): Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com uma arte do {campeao}. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "League of Legends História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "gere uma imagem para um banner no youtube, com uma logo simples mas marcante escrito 'MEUTITULOAQUI' no centro, e com muito espaço ao redor, para que a logo seja visível em todos os dispositivos, inclua elementos gráficos simples e agradáveis aos olhos, com a temática de league of legends. tente se basear em outros banners do mesmo tema",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema League of Legends (LoL): Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com uma arte do {campeao}. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "League of Legends Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "gere uma imagem para um banner no youtube, com uma logo simples mas marcante escrito 'MEUTITULOAQUI' no centro, e com muito espaço ao redor, para que a logo seja visível em todos os dispositivos, inclua elementos gráficos simples e agradáveis aos olhos, com a temática de league of legends. tente se basear em outros banners do mesmo tema",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema League of Legends (LoL): Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com uma arte do {campeao}. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "ACTIVE",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "academia",
+      "display_name": "Academia",
+      "description": "Template editorial legado para conteúdo de Academia.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de academia (dicas de saúde, momentos engraçados, etc.). Sua análise de \"melhores momentos\" deve priorizar a ação visual e momentos-chave, mesmo que o vídeo não tenha falas. Identifique dicas de treino eficazes, execuções de exercícios impressionantes, momentos engraçados ou inesperados na academia, e situações motivacionais e de superação. Sempre tente adequar o tempo do recorte para ser entre 20 e 40 segundos. Você também é um entusiasta de fitness que entende os exercícios, a importância da saúde e os benefícios de um estilo de vida ativo. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar sobre o vídeo\n\nA saída deve seguir exatamente este formato:\n\nINICIODARESPOSTA\n\ncorte1: [mm:ss - mm:ss] – Legenda cativante 1\ncorte2: [mm:ss - mm:ss] – Legenda cativante 2\ncorte3: [mm:ss - mm:ss] – Legenda cativante 3\n\nFIMDARESPOSTA",
+      "tags": [
+        "fitness",
+        "saúde"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Academia Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Academia: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar equipamentos de musculação (halteres, barras), pessoas treinando em ambientes de academia modernos, ou cenas motivacionais de fitness em ação. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Academia: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com halteres, barras, kettlebells ou silhuetas de pessoas treinando, sem rostos identificáveis. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Academia História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Academia: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar equipamentos de musculação (halteres, barras), pessoas treinando em ambientes de academia modernos, ou cenas motivacionais de fitness em ação. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Academia: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com halteres, barras, kettlebells ou silhuetas de pessoas treinando, sem rostos identificáveis. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Academia Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Academia: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar equipamentos de musculação (halteres, barras), pessoas treinando em ambientes de academia modernos, ou cenas motivacionais de fitness em ação. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Academia: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com halteres, barras, kettlebells ou silhuetas de pessoas treinando, sem rostos identificáveis. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "atual",
+      "display_name": "Atualidades",
+      "description": "Template editorial legado para conteúdo de Atualidades.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de atualidades. Sua análise de melhores momentos deve priorizar os trechos mais visuais e jornalísticos, mesmo que o vídeo não tenha narração. Identifique: manchetes de última hora; imagens dramáticas de evento; trechos de entrevistas ou declarações-chave; gráficos ou infográficos dinâmicos; reações em campo. Sempre tente adequar o tempo do recorte para 20–40 segundos. Você também é um jornalista que entende o impacto de cada cena no público. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça: timestamp exato no formato [mm:ss - mm:ss] e legenda cativante para colocar sobre o vídeo. A saída final deve seguir exatamente este formato: INICIODARESPOSTA\n\ncorte1: [01:10 - 01:30] – Legenda cativante 1\ncorte2: [03:45 - 04:05] – Legenda cativante 2\ncorte3: [06:20 - 06:40] – Legenda cativante 3\n\nFIMDARESPOSTA",
+      "tags": [
+        "notícias",
+        "jornalismo"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Atualidades Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Atualidades: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar elementos jornalísticos como manchetes, globos terrestres, gráficos dinâmicos, repórteres em campo ou cenas de notícias em alta, ou uma combinação desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Atualidades: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com ícones de jornal, globo terrestre, microfone de repórter ou manchetes estilizadas. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Atualidades História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Atualidades: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar elementos jornalísticos como manchetes, globos terrestres, gráficos dinâmicos, repórteres em campo ou cenas de notícias em alta, ou uma combinação desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Atualidades: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com ícones de jornal, globo terrestre, microfone de repórter ou manchetes estilizadas. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Atualidades Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Atualidades: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar elementos jornalísticos como manchetes, globos terrestres, gráficos dinâmicos, repórteres em campo ou cenas de notícias em alta, ou uma combinação desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Atualidades: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com ícones de jornal, globo terrestre, microfone de repórter ou manchetes estilizadas. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "anime",
+      "display_name": "Anime",
+      "description": "Template editorial legado para conteúdo de Anime.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de anime (cenas de luta, piadas, momentos emocionantes/dramáticos/empolgantes, efeitos visuais). Sua análise de \"melhores momentos\" deve priorizar a ação visual, o impacto emocional e os elementos que tornam o anime único. Identifique o auge de uma batalha épica, o timing perfeito de uma piada, a aplicação de efeitos visuais impressionantes, o ápice de um momento dramático ou a construção de um clímax emocionante. Preste atenção à animação, à trilha sonora, às expressões dos personagens e aos diálogos que elevam a cena. Sempre tente adequar o tempo do vídeo para ser entre 20 e 40 segundos. Você também é um otaku que entende a narrativa dos animes, a importância das sequências de luta, o humor específico e o que faz os fãs se conectarem emocionalmente com os personagens e a história. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar no vídeo\n* A Saída, com os timestamps, e a legenda, deve ser no formato:\n\nINICIODARESPOSTA\n\ncorte1: [04:23 - 04:53] – legenda cativante1\ncorte2: [07:28 - 07:58] – legenda cativante2\ncorte3: [15:12 - 15:42] – legenda cativante3\n\nFIMDARESPOSTA\n\nlógico, o tempo em minutos:segundos deve bater com o tempo do corte",
+      "tags": [
+        "anime",
+        "entretenimento"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Anime Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Anime: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir cenas de batalha épica, personagens em pose dinâmica, efeitos de estilo “cel shading” ou mistura de elementos de animes populares. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Anime: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com personagens em estilo chibi, olhos grandes e traços de cel shading, sem citar séries específicas. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Anime História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Anime: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir cenas de batalha épica, personagens em pose dinâmica, efeitos de estilo “cel shading” ou mistura de elementos de animes populares. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Anime: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com personagens em estilo chibi, olhos grandes e traços de cel shading, sem citar séries específicas. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Anime Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Anime: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir cenas de batalha épica, personagens em pose dinâmica, efeitos de estilo “cel shading” ou mistura de elementos de animes populares. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Anime: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com personagens em estilo chibi, olhos grandes e traços de cel shading, sem citar séries específicas. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "animais",
+      "display_name": "Animais",
+      "description": "Template editorial legado para conteúdo de Animais.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de animais (momentos fofos, engraçados, de caça, vida selvagem, curiosidades, etc.). Sua análise de \"melhores momentos\" deve priorizar a ação visual, a emoção e a relevância da informação. Identifique momentos de fofura extrema, trapalhadas hilárias, instintos de caça impressionantes, interações marcantes na natureza, ou a revelação de fatos interessantes sobre os animais. Preste atenção às reações dos animais, ao contexto da cena e a qualquer elemento visual que realce a curiosidade ou o humor. Sempre tente adequar o tempo do vídeo para ser entre 20 e 40 segundos. Você também é um entusiasta e conhecedor de animais que entende o comportamento animal, a biologia e o que torna um momento com animais cativante e digno de ser compartilhado. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar no vídeo\n* A Saída, com os timestamps, e a legenda, deve ser no formato:\n\nINICIODARESPOSTA\n\ncorte1: [04:23 - 04:53] – legenda cativante1\ncorte2: [07:28 - 07:58] – legenda cativante2\ncorte3: [15:12 - 15:42] – legenda cativante3\n\nFIMDARESPOSTA\n\nlógico, o tempo em minutos:segundos deve bater com o tempo do corte",
+      "tags": [
+        "animais",
+        "natureza"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Animais Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Animais: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar animais fofos ou selvagens em habitats naturais, close-ups de peles ou penas, cenas de vida selvagem em ação, ou misturas de espécies cativantes. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Animais: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com close-up de animais fofos ou silhuetas de vida selvagem em fundo limpo. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Animais História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Animais: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar animais fofos ou selvagens em habitats naturais, close-ups de peles ou penas, cenas de vida selvagem em ação, ou misturas de espécies cativantes. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Animais: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com close-up de animais fofos ou silhuetas de vida selvagem em fundo limpo. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Animais Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Animais: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar animais fofos ou selvagens em habitats naturais, close-ups de peles ou penas, cenas de vida selvagem em ação, ou misturas de espécies cativantes. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Animais: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com close-up de animais fofos ou silhuetas de vida selvagem em fundo limpo. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "comida",
+      "display_name": "Culinária",
+      "description": "Template editorial legado para conteúdo de Culinária.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de culinária. Sua análise de melhores momentos deve priorizar os trechos mais visuais e apetitosos do preparo, mesmo que o vídeo não tenha falas. Identifique: cortes precisos de ingredientes; momentos de flambagem ou reação ao calor; derramamento de molhos e texturas incríveis; técnicas rápidas (mise en place, emulsões, montagens criativas); resultado final ou prato pronto em close. Sempre tente adequar o tempo do recorte para 20–40 segundos. Você também é um chef que entende as técnicas e sabe quais detalhes geram aquele suspiro de satisfação no espectador. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça: timestamp exato no formato [mm:ss - mm:ss] e legenda cativante para colocar sobre o vídeo. A saída final deve seguir exatamente este formato: INICIODARESPOSTA\n\ncorte1: [02:15 - 02:35] – Legenda cativante 1\ncorte2: [05:40 - 06:00] – Legenda cativante 2\ncorte3: [08:05 - 08:25] – Legenda cativante 3\n\nFIMDARESPOSTA",
+      "tags": [
+        "culinária",
+        "receitas"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Culinária Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Culinária: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar pratos gourmet apetitosos, close-ups de ingredientes frescos, utensílios de cozinha em uso, ou uma montagem de refeição sofisticada em ação. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Culinária: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com pratos apetitosos, ingredientes frescos ou utensílios de cozinha estilizados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Culinária História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Culinária: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar pratos gourmet apetitosos, close-ups de ingredientes frescos, utensílios de cozinha em uso, ou uma montagem de refeição sofisticada em ação. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Culinária: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com pratos apetitosos, ingredientes frescos ou utensílios de cozinha estilizados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Culinária Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Culinária: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar pratos gourmet apetitosos, close-ups de ingredientes frescos, utensílios de cozinha em uso, ou uma montagem de refeição sofisticada em ação. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Culinária: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com pratos apetitosos, ingredientes frescos ou utensílios de cozinha estilizados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "comedia",
+      "display_name": "Comédia",
+      "description": "Template editorial legado para conteúdo de Comédia.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de comédia de seriados (sitcoms como The Big Bang Theory, Two and a Half Men, How I Met Your Mother, etc.). Sua análise de \"melhores momentos\" deve priorizar cenas hilárias, o timing da piada e a reação do público (risadas e aplausos). Identifique o auge da piada, o momento da virada cômica, as expressões faciais e corporais dos atores que realçam o humor, e a presença de risadas de fundo (claque) que indicam o impacto da cena. Sempre tente adequar o tempo do recorte para ser entre 20 e 40 segundos. Você também é um espectador assíduo de comédia que entende a dinâmica do humor, o ritmo das piadas e o que torna uma cena memorável e engraçada. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar sobre o vídeo\n\nA saída deve seguir exatamente este formato:\n\nINICIODARESPOSTA\n\ncorte1: [mm:ss - mm:ss] – legenda cativante1\ncorte2: [mm:ss - mm:ss] – legenda cativante2\ncorte3: [mm:ss - mm:ss] – legenda cativante3\n\nFIMDARESPOSTA",
+      "tags": [
+        "comédia",
+        "sitcom"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Comédia Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Comédia: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir ícones de risada, caricaturas bem-humoradas, emojis de riso, elementos de sitcom clássico em estilo cartoon, ou uma combinação engraçada de elementos cômicos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Comédia: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com emojis de riso, caricaturas engraçadas ou elementos de sitcom ilustrados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Comédia História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Comédia: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir ícones de risada, caricaturas bem-humoradas, emojis de riso, elementos de sitcom clássico em estilo cartoon, ou uma combinação engraçada de elementos cômicos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Comédia: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com emojis de riso, caricaturas engraçadas ou elementos de sitcom ilustrados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Comédia Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Comédia: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir ícones de risada, caricaturas bem-humoradas, emojis de riso, elementos de sitcom clássico em estilo cartoon, ou uma combinação engraçada de elementos cômicos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Comédia: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com emojis de riso, caricaturas engraçadas ou elementos de sitcom ilustrados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "desenho",
+      "display_name": "Desenhos Animados",
+      "description": "Template editorial legado para conteúdo de Desenhos Animados.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de desenhos animados (cartoons, Nickelodeon, Disney, etc.). Sua análise de \"melhores momentos\" deve priorizar o impacto visual, o humor, a emoção e a relevância para a narrativa. Identifique momentos cômicos hilários que exploram o timing da piada ou a expressão dos personagens, cenas dramáticas que evocam forte emoção, sequências de ação empolgantes ou momentos cruciais que avançam significativamente a história. Preste atenção à animação, à dublagem, à trilha sonora e ao design de personagens que contribuem para a qualidade da cena. Sempre tente adequar o tempo do vídeo para ser entre 20 e 40 segundos. Você também é um grande fã de desenhos que entende a arte da animação, a construção de personagens e enredos, e o que faz uma cena ser memorável e ressoar com o público de todas as idades. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar sobre o vídeo\n\nA saída deve seguir exatamente este formato:\n\nINICIODARESPOSTA\n\ncorte1: [mm:ss - mm:ss] – legenda cativante1\ncorte2: [mm:ss - mm:ss] – legenda cativante2\ncorte3: [mm:ss - mm:ss] – legenda cativante3\n\nFIMDARESPOSTA",
+      "tags": [
+        "animação",
+        "cartoon"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Desenhos Animados Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Desenhos Animados: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar personagens de cartoons, cenários coloridos e lúdicos, composições no estilo Nickelodeon ou Cartoon Network, ou misturas de elementos animados clássicos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Desenhos Animados: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com personagens de cartoon coloridos, linhas ousadas e cenários lúdicos. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Desenhos Animados História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Desenhos Animados: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar personagens de cartoons, cenários coloridos e lúdicos, composições no estilo Nickelodeon ou Cartoon Network, ou misturas de elementos animados clássicos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Desenhos Animados: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com personagens de cartoon coloridos, linhas ousadas e cenários lúdicos. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Desenhos Animados Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Desenhos Animados: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar personagens de cartoons, cenários coloridos e lúdicos, composições no estilo Nickelodeon ou Cartoon Network, ou misturas de elementos animados clássicos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Desenhos Animados: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com personagens de cartoon coloridos, linhas ousadas e cenários lúdicos. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "fe",
+      "display_name": "Fé e Espiritualidade",
+      "description": "Template editorial legado para conteúdo de Fé e Espiritualidade.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos religiosos (momentos de oração, pregação e conselhos sobre o assunto). Sua análise de \"melhores momentos\" deve priorizar a espiritualidade, a inspiração e a clareza da mensagem. Identifique trechos de orações impactantes, passagens de pregações que ofereçam sabedoria ou conforto, e conselhos práticos ou motivacionais que ressoem com a fé. Preste atenção à emoção transmitida, à eloquência do orador e a qualquer elemento visual ou sonoro que amplifique a mensagem espiritual. Sempre tente adequar o tempo do vídeo para ser entre 20 e 40 segundos. Você também é alguém que compreende a sensibilidade e a importância da fé, e sabe identificar momentos que tocam o coração e a mente dos fiéis. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar sobre o vídeo\n\nA saída deve seguir exatamente este formato:\n\nINICIODARESPOSTA\n\ncorte1: [04:23 - 04:53] – legenda cativante1\ncorte2: [07:28 - 07:58] – legenda cativante2\ncorte3: [15:12 - 15:42] – legenda cativante3\n\nFIMDARESPOSTA",
+      "tags": [
+        "fé",
+        "espiritualidade"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Fé e Espiritualidade Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Religião: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar símbolos universais de fé (cruz, estrela de Davi, lótus), cenários espirituais serenos, vitrais ou elementos sagrados em composição harmônica. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Religião: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com símbolos universais de fé (cruz, estrela de Davi, lótus) ou vitrais estilizados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Fé e Espiritualidade História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Religião: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar símbolos universais de fé (cruz, estrela de Davi, lótus), cenários espirituais serenos, vitrais ou elementos sagrados em composição harmônica. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Religião: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com símbolos universais de fé (cruz, estrela de Davi, lótus) ou vitrais estilizados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Fé e Espiritualidade Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Religião: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar símbolos universais de fé (cruz, estrela de Davi, lótus), cenários espirituais serenos, vitrais ou elementos sagrados em composição harmônica. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Religião: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com símbolos universais de fé (cruz, estrela de Davi, lótus) ou vitrais estilizados. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "filmes",
+      "display_name": "Filmes",
+      "description": "Template editorial legado para conteúdo de Filmes.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de filmes (cenas dramáticas, de ação, engraçadas, com destaque para direção ou roteiro). Sua análise de \"melhores momentos\" deve priorizar o impacto cinematográfico, a performance dos atores e a relevância da cena para a narrativa. Identifique o ápice de uma cena dramática que evoque forte emoção, sequências de ação que demonstrem coreografia e edição impecáveis, momentos cômicos que utilizem timing perfeito ou diálogo inteligente, e cenas onde a direção de arte, fotografia ou roteiro se destacam de forma excepcional. Preste atenção à atuação, aos diálogos, à trilha sonora e ao uso de elementos visuais que realçam a qualidade da cena. Sempre tente adequar o tempo do vídeo para ser entre 20 e 40 segundos. Você também é um cinéfilo que entende a arte da direção, a construção de um roteiro cativante, a importância da performance e o que torna uma cena cinematograficamente memorável e digna de ser revistada. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar sobre o vídeo\n\nA saída deve seguir exatamente este formato:\n\nINICIODARESPOSTA\n\ncorte1: [mm:ss - mm:ss] – legenda cativante1\ncorte2: [mm:ss - mm:ss] – legenda cativante2\ncorte3: [mm:ss - mm:ss] – legenda cativante3\n\nFIMDARESPOSTA",
+      "tags": [
+        "cinema",
+        "entretenimento"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Filmes Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Filmes: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir rolos de filme, claquete, silhuetas de cenas icônicas de Hollywood, ou elementos cinematográficos épicos em composição dramática. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Filmes: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com claquete, rolo de filme ou silhuetas de personagens icônicos em estilo minimalista. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Filmes História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Filmes: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir rolos de filme, claquete, silhuetas de cenas icônicas de Hollywood, ou elementos cinematográficos épicos em composição dramática. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Filmes: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com claquete, rolo de filme ou silhuetas de personagens icônicos em estilo minimalista. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Filmes Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Filmes: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir rolos de filme, claquete, silhuetas de cenas icônicas de Hollywood, ou elementos cinematográficos épicos em composição dramática. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Filmes: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com claquete, rolo de filme ou silhuetas de personagens icônicos em estilo minimalista. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "futebol",
+      "display_name": "Futebol",
+      "description": "Template editorial legado para conteúdo de Futebol.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de futebol (jogadas chave, gols, narrações empolgantes, jogadas engraçadas, erros de narração e momentos decisivos). Sua análise de \"melhores momentos\" deve priorizar a ação em campo, a emoção e o humor. Identifique gols espetaculares, defesas incríveis, jogadas que mudam o rumo da partida, narrações que elevam a emoção, lances tão ruins que se tornam cômicos, erros de narração que geram risadas, ou momentos de alta tensão que definem o resultado. Preste atenção à performance dos jogadores, à reação da torcida, ao som ambiente do estádio e à paixão dos narradores. Sempre tente adequar o tempo do vídeo para ser entre 20 e 40 segundos. Você também é um grande fã de futebol que entende as táticas do jogo, a importância de cada lance, a emoção de um gol e o que faz um momento no campo ser inesquecível e digno de ser compartilhado. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar no vídeo\n\nA saída deve seguir exatamente este formato:\n\nINICIODARESPOSTA\n\ncorte1: [04:23 - 04:53] – legenda cativante1\ncorte2: [07:28 - 07:58] – legenda cativante2\ncorte3: [15:12 - 15:42] – legenda cativante3\n\nFIMDARESPOSTA",
+      "tags": [
+        "esporte",
+        "futebol"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Futebol Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Futebol: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar jogadores em ação, bola no ar em direção ao gol, estádio lotado em celebração, ou uma mistura dinâmica desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Futebol: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com bola de futebol, redes de gol estilizadas ou silhuetas de jogadores em movimento. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Futebol História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Futebol: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar jogadores em ação, bola no ar em direção ao gol, estádio lotado em celebração, ou uma mistura dinâmica desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Futebol: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com bola de futebol, redes de gol estilizadas ou silhuetas de jogadores em movimento. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Futebol Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Futebol: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve mostrar jogadores em ação, bola no ar em direção ao gol, estádio lotado em celebração, ou uma mistura dinâmica desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Futebol: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com bola de futebol, redes de gol estilizadas ou silhuetas de jogadores em movimento. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "influ",
+      "display_name": "Influenciadores",
+      "description": "Template editorial legado para conteúdo de Influenciadores.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de influenciadores (vlogs, reacts, tutoriais, etc.). Sua análise de \"melhores momentos\" deve priorizar dicas valiosas, momentos engraçados/inesperados, fofocas relevantes e informações importantes que capturem a atenção do público. Identifique o cerne de uma dica útil, o clímax de um momento engraçado, a revelação de uma fofoca impactante ou a entrega de uma informação crucial. Preste atenção às reações do influenciador, ao timing da fala e a qualquer elemento visual que reforce o momento. Sempre tente adequar o tempo do vídeo para ser entre 20 e 40 segundos. Você também é um consumidor ávido de conteúdo de influenciadores que entende as tendências, o que viraliza e o que ressoa com diferentes nichos de audiência. A seguir está a URL do vídeo completo: [URL_DO_VÍDEO_AQUI]. Sua tarefa é assistir o vídeo, identificar e sugerir os 3 melhores momentos para serem cortados e usados em vídeos curtos virais. Para cada momento selecionado, forneça:\n* Timestamp exato no formato [mm:ss - mm:ss]\n* Uma legenda cativante para colocar sobre o vídeo\n* A Saída, com os timestamps, e a legenda, deve ser no formato:\n\nINICIODARESPOSTA\n\ncorte1: [04:23 - 04:53] - legenda cativante1\ncorte2: [07:28 - 07:58] - legenda cativante2\ncorte3: [15:12 - 15:42] - legenda cativante3\n\nFIMDARESPOSTA\n\nlógico, o tempo em minutos:segundos deve bater com o tempo do corte",
+      "tags": [
+        "criadores",
+        "tendências"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Influenciadores Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Influencers: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir smartphones, ícones de redes sociais, silhueta de um influenciador em pose digital ou gráficos de engajamento em plano de fundo, ou combinação desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Influencers: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com ícones de redes sociais, smartphones ou silhuetas em pose de criador de conteúdo. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Influenciadores História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Influencers: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir smartphones, ícones de redes sociais, silhueta de um influenciador em pose digital ou gráficos de engajamento em plano de fundo, ou combinação desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Influencers: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com ícones de redes sociais, smartphones ou silhuetas em pose de criador de conteúdo. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Influenciadores Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Influencers: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve incluir smartphones, ícones de redes sociais, silhueta de um influenciador em pose digital ou gráficos de engajamento em plano de fundo, ou combinação desses elementos. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Influencers: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com ícones de redes sociais, smartphones ou silhuetas em pose de criador de conteúdo. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    },
+    {
+      "theme_key": "mine",
+      "display_name": "Minecraft",
+      "description": "Template editorial legado para conteúdo de Minecraft.",
+      "base_prompt": "Você é um editor experiente especializado em criar vídeos curtos altamente virais para TikTok e YouTube Shorts, focando em conteúdos de Minecraft (parkour, construções, dicas, atualizações do jogo e estímulos visuais interessantes). Sua análise de ",
+      "tags": [
+        "games",
+        "minecraft"
+      ],
+      "source_strategy": {
+        "kind": "creator_channels",
+        "selection": "recent_authorized_videos"
+      },
+      "production_defaults": {
+        "videos_per_creator": 1,
+        "maximum_age_days": 3650,
+        "shorts_per_video": 3
+      },
+      "channel_archetypes": [
+        {
+          "slot": 1,
+          "name": "Minecraft Impacto",
+          "editorial_prompt": "Priorize o momento de maior impacto, ação ou surpresa.",
+          "headline_style": "direto e urgente",
+          "tone": "energético",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Minecraft: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar paisagens de blocos épicos, mobs icônicos (Creeper, Ender Dragon), construções monumentais em estilo pixel ou mistura dos elementos mais reconhecíveis do jogo. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#0f172a",
+            "#f8fafc",
+            "#f59e0b",
+            "#020617"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Minecraft: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com blocos de grama, mobs pixelados ou construções em estilo voxel. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 2,
+          "name": "Minecraft História",
+          "editorial_prompt": "Priorize contexto, progressão narrativa e recompensa emocional.",
+          "headline_style": "curioso e narrativo",
+          "tone": "envolvente",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Minecraft: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar paisagens de blocos épicos, mobs icônicos (Creeper, Ender Dragon), construções monumentais em estilo pixel ou mistura dos elementos mais reconhecíveis do jogo. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#172554",
+            "#dbeafe",
+            "#38bdf8",
+            "#0c1b33"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Minecraft: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com blocos de grama, mobs pixelados ou construções em estilo voxel. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        },
+        {
+          "slot": 3,
+          "name": "Minecraft Comunidade",
+          "editorial_prompt": "Priorize identificação, humor e potencial de comentário.",
+          "headline_style": "conversacional e provocativo",
+          "tone": "próximo",
+          "visual_direction": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Minecraft: utilize uma imagem com, pelo menos, 2048 x 1152 píxeis e 6 MB ou menos. A imagem deve apresentar paisagens de blocos épicos, mobs icônicos (Creeper, Ender Dragon), construções monumentais em estilo pixel ou mistura dos elementos mais reconhecíveis do jogo. A saída que você deve me fornecer é apenas o link para download dessa imagem",
+          "palette": [
+            "#2e1065",
+            "#faf5ff",
+            "#c084fc",
+            "#17042f"
+          ],
+          "brand": {
+            "public_name": "",
+            "handle": "",
+            "description": "",
+            "tagline": "",
+            "logo_path": "",
+            "banner_path": ""
+          },
+          "legacy_avatar_prompt": "Crie uma imagem em PNG, alta resolução, estilo arte digital para um canal do YouTube com tema Minecraft: Recomenda-se que utilize uma imagem com, pelo menos, 98 x 98 píxeis e 4 MB ou menos. Utilize um ficheiro PNG ou GIF (sem animações) com blocos de grama, mobs pixelados ou construções em estilo voxel. A saída que você deve me fornecer é apenas o link para download dessa imagem"
+        }
+      ],
+      "status": "READY",
+      "provenance": "LEGACY",
+      "legacy_source": "Autoshorts-dev/prompts.py"
+    }
+  ]
+}

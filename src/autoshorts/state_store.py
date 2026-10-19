@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -9,10 +10,20 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
+from autoshorts.automation_config import ColorPalette
+from autoshorts.theme_catalog import (
+    BrandProfile,
+    CatalogProvenance,
+    CatalogStatus,
+    ChannelArchetype,
+    PromptVersion,
+    ThemeTemplate,
+    load_theme_seed,
+)
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class VideoStatus(StrEnum):
@@ -188,6 +199,9 @@ class StateStore:
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")
         self._initialize()
+        seed = Path(__file__).resolve().parents[2] / "config/theme-catalog.legacy.json"
+        if seed.exists():
+            self.seed_theme_templates(load_theme_seed(seed))
 
     def __enter__(self) -> StateStore:
         return self
@@ -649,6 +663,148 @@ class StateStore:
             for row in rows
         )
 
+    def list_theme_templates(self) -> tuple[ThemeTemplate, ...]:
+        rows = self.connection.execute(
+            "SELECT * FROM theme_catalog ORDER BY display_name COLLATE NOCASE"
+        ).fetchall()
+        return tuple(self._theme_template(row) for row in rows)
+
+    def get_theme_template(self, theme_key: str) -> ThemeTemplate | None:
+        row = self.connection.execute(
+            "SELECT * FROM theme_catalog WHERE theme_key = ?", (theme_key,)
+        ).fetchone()
+        return self._theme_template(row) if row else None
+
+    def save_theme_template(self, template: ThemeTemplate) -> None:
+        """Persist an intentional edit and retain the prompt version history."""
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO theme_catalog (
+                    theme_key, display_name, description, tags_json,
+                    source_strategy_json, production_defaults_json,
+                    status, provenance, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(theme_key) DO UPDATE SET
+                    display_name=excluded.display_name,
+                    description=excluded.description,
+                    tags_json=excluded.tags_json,
+                    source_strategy_json=excluded.source_strategy_json,
+                    production_defaults_json=excluded.production_defaults_json,
+                    status=excluded.status,
+                    provenance=excluded.provenance,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    template.theme_key, template.display_name, template.description,
+                    json.dumps(template.tags, ensure_ascii=False),
+                    json.dumps(template.source_strategy, ensure_ascii=False),
+                    json.dumps(template.production_defaults, ensure_ascii=False),
+                    template.status, template.provenance, now, now,
+                ),
+            )
+            self.connection.execute(
+                "DELETE FROM theme_channel_archetypes WHERE theme_key = ?",
+                (template.theme_key,),
+            )
+            for item in template.channel_archetypes:
+                self.connection.execute(
+                    """
+                    INSERT INTO theme_channel_archetypes (
+                        theme_key, slot, name, editorial_prompt, headline_style,
+                        tone, visual_direction, palette_json, brand_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        template.theme_key, item.slot, item.name,
+                        item.editorial_prompt, item.headline_style, item.tone,
+                        item.visual_direction,
+                        json.dumps([
+                            item.palette.primary, item.palette.secondary,
+                            item.palette.accent, item.palette.background,
+                        ]),
+                        json.dumps({
+                            "public_name": item.brand.public_name,
+                            "handle": item.brand.handle,
+                            "description": item.brand.description,
+                            "tagline": item.brand.tagline,
+                            "logo_path": item.brand.logo_path,
+                            "banner_path": item.brand.banner_path,
+                        }, ensure_ascii=False),
+                    ),
+                )
+            active = next((x for x in template.prompt_versions if x.active), None)
+            prompt = active.prompt if active else template.base_prompt
+            current = self.connection.execute(
+                "SELECT version, prompt FROM theme_prompt_versions "
+                "WHERE theme_key = ? ORDER BY version DESC LIMIT 1",
+                (template.theme_key,),
+            ).fetchone()
+            if current is None or current["prompt"] != prompt:
+                version = 1 if current is None else int(current["version"]) + 1
+                self.connection.execute(
+                    "UPDATE theme_prompt_versions SET active = 0 WHERE theme_key = ?",
+                    (template.theme_key,),
+                )
+                self.connection.execute(
+                    """INSERT INTO theme_prompt_versions
+                    (theme_key, version, prompt, provenance, active, created_at)
+                    VALUES (?, ?, ?, ?, 1, ?)""",
+                    (template.theme_key, version, prompt, template.provenance, now),
+                )
+
+    def seed_theme_templates(self, templates: tuple[ThemeTemplate, ...]) -> int:
+        """Insert missing templates only, preserving all existing/manual edits."""
+        inserted = 0
+        for template in templates:
+            if self.get_theme_template(template.theme_key) is None:
+                self.save_theme_template(template)
+                inserted += 1
+        return inserted
+
+    def _theme_template(self, row: sqlite3.Row) -> ThemeTemplate:
+        key = row["theme_key"]
+        prompt_rows = self.connection.execute(
+            "SELECT * FROM theme_prompt_versions WHERE theme_key = ? ORDER BY version",
+            (key,),
+        ).fetchall()
+        archetype_rows = self.connection.execute(
+            "SELECT * FROM theme_channel_archetypes WHERE theme_key = ? ORDER BY slot",
+            (key,),
+        ).fetchall()
+        prompts = tuple(
+            PromptVersion(
+                version=item["version"], prompt=item["prompt"],
+                provenance=CatalogProvenance(item["provenance"]),
+                active=bool(item["active"]), created_at=item["created_at"],
+            )
+            for item in prompt_rows
+        )
+        active = next((item.prompt for item in prompts if item.active), "")
+        archetypes = []
+        for item in archetype_rows:
+            colors = json.loads(item["palette_json"])
+            brand = json.loads(item["brand_json"])
+            archetypes.append(ChannelArchetype(
+                slot=item["slot"], name=item["name"],
+                editorial_prompt=item["editorial_prompt"],
+                headline_style=item["headline_style"], tone=item["tone"],
+                visual_direction=item["visual_direction"],
+                palette=ColorPalette(*colors), brand=BrandProfile(**brand),
+            ))
+        return ThemeTemplate(
+            theme_key=key, display_name=row["display_name"],
+            description=row["description"], base_prompt=active,
+            tags=tuple(json.loads(row["tags_json"])),
+            source_strategy=json.loads(row["source_strategy_json"]),
+            production_defaults=json.loads(row["production_defaults_json"]),
+            channel_archetypes=tuple(archetypes),
+            status=CatalogStatus(row["status"]),
+            provenance=CatalogProvenance(row["provenance"]),
+            prompt_versions=prompts,
+        )
+
     def _transition_video(
         self, youtube_id: str, status: VideoStatus, *, error: str | None = None
     ) -> None:
@@ -762,6 +918,31 @@ class StateStore:
                     last_verified_at TEXT NOT NULL,
                     status TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS theme_catalog (
+                    theme_key TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+                    description TEXT NOT NULL, tags_json TEXT NOT NULL,
+                    source_strategy_json TEXT NOT NULL,
+                    production_defaults_json TEXT NOT NULL,
+                    status TEXT NOT NULL, provenance TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS theme_prompt_versions (
+                    theme_key TEXT NOT NULL, version INTEGER NOT NULL,
+                    prompt TEXT NOT NULL, provenance TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+                    PRIMARY KEY (theme_key, version),
+                    FOREIGN KEY (theme_key) REFERENCES theme_catalog(theme_key)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS theme_channel_archetypes (
+                    theme_key TEXT NOT NULL, slot INTEGER NOT NULL,
+                    name TEXT NOT NULL, editorial_prompt TEXT NOT NULL,
+                    headline_style TEXT NOT NULL, tone TEXT NOT NULL,
+                    visual_direction TEXT NOT NULL, palette_json TEXT NOT NULL,
+                    brand_json TEXT NOT NULL, PRIMARY KEY (theme_key, slot),
+                    FOREIGN KEY (theme_key) REFERENCES theme_catalog(theme_key)
+                        ON DELETE CASCADE
+                );
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -786,6 +967,9 @@ class StateStore:
             version = 7
         if version == 7:
             self._migrate_v7_to_v8()
+            version = 8
+        if version == 8:
+            self._migrate_v8_to_v9()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -918,6 +1102,39 @@ class StateStore:
                     status TEXT NOT NULL
                 );
                 PRAGMA user_version = 8;
+                """
+            )
+
+    def _migrate_v8_to_v9(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE theme_catalog (
+                    theme_key TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+                    description TEXT NOT NULL, tags_json TEXT NOT NULL,
+                    source_strategy_json TEXT NOT NULL,
+                    production_defaults_json TEXT NOT NULL,
+                    status TEXT NOT NULL, provenance TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE theme_prompt_versions (
+                    theme_key TEXT NOT NULL, version INTEGER NOT NULL,
+                    prompt TEXT NOT NULL, provenance TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+                    PRIMARY KEY (theme_key, version),
+                    FOREIGN KEY (theme_key) REFERENCES theme_catalog(theme_key)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE theme_channel_archetypes (
+                    theme_key TEXT NOT NULL, slot INTEGER NOT NULL,
+                    name TEXT NOT NULL, editorial_prompt TEXT NOT NULL,
+                    headline_style TEXT NOT NULL, tone TEXT NOT NULL,
+                    visual_direction TEXT NOT NULL, palette_json TEXT NOT NULL,
+                    brand_json TEXT NOT NULL, PRIMARY KEY (theme_key, slot),
+                    FOREIGN KEY (theme_key) REFERENCES theme_catalog(theme_key)
+                        ON DELETE CASCADE
+                );
+                PRAGMA user_version = 9;
                 """
             )
 

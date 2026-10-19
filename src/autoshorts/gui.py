@@ -7,6 +7,7 @@ import importlib.util
 import subprocess
 import sys
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
 from queue import Empty
 from tkinter import filedialog, messagebox, ttk
@@ -45,6 +46,7 @@ from autoshorts.state_store import (
     StateStore,
     default_state_db_path,
 )
+from autoshorts.theme_catalog import CatalogProvenance, CatalogStatus
 from autoshorts.youtube_oauth import YouTubeConnectionService
 
 LABELS = {
@@ -427,8 +429,10 @@ class AutoShortsWindow:
         notebook.pack(fill="both", expand=True)
         frame = ttk.Frame(notebook, padding=16)
         automatic = ttk.Frame(notebook, padding=16)
+        catalog = ttk.Frame(notebook, padding=16)
         notebook.add(frame, text="Manual")
         notebook.add(automatic, text="Automático")
+        notebook.add(catalog, text="Biblioteca de temas")
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(9, weight=1)
         frame.rowconfigure(10, weight=1)
@@ -576,7 +580,136 @@ class AutoShortsWindow:
         )
         self.folder_button.grid(row=13, column=0, columnspan=3, sticky="e", pady=(8, 0))
         self._build_automatic_tab(automatic, settings)
+        self._build_catalog_tab(catalog)
         self.poll_id = self.root.after(75, self.poll)
+
+    def _build_catalog_tab(self, frame: ttk.Frame) -> None:
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+        ttk.Label(frame, text="Biblioteca de temas", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            frame,
+            text=("Templates editoriais reutilizáveis. Editar a biblioteca não "
+                  "ativa produção nem altera canais existentes."),
+        ).grid(row=1, column=0, sticky="w", pady=(2, 12))
+        panel = ttk.Frame(frame)
+        panel.grid(row=2, column=0, sticky="nsew")
+        panel.columnconfigure(0, weight=1)
+        panel.rowconfigure(0, weight=1)
+        self.catalog_tree = ttk.Treeview(
+            panel,
+            columns=("name", "status", "origin", "prompts", "channels"),
+            show="headings",
+        )
+        for column, label, width in (
+            ("name", "Tema", 260), ("status", "Estado", 110),
+            ("origin", "Origem", 110), ("prompts", "Versões", 80),
+            ("channels", "Arquétipos", 90),
+        ):
+            self.catalog_tree.heading(column, text=label)
+            self.catalog_tree.column(column, width=width, stretch=column == "name")
+        self.catalog_tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(panel, command=self.catalog_tree.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.catalog_tree.configure(yscrollcommand=scrollbar.set)
+        actions = ttk.Frame(frame)
+        actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(actions, text="Ver detalhes", command=self.view_catalog_theme).pack(
+            side="left"
+        )
+        ttk.Button(actions, text="Editar", command=self.edit_catalog_theme).pack(
+            side="left", padx=6
+        )
+        ttk.Button(actions, text="Atualizar", command=self.refresh_catalog).pack(
+            side="left"
+        )
+        self.catalog_tree.bind("<Double-1>", lambda _event: self.view_catalog_theme())
+        self.refresh_catalog()
+
+    def refresh_catalog(self) -> None:
+        for item in self.catalog_tree.get_children():
+            self.catalog_tree.delete(item)
+        with StateStore(self.state_db_path) as store:
+            templates = store.list_theme_templates()
+        for item in templates:
+            self.catalog_tree.insert(
+                "", "end", iid=item.theme_key,
+                values=(item.display_name, item.status, item.provenance,
+                        len(item.prompt_versions), len(item.channel_archetypes)),
+            )
+
+    def _selected_catalog_theme(self):
+        selected = self.catalog_tree.selection()
+        if not selected:
+            messagebox.showinfo("Biblioteca", "Selecione um tema.")
+            return None
+        with StateStore(self.state_db_path) as store:
+            return store.get_theme_template(selected[0])
+
+    def view_catalog_theme(self) -> None:
+        template = self._selected_catalog_theme()
+        if template is None:
+            return
+        archetypes = "\n".join(
+            f"Slot {item.slot}: {item.name} — {item.tone}"
+            for item in template.channel_archetypes
+        )
+        messagebox.showinfo(
+            template.display_name,
+            f"Estado: {template.status}\nOrigem: {template.provenance}\n"
+            f"Tags: {', '.join(template.tags)}\n\n{template.description}\n\n"
+            f"{archetypes}\n\nPrompt ativo:\n{template.base_prompt}",
+        )
+
+    def edit_catalog_theme(self) -> None:
+        template = self._selected_catalog_theme()
+        if template is None:
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Editar template — {template.display_name}")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        body = ttk.Frame(dialog, padding=16)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+        name = tk.StringVar(dialog, value=template.display_name)
+        status = tk.StringVar(dialog, value=template.status)
+        ttk.Label(body, text="Nome").grid(row=0, column=0, sticky="w")
+        ttk.Entry(body, textvariable=name, width=60).grid(row=0, column=1, sticky="ew")
+        ttk.Label(body, text="Estado").grid(row=1, column=0, sticky="w", pady=6)
+        ttk.Combobox(body, textvariable=status, values=tuple(CatalogStatus),
+                     state="readonly").grid(row=1, column=1, sticky="w")
+        ttk.Label(body, text="Descrição").grid(row=2, column=0, sticky="nw")
+        description = ScrolledText(body, width=70, height=4, background=FIELD,
+                                   foreground=TEXT, insertbackground=TEXT)
+        description.grid(row=2, column=1, sticky="nsew")
+        description.insert("1.0", template.description)
+        ttk.Label(body, text="Prompt ativo").grid(row=3, column=0, sticky="nw", pady=6)
+        prompt = ScrolledText(body, width=70, height=12, background=FIELD,
+                              foreground=TEXT, insertbackground=TEXT)
+        prompt.grid(row=3, column=1, sticky="nsew", pady=6)
+        prompt.insert("1.0", template.base_prompt)
+
+        def save() -> None:
+            updated = replace(
+                template, display_name=name.get().strip(),
+                description=description.get("1.0", "end-1c").strip(),
+                base_prompt=prompt.get("1.0", "end-1c").strip(),
+                status=CatalogStatus(status.get()),
+                provenance=CatalogProvenance.REFINED,
+                prompt_versions=(),
+            )
+            with StateStore(self.state_db_path) as store:
+                store.save_theme_template(updated)
+            dialog.destroy()
+            self.refresh_catalog()
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=4, column=1, sticky="e")
+        ttk.Button(buttons, text="Cancelar", command=dialog.destroy).pack(side="right")
+        ttk.Button(buttons, text="Salvar", command=save).pack(side="right", padx=6)
 
     def _build_automatic_tab(self, frame: ttk.Frame, settings: Settings) -> None:
         frame.columnconfigure(1, weight=1)
