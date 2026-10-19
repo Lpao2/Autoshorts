@@ -8,10 +8,12 @@ from autoshorts.brand_identity import (
     DEFAULT_GEMINI_BRAND_MODEL,
     BrandCandidate,
     BrandGenerationResult,
+    BrandGenerationValidationError,
     BrandKitStatus,
     ChannelBrandKit,
     GeminiBrandIdentityProvider,
     generate_brand_identity_with_retry,
+    normalize_handle_candidate,
 )
 from autoshorts.state_store import StateStore
 from autoshorts.transcript_analysis import AnalysisUsage
@@ -43,6 +45,60 @@ def test_candidate_validation():
             "logo",
             "banner",
             "reason",
+        )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("riftsemfreio", "@riftsemfreio"),
+        ("@RiftSemFreio", "@riftsemfreio"),
+        ("  @riftsemfreio  ", "@riftsemfreio"),
+        ("@@riftsemfreio", "@riftsemfreio"),
+        ("rift sem freio", "@rift-sem-freio"),
+        ("youtube.com/@riftsemfreio", "@riftsemfreio"),
+        ("https://youtube.com/@riftsemfreio", "@riftsemfreio"),
+        ("Ríft do Dragão", "@rift-do-dragao"),
+        ("-riftsemfreio-", "@riftsemfreio"),
+    ],
+)
+def test_normalize_handle_candidate(raw, expected):
+    assert normalize_handle_candidate(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "ab",
+        "a" * 31,
+        "https://example.com/rift",
+        "+55 11 99999-9999",
+        "rift🔥freio",
+        "🔥🔥",
+        "",
+    ],
+)
+def test_normalize_handle_rejects_unsafe_values(raw):
+    with pytest.raises(ValueError):
+        normalize_handle_candidate(raw)
+
+
+def test_candidate_rejects_duplicates_after_normalization():
+    normalized = tuple(
+        normalize_handle_candidate(value)
+        for value in ("Rift Sem Freio", "@rift-sem-freio", "rift.ativo")
+    )
+    with pytest.raises(ValueError, match="three unique"):
+        candidate("channel", 1).__class__(
+            "channel",
+            "Marca",
+            normalized,
+            "Descrição",
+            "Tagline",
+            ("gaming",),
+            "Logo",
+            "Banner",
+            "Razão",
         )
 
 
@@ -123,6 +179,7 @@ class Models:
                     ],
                 }
             )
+        channels[0]["candidates"][0]["handle_candidates"][0] = "A Marca 0 A"
         usage = SimpleNamespace(
             prompt_token_count=10,
             candidates_token_count=20,
@@ -155,6 +212,8 @@ def test_provider_returns_fifteen_distinct_candidates():
         "thinking_level": "minimal"
     }
     assert result.model == "gemini-3.5-flash-lite"
+    assert result.candidates[0].handle_candidates[0] == "@a-marca-0-a"
+    assert result.normalizations[0].original == "A Marca 0 A"
     assert result.usage.estimated_cost_usd == estimate_cost_usd(
         "gemini-3.5-flash-lite", 10, 25
     )
@@ -164,6 +223,74 @@ def test_brand_model_env_override(monkeypatch):
     monkeypatch.setenv("AUTOSHORTS_GEMINI_BRAND_MODEL", "brand-override")
     provider = GeminiBrandIdentityProvider(client=SimpleNamespace(models=Models()))
     assert provider.model == "brand-override"
+
+
+class InvalidModels(Models):
+    def generate_content(self, **kwargs):
+        response = super().generate_content(**kwargs)
+        response.parsed["channels"][2]["candidates"][4]["handle_candidates"][2] = (
+            "rift🔥freio"
+        )
+        return response
+
+
+def test_validation_failure_preserves_usage_without_candidates(tmp_path):
+    from pathlib import Path
+
+    from autoshorts.theme_catalog import load_theme_seed
+
+    theme = load_theme_seed(
+        Path(__file__).parents[1] / "config/theme-catalog.legacy.json"
+    )[0]
+    channels = tuple(
+        (theme.channel_archetypes[i], PublishingChannel(x, f"LoL {x.upper()}", i + 1))
+        for i, x in enumerate(("a", "b", "c"))
+    )
+    provider = GeminiBrandIdentityProvider(
+        client=SimpleNamespace(models=InvalidModels())
+    )
+    with pytest.raises(BrandGenerationValidationError) as caught:
+        provider.generate(theme, channels)
+    error = caught.value
+    assert error.usage.total_tokens == 35
+    with StateStore(tmp_path / "state.db") as store:
+        generation_id = store.save_brand_generation_failure(
+            provider=error.provider,
+            model=error.model,
+            usage=error.usage,
+            status="VALIDATION_FAILED",
+            error=str(error),
+        )
+        row = store.connection.execute(
+            "SELECT status, total_tokens, model FROM brand_generations WHERE id = ?",
+            (generation_id,),
+        ).fetchone()
+        assert tuple(row) == ("VALIDATION_FAILED", 35, "gemini-3.5-flash-lite")
+        assert store.brand_candidates(generation_id) == ()
+
+
+def test_normalized_response_persists_all_fifteen_candidates(tmp_path):
+    from pathlib import Path
+
+    from autoshorts.theme_catalog import load_theme_seed
+
+    theme = load_theme_seed(
+        Path(__file__).parents[1] / "config/theme-catalog.legacy.json"
+    )[0]
+    channels = tuple(
+        (theme.channel_archetypes[i], PublishingChannel(x, f"LoL {x.upper()}", i + 1))
+        for i, x in enumerate(("a", "b", "c"))
+    )
+    result = GeminiBrandIdentityProvider(
+        client=SimpleNamespace(models=Models())
+    ).generate(theme, channels)
+    with StateStore(tmp_path / "state.db") as store:
+        generation_id = store.save_brand_generation(result)
+        assert len(store.brand_candidates(generation_id)) == 15
+        status = store.connection.execute(
+            "SELECT status FROM brand_generations WHERE id = ?", (generation_id,)
+        ).fetchone()[0]
+        assert status == "SUCCEEDED"
 
 
 class FailingProvider:

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -34,6 +35,45 @@ class HandleAvailability(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class HandleNormalization:
+    original: str
+    normalized: str
+
+
+def normalize_handle_candidate(value: str) -> str:
+    """Normalize a proposed handle without making availability claims."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Handle candidate cannot be empty.")
+    original = value.strip()
+    youtube_match = re.fullmatch(
+        r"(?i)(?:https?://)?(?:www\.)?youtube\.com/@([^/?#]+)(?:[/?#].*)?",
+        original,
+    )
+    if youtube_match:
+        original = youtube_match.group(1)
+    elif re.search(r"(?i)(?:https?://|www\.|/|\.(?:com|net|org)(?:/|$))", original):
+        raise ValueError("Handle candidate cannot be a URL.")
+    if re.fullmatch(r"\+?[\d\s().-]{10,}", original):
+        raise ValueError("Handle candidate cannot look like a phone number.")
+    text = original.lstrip("@").strip()
+    text = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(character)
+    )
+    if not text.isascii():
+        raise ValueError("Handle candidate contains unsupported characters.")
+    text = re.sub(r"\s+", "-", text.casefold())
+    if re.search(r"[^a-z0-9._-]", text):
+        raise ValueError("Handle candidate contains unsupported characters.")
+    text = text.strip("._-")
+    normalized = f"@{text}"
+    if not re.fullmatch(r"@[a-z0-9](?:[a-z0-9._-]{1,28}[a-z0-9])?", normalized):
+        raise ValueError("Handle candidate does not satisfy the local handle policy.")
+    return normalized
+
+
+@dataclass(frozen=True, slots=True)
 class BrandCandidate:
     publishing_channel_id: str
     public_name: str
@@ -59,9 +99,7 @@ class BrandCandidate:
             raise ValueError("Brand candidate fields cannot be empty.")
         if len(self.handle_candidates) != 3 or len(set(self.handle_candidates)) != 3:
             raise ValueError("A brand candidate requires three unique handles.")
-        if any(
-            not re.fullmatch(r"@[a-z0-9._]{3,30}", x) for x in self.handle_candidates
-        ):
+        if any(normalize_handle_candidate(x) != x for x in self.handle_candidates):
             raise ValueError("Handles must be normalized candidates prefixed with @.")
         if not self.brand_keywords:
             raise ValueError("Brand keywords cannot be empty.")
@@ -95,7 +133,7 @@ class ChannelBrandKit:
         )
         if any(not value.strip() for value in required):
             raise ValueError("Brand kit fields cannot be empty.")
-        if not re.fullmatch(r"@[a-z0-9._]{3,30}", self.handle):
+        if normalize_handle_candidate(self.handle) != self.handle:
             raise ValueError("Brand kit handle must be normalized and start with @.")
         if not self.brand_keywords:
             raise ValueError("Brand kit keywords cannot be empty.")
@@ -111,6 +149,24 @@ class BrandGenerationResult:
     provider: str
     model: str
     usage: AnalysisUsage
+    normalizations: tuple[HandleNormalization, ...] = ()
+
+
+class BrandGenerationValidationError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        model: str,
+        usage: AnalysisUsage,
+        normalizations: tuple[HandleNormalization, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.usage = usage
+        self.normalizations = normalizations
 
 
 class BrandIdentityProvider(Protocol):
@@ -197,6 +253,7 @@ memoráveis, pronunciáveis em português e diferentes entre si. Os canais devem
 pertencer ao mesmo nicho, mas ter vocabulário, tagline e direção visual distintos.
 Não copie marcas conhecidas, não use Riot ou League of Legends no nome e não
 pareça canal oficial. Handles são apenas candidatos: nunca afirme disponibilidade.
+Every handle candidate must be returned already normalized and prefixed with @.
 Não gere imagens; escreva briefs originais para logo e banner."""
 
 
@@ -250,42 +307,64 @@ class GeminiBrandIdentityProvider:
             },
         )
         usage = _usage_from_response(response, self.model, time.monotonic() - started)
-        raw = response.parsed
-        expected = {channel.channel_id for _, channel in channels}
-        candidates = []
-        for group in raw["channels"]:
-            channel_id = group["publishing_channel_id"]
-            if channel_id not in expected:
-                raise ValueError("Gemini returned an unknown publishing channel.")
-            for item in group["candidates"]:
-                candidates.append(
-                    BrandCandidate(
-                        publishing_channel_id=channel_id,
-                        public_name=item["public_name"].strip(),
-                        handle_candidates=tuple(
-                            x.strip().lower() for x in item["handle_candidates"]
-                        ),
-                        description=item["description"].strip(),
-                        tagline=item["tagline"].strip(),
-                        brand_keywords=tuple(item["brand_keywords"]),
-                        logo_brief=item["logo_brief"].strip(),
-                        banner_brief=item["banner_brief"].strip(),
-                        reason=item["reason"].strip(),
+        normalizations: list[HandleNormalization] = []
+        try:
+            raw = response.parsed
+            expected = {channel.channel_id for _, channel in channels}
+            candidates = []
+            for group in raw["channels"]:
+                channel_id = group["publishing_channel_id"]
+                if channel_id not in expected:
+                    raise ValueError("Gemini returned an unknown publishing channel.")
+                for item in group["candidates"]:
+                    handles = []
+                    for original in item["handle_candidates"]:
+                        normalized = normalize_handle_candidate(original)
+                        handles.append(normalized)
+                        if original != normalized:
+                            normalizations.append(
+                                HandleNormalization(original, normalized)
+                            )
+                    candidates.append(
+                        BrandCandidate(
+                            publishing_channel_id=channel_id,
+                            public_name=item["public_name"].strip(),
+                            handle_candidates=tuple(handles),
+                            description=item["description"].strip(),
+                            tagline=item["tagline"].strip(),
+                            brand_keywords=tuple(item["brand_keywords"]),
+                            logo_brief=item["logo_brief"].strip(),
+                            banner_brief=item["banner_brief"].strip(),
+                            reason=item["reason"].strip(),
+                        )
                     )
-                )
-        if len(candidates) != 15 or any(
-            sum(x.publishing_channel_id == cid for x in candidates) != 5
-            for cid in expected
-        ):
-            raise ValueError("Gemini must return five candidates for each channel.")
-        if len({x.public_name.casefold() for x in candidates}) != 15:
-            raise ValueError("All public names must be distinct.")
+            if len(candidates) != 15 or any(
+                sum(x.publishing_channel_id == cid for x in candidates) != 5
+                for cid in expected
+            ):
+                raise ValueError("Gemini must return five candidates for each channel.")
+            if len({x.public_name.casefold() for x in candidates}) != 15:
+                raise ValueError("All public names must be distinct.")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BrandGenerationValidationError(
+                str(exc),
+                provider=self.provider_name,
+                model=self.model,
+                usage=usage,
+                normalizations=tuple(normalizations),
+            ) from exc
         return BrandGenerationResult(
-            tuple(candidates), self.provider_name, self.model, usage
+            tuple(candidates),
+            self.provider_name,
+            self.model,
+            usage,
+            tuple(normalizations),
         )
 
 
 def is_transient_brand_error(exc: Exception) -> bool:
+    if isinstance(exc, BrandGenerationValidationError):
+        return False
     text = str(exc).casefold()
     transient_markers = (
         "429",

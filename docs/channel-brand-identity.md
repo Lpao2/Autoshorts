@@ -18,14 +18,20 @@ Não há verificação de disponibilidade, criação de canal ou geração de im
 `BrandImageProvider` é apenas uma interface reservada. Assets futuros ficam em
 `data/branding/<theme_key>/<publishing_channel_id>/`, sem BLOBs no SQLite.
 
-## Persistência v11
+## Persistência v12
 
 - `brand_generations`: provider, modelo, operação `brand_generation`, tokens,
-  duração e custo teórico.
+  duração, custo teórico, status (`SUCCEEDED`, `VALIDATION_FAILED` ou
+  `API_FAILED`) e erro sanitizado quando aplicável.
 - `brand_candidates`: propostas e três handles não verificados.
 - `channel_brand_kits`: histórico versionado de identidades aprovadas/retiradas.
 
 O histórico de usage não é misturado com análise ou reranking de vídeos.
+
+Handles retornados pelo provider são normalizados localmente antes da validação:
+prefixo `@`, caixa, espaços, URLs do YouTube e acentos seguros são corrigidos sem
+nova chamada. Isso não verifica disponibilidade; todos continuam `UNKNOWN`. Uma
+falha irrecuperável preserva o usage da resposta, mas não publica candidatos.
 
 ## Modelos por operação
 

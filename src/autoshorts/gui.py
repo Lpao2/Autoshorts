@@ -32,6 +32,7 @@ from autoshorts.automation_store import (
     suggest_output_subdirectory,
 )
 from autoshorts.brand_identity import (
+    BrandGenerationValidationError,
     BrandKitStatus,
     ChannelBrandKit,
     GeminiBrandIdentityProvider,
@@ -1418,6 +1419,15 @@ class AutoShortsWindow:
             )
             self._show_brand_candidates(generation_id, theme_profile)
         except Exception as exc:
+            if isinstance(exc, BrandGenerationValidationError):
+                with StateStore(self.state_db_path) as store:
+                    store.save_brand_generation_failure(
+                        provider=exc.provider,
+                        model=exc.model,
+                        usage=exc.usage,
+                        status="VALIDATION_FAILED",
+                        error=str(exc),
+                    )
             self.auto_status.set("Geração não concluída; dados existentes preservados.")
             use_manual = messagebox.askyesno(
                 "Gemini indisponível",

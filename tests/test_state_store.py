@@ -42,18 +42,18 @@ def test_initializes_schema_foreign_keys_and_wal(tmp_path):
         assert store.connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
-def test_accepts_v11_and_rejects_only_future_schema(tmp_path):
-    current = tmp_path / "v11.db"
+def test_accepts_v12_and_rejects_only_future_schema(tmp_path):
+    current = tmp_path / "v12.db"
     with StateStore(current):
         pass
     with StateStore(current) as store:
-        assert store.schema_version == 11
+        assert store.schema_version == 12
 
     future = tmp_path / "future.db"
     connection = sqlite3.connect(future)
-    connection.execute("PRAGMA user_version = 12")
+    connection.execute("PRAGMA user_version = 13")
     connection.close()
-    with pytest.raises(RuntimeError, match="Unsupported state schema version: 12"):
+    with pytest.raises(RuntimeError, match="Unsupported state schema version: 13"):
         StateStore(future)
 
 

@@ -37,7 +37,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 class VideoStatus(StrEnum):
@@ -689,10 +689,11 @@ class StateStore:
         with self.connection:
             cursor = self.connection.execute(
                 """INSERT INTO brand_generations
-                (provider, model, operation, input_tokens, output_tokens,
+                (provider, model, operation, status, error, input_tokens, output_tokens,
                  thinking_tokens, total_tokens, duration_seconds,
                  theoretical_cost_usd, created_at)
-                VALUES (?, ?, 'brand_generation', ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (?, ?, 'brand_generation', 'SUCCEEDED', NULL,
+                        ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     result.provider,
                     result.model,
@@ -730,6 +731,40 @@ class StateStore:
                     ),
                 )
         return generation_id
+
+    def save_brand_generation_failure(
+        self,
+        *,
+        provider: str,
+        model: str,
+        usage: AnalysisUsage,
+        status: str,
+        error: str,
+    ) -> int:
+        if status not in {"API_FAILED", "VALIDATION_FAILED"}:
+            raise ValueError("Invalid brand generation failure status.")
+        with self.connection:
+            cursor = self.connection.execute(
+                """INSERT INTO brand_generations
+                (provider, model, operation, status, error, input_tokens,
+                 output_tokens, thinking_tokens, total_tokens, duration_seconds,
+                 theoretical_cost_usd, created_at)
+                VALUES (?, ?, 'brand_generation', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    provider,
+                    model,
+                    status,
+                    error,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.thinking_tokens,
+                    usage.total_tokens,
+                    usage.duration_seconds,
+                    usage.estimated_cost_usd,
+                    _now(),
+                ),
+            )
+        return int(cursor.lastrowid)
 
     def brand_candidates(self, generation_id: int) -> tuple[BrandCandidate, ...]:
         rows = self.connection.execute(
@@ -1213,6 +1248,7 @@ class StateStore:
                     input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
                     thinking_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
                     duration_seconds REAL NOT NULL, theoretical_cost_usd REAL NOT NULL,
+                    status TEXT NOT NULL, error TEXT,
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS brand_candidates (
@@ -1274,6 +1310,9 @@ class StateStore:
             version = 10
         if version == 10:
             self._migrate_v10_to_v11()
+            version = 11
+        if version == 11:
+            self._migrate_v11_to_v12()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -1499,6 +1538,17 @@ class StateStore:
                     ON channel_brand_kits(publishing_channel_id)
                     WHERE status = 'APPROVED';
                 PRAGMA user_version = 11;
+                """
+            )
+
+    def _migrate_v11_to_v12(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE brand_generations
+                    ADD COLUMN status TEXT NOT NULL DEFAULT 'SUCCEEDED';
+                ALTER TABLE brand_generations ADD COLUMN error TEXT;
+                PRAGMA user_version = 12;
                 """
             )
 
