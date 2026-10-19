@@ -1,6 +1,8 @@
 """Run with a real or virtual display; remain optional on headless systems."""
 
 import time
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from test_render_integration import make_settings, synthetic_video  # noqa: F401
@@ -16,6 +18,7 @@ from autoshorts.automation_config import (  # noqa: E402
 )
 from autoshorts.automation_store import AutomationStore  # noqa: E402
 from autoshorts.gui import AutoShortsWindow  # noqa: E402
+from autoshorts.state_store import ChannelCredentialBinding, StateStore  # noqa: E402
 
 
 @pytest.fixture
@@ -181,3 +184,130 @@ def test_automatic_tab_reflects_saved_creators_and_disabled_state(window, tmp_pa
     assert [app.auto_identities.item(row, "values") for row in identity_rows] == [
         ("✓", "Google A", "a@example.test", "1")
     ]
+
+
+def test_gui_loads_sqlite_binding_and_does_not_use_config_channel_id(
+    window, tmp_path, monkeypatch
+):
+    app, root, _ = window
+    path = tmp_path / "automation.json"
+    config = AutomationConfig(
+        (
+            ThemeProfile(
+                "LoL",
+                "",
+                (),
+                "lol",
+                channels=(
+                    PublishingChannel(
+                        "lol-a",
+                        "LoL A",
+                        1,
+                        google_identity_id="google-a",
+                        youtube_channel_id=None,
+                    ),
+                    PublishingChannel("lol-b", "LoL B", 2),
+                ),
+            ),
+        ),
+        (GoogleIdentity("google-a", "Google A", "a@example.test"),),
+    )
+    AutomationStore(path).save(config)
+    app.state_db_path = tmp_path / "state.db"
+    now = datetime.now(UTC).isoformat()
+    with StateStore(app.state_db_path) as store:
+        store.save_channel_binding(
+            ChannelCredentialBinding(
+                "lol-a",
+                "google-a",
+                "youtube",
+                "lol-a.json",
+                "UC-REAL",
+                "Real Channel",
+                now,
+                now,
+                "CONNECTED",
+            )
+        )
+    monkeypatch.setattr(
+        "autoshorts.gui.YouTubeConnectionService.verify_binding",
+        lambda *_args: pytest.fail("GUI refresh must not call YouTube API"),
+    )
+    app.auto_config_path.set(str(path))
+    app.load_automation_config_ui(silent=True)
+    root.update_idletasks()
+    rows = app.auto_accounts.get_children()
+    assert app.auto_accounts.item(rows[0], "values")[4:] == (
+        "Real Channel (UC-REAL)",
+        "Conectado",
+    )
+    assert app.auto_accounts.item(rows[1], "values")[4:] == ("—", "Não conectado")
+    app.auto_accounts.selection_set("lol-a")
+    app._update_youtube_buttons()
+    assert str(app.connect_youtube_button["state"]) == "disabled"
+    assert str(app.verify_youtube_button["state"]) == "normal"
+    assert str(app.reconnect_youtube_button["state"]) == "normal"
+    assert str(app.disconnect_youtube_button["state"]) == "normal"
+
+
+def test_successful_connect_and_disconnect_refresh_gui(window, tmp_path, monkeypatch):
+    app, _, _ = window
+    config = AutomationConfig(
+        (
+            ThemeProfile(
+                "LoL",
+                "",
+                (),
+                "lol",
+                channels=(PublishingChannel("lol-a", "LoL A", 1),),
+            ),
+        )
+    )
+    app.automation_config = config
+    app.state_db_path = tmp_path / "state.db"
+    app.auto_accounts.insert("", "end", iid="lol-a", values=(1, "✓", "LoL A"))
+    app.auto_accounts.selection_set("lol-a")
+    refreshes = []
+    monkeypatch.setattr(app, "refresh_theme_details", lambda: refreshes.append(True))
+    monkeypatch.setattr("autoshorts.gui.messagebox.askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr("autoshorts.gui.messagebox.showinfo", lambda *_a, **_k: None)
+
+    class Service:
+        def __init__(self, _config, store, _credentials):
+            self.store = store
+
+        def begin_connection(self, channel_id):
+            return SimpleNamespace(
+                publishing_channel_id=channel_id,
+                google_identity_id="google-a",
+                channel=SimpleNamespace(title="Real", channel_id="UC-REAL"),
+            )
+
+        def confirm_connection(self, pending):
+            now = datetime.now(UTC).isoformat()
+            self.store.save_channel_binding(
+                ChannelCredentialBinding(
+                    pending.publishing_channel_id,
+                    pending.google_identity_id,
+                    "youtube",
+                    "lol-a.json",
+                    pending.channel.channel_id,
+                    pending.channel.title,
+                    now,
+                    now,
+                    "CONNECTED",
+                )
+            )
+
+        def disconnect(self, channel_id):
+            return self.store.delete_channel_binding(channel_id)
+
+    monkeypatch.setattr("autoshorts.gui.YouTubeConnectionService", Service)
+    app.connect_youtube_ui()
+    assert len(refreshes) == 1
+    with StateStore(app.state_db_path) as store:
+        assert store.get_channel_binding("lol-a") is not None
+    app.connect_youtube_ui()
+    assert len(refreshes) == 2
+    app.disconnect_youtube_ui()
+    assert len(refreshes) == 3

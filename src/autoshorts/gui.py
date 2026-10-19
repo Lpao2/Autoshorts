@@ -40,7 +40,11 @@ from autoshorts.gui_jobs import JobController, JobRequest
 from autoshorts.pipeline import PipelineResult
 from autoshorts.render_events import RenderEvent
 from autoshorts.render_plan import RenderPlan
-from autoshorts.state_store import StateStore, default_state_db_path
+from autoshorts.state_store import (
+    ChannelCredentialBinding,
+    StateStore,
+    default_state_db_path,
+)
 from autoshorts.youtube_oauth import YouTubeConnectionService
 
 LABELS = {
@@ -72,6 +76,22 @@ SKIP_REASONS = {
     "metadata_error": "Erro de metadados",
     "already_processed": "Já processado anteriormente",
 }
+OAUTH_STATUS_LABELS = {
+    "CONNECTED": "Conectado",
+    "INVALID": "Inválido",
+    "REVOKED": "Revogado",
+    "DISABLED": "Desativado",
+}
+
+
+def _binding_display(
+    binding: ChannelCredentialBinding | None,
+) -> tuple[str, str]:
+    if binding is None:
+        return "—", "Não conectado"
+    channel = f"{binding.youtube_channel_title} ({binding.youtube_channel_id})"
+    status = OAUTH_STATUS_LABELS.get(binding.status, binding.status)
+    return channel, status
 
 
 class _StatusSnapshot:
@@ -684,18 +704,25 @@ class AutoShortsWindow:
         ttk.Button(
             account_actions, text="Remover", command=self.remove_channel_ui
         ).pack(side="left")
-        ttk.Button(
+        self.connect_youtube_button = ttk.Button(
             account_actions, text="Conectar YouTube", command=self.connect_youtube_ui
-        ).pack(side="left", padx=(16, 0))
-        ttk.Button(
+        )
+        self.connect_youtube_button.pack(side="left", padx=(16, 0))
+        self.verify_youtube_button = ttk.Button(
             account_actions, text="Verificar conexão", command=self.verify_youtube_ui
-        ).pack(side="left", padx=6)
-        ttk.Button(
+        )
+        self.verify_youtube_button.pack(side="left", padx=6)
+        self.reconnect_youtube_button = ttk.Button(
             account_actions, text="Reconectar", command=self.connect_youtube_ui
-        ).pack(side="left")
-        ttk.Button(
+        )
+        self.reconnect_youtube_button.pack(side="left")
+        self.disconnect_youtube_button = ttk.Button(
             account_actions, text="Desconectar", command=self.disconnect_youtube_ui
-        ).pack(side="left", padx=6)
+        )
+        self.disconnect_youtube_button.pack(side="left", padx=6)
+        self.auto_accounts.bind(
+            "<<TreeviewSelect>>", lambda _event: self._update_youtube_buttons()
+        )
         ttk.Label(
             account_actions, text="Short 1→Slot 1  •  Short 2→Slot 2  •  Short 3→Slot 3"
         ).pack(side="right")
@@ -1032,9 +1059,11 @@ class AutoShortsWindow:
         self.auto_creators.tag_configure("disabled", foreground=MUTED)
 
     def refresh_accounts(self) -> None:
+        selected = self._selected_channel_id()
         for row in self.auto_accounts.get_children():
             self.auto_accounts.delete(row)
         if self.automation_config is None or not self.auto_theme.get():
+            self._update_youtube_buttons({})
             return
         theme = self.automation_config.theme(self._current_theme_name())
         identities = {
@@ -1048,6 +1077,7 @@ class AutoShortsWindow:
         for channel in sorted(theme.channels, key=lambda item: item.slot):
             identity = identities.get(channel.google_identity_id)
             binding = bindings[channel.channel_id]
+            youtube_channel, oauth_status = _binding_display(binding)
             self.auto_accounts.insert(
                 "",
                 "end",
@@ -1057,17 +1087,23 @@ class AutoShortsWindow:
                     "✓" if channel.enabled else "—",
                     channel.name,
                     identity.label if identity else "não vinculada",
-                    (
-                        f"{binding.youtube_channel_id} / "
-                        f"{binding.youtube_channel_title}"
-                        if binding
-                        else "—"
-                    ),
-                    binding.status.title() if binding else "Não conectado",
+                    youtube_channel,
+                    oauth_status,
                 ),
-                tags=("enabled" if channel.enabled else "disabled",),
+                tags=(
+                    "connected"
+                    if binding and binding.status == "CONNECTED"
+                    else "enabled"
+                    if channel.enabled
+                    else "disabled",
+                ),
             )
         self.auto_accounts.tag_configure("disabled", foreground=MUTED)
+        self.auto_accounts.tag_configure("connected", foreground="#86efac")
+        if selected and self.auto_accounts.exists(selected):
+            self.auto_accounts.selection_set(selected)
+            self.auto_accounts.focus(selected)
+        self._update_youtube_buttons(bindings)
 
     def refresh_identities(self) -> None:
         for row in self.auto_identities.get_children():
@@ -1265,6 +1301,28 @@ class AutoShortsWindow:
     def _selected_channel_id(self) -> str | None:
         selected = self.auto_accounts.selection()
         return selected[0] if selected else None
+
+    def _update_youtube_buttons(
+        self,
+        bindings: dict[str, ChannelCredentialBinding | None] | None = None,
+    ) -> None:
+        channel_id = self._selected_channel_id()
+        binding = None
+        if channel_id:
+            if bindings is not None:
+                binding = bindings.get(channel_id)
+            else:
+                with StateStore(self.state_db_path) as state_store:
+                    binding = state_store.get_channel_binding(channel_id)
+        has_binding = binding is not None
+        has_selection = channel_id is not None
+        self.connect_youtube_button.configure(
+            state="normal" if has_selection and not has_binding else "disabled"
+        )
+        binding_state = "normal" if has_selection and has_binding else "disabled"
+        self.verify_youtube_button.configure(state=binding_state)
+        self.reconnect_youtube_button.configure(state=binding_state)
+        self.disconnect_youtube_button.configure(state=binding_state)
 
     def add_channel_ui(self) -> None:
         theme_name = self._current_theme_name()
