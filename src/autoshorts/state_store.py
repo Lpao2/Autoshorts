@@ -5,25 +5,32 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
 from autoshorts.automation_config import ColorPalette
 from autoshorts.theme_catalog import (
+    AuthorizationStatus,
+    BrandBlueprint,
     BrandProfile,
     CatalogProvenance,
     CatalogStatus,
     ChannelArchetype,
     PromptVersion,
+    ReuseRisk,
+    RightsProfile,
+    SourceStrategy,
+    ThemeReadiness,
     ThemeTemplate,
     load_theme_seed,
 )
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class VideoStatus(StrEnum):
@@ -699,7 +706,7 @@ class StateStore:
                 (
                     template.theme_key, template.display_name, template.description,
                     json.dumps(template.tags, ensure_ascii=False),
-                    json.dumps(template.source_strategy, ensure_ascii=False),
+                    json.dumps(asdict(template.source_strategy), ensure_ascii=False),
                     json.dumps(template.production_defaults, ensure_ascii=False),
                     template.status, template.provenance, now, now,
                 ),
@@ -713,8 +720,9 @@ class StateStore:
                     """
                     INSERT INTO theme_channel_archetypes (
                         theme_key, slot, name, editorial_prompt, headline_style,
-                        tone, visual_direction, palette_json, brand_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tone, visual_direction, palette_json, brand_json,
+                        editorial_json, brand_blueprint_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         template.theme_key, item.slot, item.name,
@@ -732,8 +740,21 @@ class StateStore:
                             "logo_path": item.brand.logo_path,
                             "banner_path": item.brand.banner_path,
                         }, ensure_ascii=False),
+                        json.dumps({
+                            "editorial_focus": item.editorial_focus,
+                            "audience": item.audience,
+                            "content_preferences": item.content_preferences,
+                            "content_avoid": item.content_avoid,
+                        }, ensure_ascii=False),
+                        json.dumps(asdict(item.brand_blueprint), ensure_ascii=False),
                     ),
                 )
+            self.connection.execute(
+                "UPDATE theme_catalog SET rights_json = ?, readiness_json = ? "
+                "WHERE theme_key = ?",
+                (json.dumps(asdict(template.rights_profile), ensure_ascii=False),
+                 json.dumps(asdict(template.readiness)), template.theme_key),
+            )
             active = next((x for x in template.prompt_versions if x.active), None)
             prompt = active.prompt if active else template.base_prompt
             current = self.connection.execute(
@@ -758,9 +779,20 @@ class StateStore:
         """Insert missing templates only, preserving all existing/manual edits."""
         inserted = 0
         for template in templates:
-            if self.get_theme_template(template.theme_key) is None:
+            current = self.get_theme_template(template.theme_key)
+            if current is None:
                 self.save_theme_template(template)
                 inserted += 1
+            elif current.provenance == CatalogProvenance.LEGACY:
+                # Catalog planning upgrades untouched legacy rows, while keeping
+                # the active v1 prompt and its complete history.
+                self.save_theme_template(
+                    dataclass_replace(
+                        template,
+                        base_prompt=current.base_prompt,
+                        prompt_versions=current.prompt_versions,
+                    )
+                )
         return inserted
 
     def _theme_template(self, row: sqlite3.Row) -> ThemeTemplate:
@@ -786,18 +818,68 @@ class StateStore:
         for item in archetype_rows:
             colors = json.loads(item["palette_json"])
             brand = json.loads(item["brand_json"])
+            editorial = json.loads(item["editorial_json"])
+            blueprint = json.loads(item["brand_blueprint_json"])
             archetypes.append(ChannelArchetype(
                 slot=item["slot"], name=item["name"],
+                editorial_focus=tuple(editorial["editorial_focus"]),
                 editorial_prompt=item["editorial_prompt"],
                 headline_style=item["headline_style"], tone=item["tone"],
                 visual_direction=item["visual_direction"],
+                audience=editorial["audience"],
+                content_preferences=tuple(editorial["content_preferences"]),
+                content_avoid=tuple(editorial["content_avoid"]),
                 palette=ColorPalette(*colors), brand=BrandProfile(**brand),
+                brand_blueprint=BrandBlueprint(
+                    keywords=tuple(blueprint["keywords"]),
+                    **{k: v for k, v in blueprint.items() if k != "keywords"},
+                ),
             ))
+        source = json.loads(row["source_strategy_json"])
+        if "source_types" not in source:
+            source = {
+                "source_types": ("creator_longform",),
+                "description": "Legacy creator-channel collection strategy.",
+                "requires_creator_authorization": True,
+                "preferred_sources": (), "avoid_sources": (), "notes": "",
+            }
+        rights = json.loads(row["rights_json"])
+        if not rights:
+            rights = {
+                "authorization_required": True,
+                "authorization_status": "UNKNOWN",
+                "reuse_risk": "MEDIUM",
+                "notes": "Pending review",
+            }
+        readiness = json.loads(row["readiness_json"])
+        if not readiness:
+            readiness = {key: False for key in (
+                "editorial_ready", "channel_profiles_ready",
+                "source_strategy_ready", "rights_strategy_ready",
+                "brand_direction_ready", "production_fit_ready",
+            )}
         return ThemeTemplate(
             theme_key=key, display_name=row["display_name"],
             description=row["description"], base_prompt=active,
             tags=tuple(json.loads(row["tags_json"])),
-            source_strategy=json.loads(row["source_strategy_json"]),
+            source_strategy=SourceStrategy(
+                source_types=tuple(source["source_types"]),
+                preferred_sources=tuple(source["preferred_sources"]),
+                avoid_sources=tuple(source["avoid_sources"]),
+                description=source["description"],
+                requires_creator_authorization=source[
+                    "requires_creator_authorization"
+                ],
+                notes=source.get("notes", ""),
+            ),
+            rights_profile=RightsProfile(
+                authorization_required=rights["authorization_required"],
+                authorization_status=AuthorizationStatus(
+                    rights["authorization_status"]
+                ),
+                reuse_risk=ReuseRisk(rights["reuse_risk"]), notes=rights["notes"],
+            ),
+            readiness=ThemeReadiness(**readiness),
             production_defaults=json.loads(row["production_defaults_json"]),
             channel_archetypes=tuple(archetypes),
             status=CatalogStatus(row["status"]),
@@ -924,6 +1006,8 @@ class StateStore:
                     source_strategy_json TEXT NOT NULL,
                     production_defaults_json TEXT NOT NULL,
                     status TEXT NOT NULL, provenance TEXT NOT NULL,
+                    rights_json TEXT NOT NULL DEFAULT '{}',
+                    readiness_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS theme_prompt_versions (
@@ -939,7 +1023,10 @@ class StateStore:
                     name TEXT NOT NULL, editorial_prompt TEXT NOT NULL,
                     headline_style TEXT NOT NULL, tone TEXT NOT NULL,
                     visual_direction TEXT NOT NULL, palette_json TEXT NOT NULL,
-                    brand_json TEXT NOT NULL, PRIMARY KEY (theme_key, slot),
+                    brand_json TEXT NOT NULL,
+                    editorial_json TEXT NOT NULL,
+                    brand_blueprint_json TEXT NOT NULL,
+                    PRIMARY KEY (theme_key, slot),
                     FOREIGN KEY (theme_key) REFERENCES theme_catalog(theme_key)
                         ON DELETE CASCADE
                 );
@@ -970,6 +1057,9 @@ class StateStore:
             version = 8
         if version == 8:
             self._migrate_v8_to_v9()
+            version = 9
+        if version == 9:
+            self._migrate_v9_to_v10()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -1135,6 +1225,24 @@ class StateStore:
                         ON DELETE CASCADE
                 );
                 PRAGMA user_version = 9;
+                """
+            )
+
+    def _migrate_v9_to_v10(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                ALTER TABLE theme_catalog ADD COLUMN rights_json TEXT NOT NULL
+                    DEFAULT '{}';
+                ALTER TABLE theme_catalog ADD COLUMN readiness_json TEXT NOT NULL
+                    DEFAULT '{}';
+                ALTER TABLE theme_channel_archetypes
+                    ADD COLUMN editorial_json TEXT NOT NULL DEFAULT
+                    '{"editorial_focus":[],"audience":"","content_preferences":[],"content_avoid":[]}';
+                ALTER TABLE theme_channel_archetypes
+                    ADD COLUMN brand_blueprint_json TEXT NOT NULL DEFAULT
+                    '{"keywords":[],"name_direction":"","handle_direction":"","description_direction":"","tagline_direction":"","logo_brief":"","banner_brief":""}';
+                PRAGMA user_version = 10;
                 """
             )
 

@@ -6,6 +6,7 @@ from autoshorts.state_store import SCHEMA_VERSION, StateStore
 from autoshorts.theme_catalog import (
     CatalogProvenance,
     CatalogStatus,
+    ReuseRisk,
     instantiate_theme,
     load_theme_seed,
 )
@@ -17,20 +18,47 @@ def seed_path():
 
 def test_legacy_seed_has_real_themes_prompts_and_three_archetypes():
     templates = load_theme_seed(seed_path())
-    assert len(templates) == 13
+    assert len(templates) == 20
     assert {item.theme_key for item in templates} >= {
         "lol", "academia", "atual", "anime", "animais", "comida",
         "comedia", "desenho", "fe", "filmes", "futebol", "influ", "mine",
     }
     assert all(item.base_prompt for item in templates)
     assert all(len(item.channel_archetypes) == 3 for item in templates)
-    assert all(item.provenance == CatalogProvenance.LEGACY for item in templates)
+    legacy_keys = {
+        "lol", "academia", "atual", "anime", "animais", "comida", "comedia",
+        "desenho", "fe", "filmes", "futebol", "influ", "mine",
+    }
+    assert all(
+        item.provenance == CatalogProvenance.LEGACY
+        for item in templates if item.theme_key in legacy_keys
+    )
+    assert all(
+        item.provenance != CatalogProvenance.LEGACY
+        for item in templates if item.theme_key not in legacy_keys
+    )
+    assert len({item.theme_key for item in templates}) == 20
+    assert sum(len(item.channel_archetypes) for item in templates) == 60
+    assert all(item.readiness.ready for item in templates)
+    assert all(item.source_strategy.source_types for item in templates)
+    assert all(item.rights_profile.notes for item in templates)
+    assert all(
+        archetype.brand_blueprint.logo_brief and archetype.editorial_focus
+        for item in templates for archetype in item.channel_archetypes
+    )
+    assert all(
+        archetype.palette.primary != archetype.palette.secondary
+        for item in templates for archetype in item.channel_archetypes
+    )
+    risks = {item.theme_key: item.rights_profile.reuse_risk for item in templates}
+    for key in ("anime", "filmes", "desenho", "futebol", "atual"):
+        assert risks[key] != ReuseRisk.LOW
 
 
 def test_seed_is_idempotent_and_does_not_overwrite_manual_edit(tmp_path):
     templates = load_theme_seed(seed_path())
     with StateStore(tmp_path / "state.db") as store:
-        assert len(store.list_theme_templates()) == 13
+        assert len(store.list_theme_templates()) == 20
         lol = store.get_theme_template("lol")
         store.save_theme_template(
             replace(
@@ -61,7 +89,7 @@ def test_instantiation_is_explicit_inactive_and_does_not_persist(tmp_path):
         assert len(store.list_theme_templates()) == before
 
 
-def test_migrates_v8_to_v9_without_losing_channel_binding(tmp_path):
+def test_migrates_v8_through_v10_without_losing_channel_binding(tmp_path):
     path = tmp_path / "v8.db"
     connection = sqlite3.connect(path)
     connection.executescript(
@@ -84,7 +112,7 @@ def test_migrates_v8_to_v9_without_losing_channel_binding(tmp_path):
         binding = store.get_channel_binding("lol-a")
         assert store.schema_version == SCHEMA_VERSION
         assert binding.youtube_channel_id == "UC123"
-        assert len(store.list_theme_templates()) == 13
+        assert len(store.list_theme_templates()) == 20
 
 
 def test_catalog_statuses_are_closed_set():

@@ -32,6 +32,66 @@ class CatalogProvenance(StrEnum):
     REFINED = "REFINED"
 
 
+class AuthorizationStatus(StrEnum):
+    UNKNOWN = "UNKNOWN"
+    REQUIRED = "REQUIRED"
+    AUTHORIZED = "AUTHORIZED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class ReuseRisk(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceStrategy:
+    source_types: tuple[str, ...]
+    description: str
+    requires_creator_authorization: bool
+    preferred_sources: tuple[str, ...]
+    avoid_sources: tuple[str, ...]
+    notes: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RightsProfile:
+    authorization_required: bool
+    authorization_status: AuthorizationStatus
+    reuse_risk: ReuseRisk
+    notes: str
+
+
+@dataclass(frozen=True, slots=True)
+class ThemeReadiness:
+    editorial_ready: bool
+    channel_profiles_ready: bool
+    source_strategy_ready: bool
+    rights_strategy_ready: bool
+    brand_direction_ready: bool
+    production_fit_ready: bool
+
+    @property
+    def ready(self) -> bool:
+        return all((
+            self.editorial_ready, self.channel_profiles_ready,
+            self.source_strategy_ready, self.rights_strategy_ready,
+            self.brand_direction_ready, self.production_fit_ready,
+        ))
+
+
+@dataclass(frozen=True, slots=True)
+class BrandBlueprint:
+    keywords: tuple[str, ...] = ()
+    name_direction: str = ""
+    handle_direction: str = ""
+    description_direction: str = ""
+    tagline_direction: str = ""
+    logo_brief: str = ""
+    banner_brief: str = ""
+
+
 @dataclass(frozen=True, slots=True)
 class BrandProfile:
     public_name: str = ""
@@ -55,12 +115,17 @@ class PromptVersion:
 class ChannelArchetype:
     slot: int
     name: str
+    editorial_focus: tuple[str, ...] = ()
     editorial_prompt: str = ""
     headline_style: str = ""
     tone: str = ""
     visual_direction: str = ""
+    audience: str = ""
+    content_preferences: tuple[str, ...] = ()
+    content_avoid: tuple[str, ...] = ()
     palette: ColorPalette = field(default_factory=ColorPalette)
     brand: BrandProfile = field(default_factory=BrandProfile)
+    brand_blueprint: BrandBlueprint = field(default_factory=BrandBlueprint)
 
     def __post_init__(self) -> None:
         if self.slot not in {1, 2, 3}:
@@ -74,7 +139,9 @@ class ThemeTemplate:
     description: str
     base_prompt: str
     tags: tuple[str, ...]
-    source_strategy: dict[str, object]
+    source_strategy: SourceStrategy
+    rights_profile: RightsProfile
+    readiness: ThemeReadiness
     production_defaults: dict[str, object]
     channel_archetypes: tuple[ChannelArchetype, ...]
     status: CatalogStatus
@@ -143,7 +210,7 @@ def instantiate_theme(
 
 def load_theme_seed(path: str | Path) -> tuple[ThemeTemplate, ...]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if payload.get("schema_version") != 1:
+    if payload.get("schema_version") not in {1, 2}:
         raise ValueError("Unsupported theme catalog seed schema.")
     result = []
     for raw in payload["themes"]:
@@ -154,12 +221,21 @@ def load_theme_seed(path: str | Path) -> tuple[ThemeTemplate, ...]:
                 ChannelArchetype(
                     slot=item["slot"],
                     name=item["name"],
+                    editorial_focus=tuple(item["editorial_focus"]),
                     editorial_prompt=item["editorial_prompt"],
                     headline_style=item["headline_style"],
                     tone=item["tone"],
                     visual_direction=item["visual_direction"],
+                    audience=item["audience"],
+                    content_preferences=tuple(item["content_preferences"]),
+                    content_avoid=tuple(item["content_avoid"]),
                     palette=ColorPalette(*palette),
                     brand=BrandProfile(**item["brand"]),
+                    brand_blueprint=BrandBlueprint(
+                        keywords=tuple(item["brand_blueprint"]["keywords"]),
+                        **{k: v for k, v in item["brand_blueprint"].items()
+                           if k != "keywords"},
+                    ),
                 )
             )
         provenance = CatalogProvenance(raw["provenance"])
@@ -170,7 +246,30 @@ def load_theme_seed(path: str | Path) -> tuple[ThemeTemplate, ...]:
                 description=raw["description"],
                 base_prompt=raw["base_prompt"],
                 tags=tuple(raw["tags"]),
-                source_strategy=raw["source_strategy"],
+                source_strategy=SourceStrategy(
+                    source_types=tuple(raw["source_strategy"]["source_types"]),
+                    preferred_sources=tuple(
+                        raw["source_strategy"]["preferred_sources"]
+                    ),
+                    avoid_sources=tuple(raw["source_strategy"]["avoid_sources"]),
+                    **{
+                        k: v for k, v in raw["source_strategy"].items()
+                        if k not in {
+                            "source_types", "preferred_sources", "avoid_sources"
+                        }
+                    },
+                ),
+                rights_profile=RightsProfile(
+                    authorization_status=AuthorizationStatus(
+                        raw["rights_profile"]["authorization_status"]
+                    ),
+                    reuse_risk=ReuseRisk(raw["rights_profile"]["reuse_risk"]),
+                    authorization_required=raw["rights_profile"][
+                        "authorization_required"
+                    ],
+                    notes=raw["rights_profile"]["notes"],
+                ),
+                readiness=ThemeReadiness(**raw["readiness"]),
                 production_defaults=raw["production_defaults"],
                 channel_archetypes=tuple(archetypes),
                 status=CatalogStatus(raw["status"]),

@@ -64,6 +64,20 @@ def drive_until_idle(app, root):
     return len(beats)
 
 
+def test_theme_library_shows_complete_blueprints(window):
+    app, _root, _errors = window
+    assert len(app.catalog_tree.get_children()) == 20
+    assert app.catalog_tree["columns"] == (
+        "status", "name", "origin", "readiness", "prompt", "versions", "channels"
+    )
+    rows = [
+        app.catalog_tree.item(row, "values")
+        for row in app.catalog_tree.get_children()
+    ]
+    assert all(row[3] == "Completo" for row in rows)
+    assert all(int(row[6]) == 3 for row in rows)
+
+
 def test_window_validates_renders_and_reuses_without_blocking(window, synthetic_video):  # noqa: F811
     app, root, _ = window
     app.source.set(str(synthetic_video))

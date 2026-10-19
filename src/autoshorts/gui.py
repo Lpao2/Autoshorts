@@ -600,13 +600,17 @@ class AutoShortsWindow:
         panel.rowconfigure(0, weight=1)
         self.catalog_tree = ttk.Treeview(
             panel,
-            columns=("name", "status", "origin", "prompts", "channels"),
+            columns=(
+                "status", "name", "origin", "readiness", "prompt", "versions",
+                "channels",
+            ),
             show="headings",
         )
         for column, label, width in (
-            ("name", "Tema", 260), ("status", "Estado", 110),
-            ("origin", "Origem", 110), ("prompts", "Versões", 80),
-            ("channels", "Arquétipos", 90),
+            ("status", "Estado", 90), ("name", "Tema", 220),
+            ("origin", "Origem", 110), ("versions", "Versões", 70),
+            ("readiness", "Readiness", 90), ("prompt", "Prompt ativo", 260),
+            ("channels", "3 canais", 80),
         ):
             self.catalog_tree.heading(column, text=label)
             self.catalog_tree.column(column, width=width, stretch=column == "name")
@@ -636,8 +640,10 @@ class AutoShortsWindow:
         for item in templates:
             self.catalog_tree.insert(
                 "", "end", iid=item.theme_key,
-                values=(item.display_name, item.status, item.provenance,
-                        len(item.prompt_versions), len(item.channel_archetypes)),
+                values=(item.status, item.display_name, item.provenance,
+                        "Completo" if item.readiness.ready else "Pendente",
+                        item.base_prompt[:80], len(item.prompt_versions),
+                        len(item.channel_archetypes)),
             )
 
     def _selected_catalog_theme(self):
@@ -652,15 +658,30 @@ class AutoShortsWindow:
         template = self._selected_catalog_theme()
         if template is None:
             return
-        archetypes = "\n".join(
-            f"Slot {item.slot}: {item.name} — {item.tone}"
+        archetypes = "\n\n".join(
+            f"CANAL {item.slot}: {item.name}\n"
+            f"Foco: {', '.join(item.editorial_focus)}\n"
+            f"Headline: {item.headline_style}\nTom: {item.tone}\n"
+            f"Público: {item.audience}\nPreferências: "
+            f"{', '.join(item.content_preferences)}\nEvitar: "
+            f"{', '.join(item.content_avoid)}\nPaleta: "
+            f"{item.palette.primary}, {item.palette.secondary}, "
+            f"{item.palette.accent}\nMarca: "
+            f"{', '.join(item.brand_blueprint.keywords)}"
             for item in template.channel_archetypes
         )
+        source = template.source_strategy
+        rights = template.rights_profile
         messagebox.showinfo(
             template.display_name,
             f"Estado: {template.status}\nOrigem: {template.provenance}\n"
+            f"Readiness: {'completo' if template.readiness.ready else 'pendente'}\n"
             f"Tags: {', '.join(template.tags)}\n\n{template.description}\n\n"
-            f"{archetypes}\n\nPrompt ativo:\n{template.base_prompt}",
+            f"FONTES: {source.description}\nTipos: "
+            f"{', '.join(source.source_types)}\n\nDIREITOS: "
+            f"{rights.authorization_status} / risco {rights.reuse_risk}\n"
+            f"{rights.notes}\n\nPROMPT ATIVO (v{len(template.prompt_versions)}):\n"
+            f"{template.base_prompt}\n\n{archetypes}",
         )
 
     def edit_catalog_theme(self) -> None:

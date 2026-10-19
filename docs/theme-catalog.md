@@ -26,16 +26,23 @@ O arquivo `gerador_temas.py` enumerava ideias adicionais apenas em comentários.
 Como não havia prompt editorial real para elas, não foram criados templates
 fictícios. O `README.md` legado não continha documentação além do título.
 
-## Modelo
+## Modelo v10
 
 Cada template tem chave estável, nome público, descrição, tags, estratégia de
 fonte, padrões de produção, estado e proveniência. Estados permitidos: `DRAFT`,
 `READY`, `ACTIVE` e `ARCHIVED`. Proveniências: `LEGACY`, `MANUAL`, `GENERATED` e
 `REFINED`.
 
+Cada tema também possui `SourceStrategy`, `RightsProfile` e `ThemeReadiness`.
+Readiness cobre editorial, canais, fontes, direitos, marca e aderência à produção.
+Risco e autorização são planejamento explícito; conteúdo público não é tratado
+como automaticamente reutilizável.
+
 Os prompts são versionados: uma mudança cria uma nova linha e conserva as
 versões anteriores. Cada tema possui três arquétipos (slots 1, 2 e 3) com foco
-editorial, estilo de headline, tom, direção visual e paleta. Campos opcionais de
+editorial específico, público, preferências, restrições, estilo de headline, tom,
+direção visual e paleta. Cada arquétipo inclui um `BrandBlueprint` para orientar
+nome, handle, descrição, tagline, logo e banner sem gerar ativos finais. Campos opcionais de
 marca incluem nome público, handle, descrição, tagline e caminhos de logo/banner.
 Imagens não são armazenadas no banco; a localização planejada é:
 
@@ -43,19 +50,22 @@ Imagens não são armazenadas no banco; a localização planejada é:
 
 ## Persistência e semeadura
 
-O schema SQLite v9 adiciona `theme_catalog`, `theme_prompt_versions` e
-`theme_channel_archetypes`. A migração v8→v9 é aditiva e não altera vídeos,
+O schema SQLite v10 amplia `theme_catalog` e `theme_channel_archetypes` com os
+documentos estruturados de direitos, readiness, editorial e marca. A migração
+v9→v10 é aditiva e não altera vídeos,
 shorts, análises ou `channel_bindings`.
 
-Na abertura do `StateStore`, `config/theme-catalog.legacy.json` insere somente
-chaves ausentes. A rotina é idempotente e nunca sobrescreve uma edição existente.
+Na abertura do `StateStore`, `config/theme-catalog.legacy.json` contém 20 temas e
+60 blueprints. A rotina insere chaves ausentes e atualiza somente registros ainda
+marcados `LEGACY`; registros `MANUAL` ou `REFINED` nunca são sobrescritos.
 Por isso, mudanças feitas na GUI sobrevivem a reinícios e a novas execuções da
 semente.
 
 ## Interface
 
-A aba **Biblioteca de temas** lista tema, estado, origem, quantidade de versões
-de prompt e arquétipos. É possível ver detalhes e editar nome, descrição, estado
+A aba **Biblioteca de temas** lista tema, estado, origem, readiness, prompt ativo,
+quantidade de versões e canais. É possível ver detalhes de fontes, direitos,
+readiness e dos três blueprints, além de editar nome, descrição, estado
 e prompt ativo. Salvar uma alteração marca a proveniência como `REFINED` e cria
 uma nova versão do prompt quando o texto mudou. A aba não ativa produção.
 
@@ -65,3 +75,5 @@ O perfil LoL operacional continua no arquivo de automação existente. A bibliot
 não o recria, não substitui canais e não modifica o vínculo OAuth do LoL A. O
 template LoL recebe estado de catálogo `ACTIVE` apenas como indicação de uso
 atual; isso não é um comando de execução.
+
+O inventário completo está em [theme-blueprints.md](theme-blueprints.md).
