@@ -219,7 +219,9 @@ class YouTubeBrandingService:
         current = after.get("brandingSettings", {}).get("channel", {})
         if current.get("description") != plan.description:
             raise RuntimeError("Remote validation failed for channel description.")
-        if current.get("defaultLanguage") != plan.default_language:
+        if not _language_matches(
+            plan.default_language, current.get("defaultLanguage")
+        ):
             raise RuntimeError("Remote validation failed for channel language.")
         image = after.get("brandingSettings", {}).get("image", {})
         active = bool(
@@ -294,3 +296,14 @@ def _conservative_branding(remote: dict[str, Any]) -> dict[str, Any]:
         key: deepcopy(source[key]) for key in _WRITABLE_CHANNEL_KEYS if key in source
     }
     return {"channel": channel}
+
+
+def _language_matches(requested: str, returned: object) -> bool:
+    """YouTube may normalize a regional language such as pt-BR to pt."""
+    if not isinstance(returned, str):
+        return False
+    requested_parts = requested.casefold().replace("_", "-").split("-")
+    returned_parts = returned.casefold().replace("_", "-").split("-")
+    return requested_parts == returned_parts or (
+        len(returned_parts) == 1 and requested_parts[0] == returned_parts[0]
+    )

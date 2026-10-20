@@ -6,7 +6,11 @@ import pytest
 from test_youtube_publishing import configured_service
 
 from autoshorts.credential_store import FilesystemCredentialStore
-from autoshorts.youtube_branding import YouTubeBrandingService, _conservative_branding
+from autoshorts.youtube_branding import (
+    YouTubeBrandingService,
+    _conservative_branding,
+    _language_matches,
+)
 from autoshorts.youtube_oauth import YOUTUBE_MANAGE_SCOPE
 
 
@@ -139,3 +143,10 @@ def test_read_modify_write_excludes_read_only_image_urls():
         }
     )
     assert result == {"channel": {"country": "BR", "description": "keep"}}
+
+
+def test_language_validation_accepts_youtube_region_normalization():
+    assert _language_matches("pt-BR", "pt")
+    assert _language_matches("pt-BR", "pt-BR")
+    assert not _language_matches("pt-BR", "en")
+    assert not _language_matches("pt-BR", None)

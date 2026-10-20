@@ -42,6 +42,10 @@ uploads de vídeo. Bindings antigos que só possuam `youtube.upload` e
 `youtube.readonly` aparecem como `NEEDS_REAUTH`; a aplicação é bloqueada antes
 de qualquer chamada remota de escrita.
 
+O plano conserva `pt-BR` como intenção editorial. O YouTube pode normalizar
+esse valor para `pt` na leitura posterior; a validação aceita essa normalização
+de região, mas continua rejeitando outro idioma.
+
 ## Smoke test seguro
 
 1. Confirme `schema`, binding, Brand Plan e assets com `audit`, `list-channels`
