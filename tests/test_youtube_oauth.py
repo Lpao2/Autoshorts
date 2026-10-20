@@ -180,6 +180,22 @@ def test_same_google_identity_still_has_isolated_channel_credentials(
     state.close()
 
 
+def test_same_youtube_channel_cannot_bind_to_two_publishing_channels(
+    tmp_path, monkeypatch
+):
+    backend = Backend("UC-SAME", "Same")
+    target, state, secrets = service(
+        tmp_path, monkeypatch, backend=backend, app_config=config(same_identity=True)
+    )
+    connect(target, "lol-a")
+    pending = target.begin_connection("lol-b")
+    with pytest.raises(ValueError, match="já está vinculado"):
+        target.confirm_connection(pending)
+    assert state.get_channel_binding("lol-b") is None
+    assert len(list(secrets.root.glob("*.json"))) == 1
+    state.close()
+
+
 def test_missing_client_secret_disabled_identity_and_revoked_credential(
     tmp_path, monkeypatch
 ):
@@ -225,4 +241,5 @@ def test_revoked_credential_error_does_not_expose_saved_token(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="revoked") as error:
         target.verify_binding("lol-a")
     assert "secret-access-token" not in str(error.value)
+    assert state.get_channel_binding("lol-a").status == "REVOKED"
     state.close()

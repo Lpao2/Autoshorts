@@ -116,6 +116,41 @@ def test_theme_library_shows_complete_blueprints(window):
     assert all("/6" in row[9] for row in rows)
 
 
+def test_publication_tab_exposes_review_dry_run_and_explicit_upload(window):
+    app, root, _errors = window
+    assert app.publish_privacy.get() == "private"
+    assert app.publication_tree["columns"] == (
+        "id",
+        "channel",
+        "identity",
+        "youtube",
+        "video",
+        "title",
+        "privacy",
+        "status",
+        "remote",
+        "error",
+    )
+
+    def button_labels(widget):
+        labels = []
+        for child in widget.winfo_children():
+            if child.winfo_class() == "TButton":
+                labels.append(str(child["text"]))
+            labels.extend(button_labels(child))
+        return labels
+
+    labels = set(button_labels(root))
+    assert {
+        "Vincular Brand Plan",
+        "Criar para revisão",
+        "Salvar revisão",
+        "Aprovar selecionada",
+        "Dry-run",
+        "Upload real...",
+    } <= labels
+
+
 def test_brand_asset_status_summary_and_library_dialog(window):
     app, root, _errors = window
     assert _latest_asset_statuses(()) == {"LOGO": "PENDING", "BANNER": "PENDING"}

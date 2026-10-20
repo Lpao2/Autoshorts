@@ -65,9 +65,17 @@ persistido. Divergência invalida a operação e nunca altera o destino.
 **Reconectar** repete OAuth e exige nova confirmação. **Desconectar** remove o
 arquivo secreto e o binding SQLite, sem excluir o canal ou a Google identity.
 
+## Publicação controlada
+
+O binding confirmado pode ser usado pelo fluxo revisável descrito em
+[`youtube-publishing-smoke-test.md`](youtube-publishing-smoke-test.md). Uma
+publicação exige aprovação explícita, preflight sem upload e confirmação final;
+o padrão é `private`. Credenciais revogadas ou inválidas passam a ser marcadas
+no binding e precisam de reconexão.
+
 ## Limitações atuais
 
-- Não existe upload ou scheduler.
+- Existe upload controlado, mas não scheduler automático.
 - A seleção prática entre vários Brand Accounts/canais gerenciados depende da
   conta e da tela de autorização do Google. Cada resultado deve ser confirmado
   pelo ID exibido; o AutoShorts não assume comportamento 1:1 por email.

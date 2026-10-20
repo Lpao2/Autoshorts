@@ -12,6 +12,7 @@ import webbrowser
 from dataclasses import replace
 from pathlib import Path
 from queue import Empty
+from threading import Thread
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import cast
@@ -47,6 +48,7 @@ from autoshorts.brand_identity import (
 )
 from autoshorts.channel_setup import (
     ChannelSetupStatus,
+    link_approved_brand_plan,
     resolve_theme_channel_setups,
 )
 from autoshorts.collection import YouTubeAccess, resolve_deno
@@ -62,11 +64,16 @@ from autoshorts.render_events import RenderEvent
 from autoshorts.render_plan import RenderPlan
 from autoshorts.state_store import (
     ChannelCredentialBinding,
+    PublicationStatus,
     StateStore,
     default_state_db_path,
 )
 from autoshorts.theme_catalog import CatalogProvenance, CatalogStatus
 from autoshorts.youtube_oauth import YouTubeConnectionService
+from autoshorts.youtube_publishing import (
+    PublicationMetadata,
+    YouTubePublicationService,
+)
 
 LABELS = {
     "rendering": "Renderizando",
@@ -470,6 +477,8 @@ class AutoShortsWindow:
         self.brand_image_provider = None
         self.automation_running = False
         self.automation_finishing = False
+        self.publish_running = False
+        self.publish_thread: Thread | None = None
         self.automation_rows: dict[tuple[str, str], str] = {}
         self.automation_found = 0
         self.automation_completed = 0
@@ -488,9 +497,11 @@ class AutoShortsWindow:
         frame = ttk.Frame(notebook, padding=16)
         automatic = ttk.Frame(notebook, padding=16)
         catalog = ttk.Frame(notebook, padding=16)
+        publication = ttk.Frame(notebook, padding=16)
         notebook.add(frame, text="Manual")
         notebook.add(automatic, text="Automático")
         notebook.add(catalog, text="Biblioteca de temas")
+        notebook.add(publication, text="Publicação YouTube")
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(9, weight=1)
         frame.rowconfigure(10, weight=1)
@@ -639,6 +650,7 @@ class AutoShortsWindow:
         self.folder_button.grid(row=13, column=0, columnspan=3, sticky="e", pady=(8, 0))
         self._build_automatic_tab(automatic, settings)
         self._build_catalog_tab(catalog)
+        self._build_publication_tab(publication)
         self.poll_id = self.root.after(75, self.poll)
 
     def _build_catalog_tab(self, frame: ttk.Frame) -> None:
@@ -1598,6 +1610,125 @@ class AutoShortsWindow:
         ttk.Button(buttons, text="Cancelar", command=dialog.destroy).pack(side="right")
         ttk.Button(buttons, text="Salvar", command=save).pack(side="right", padx=6)
 
+    def _build_publication_tab(self, frame: ttk.Frame) -> None:
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(9, weight=1)
+        ttk.Label(frame, text="Publicação YouTube", style="Title.TLabel").grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
+        ttk.Label(
+            frame,
+            text=(
+                "Fluxo explícito: criar para revisão → aprovar → dry-run → "
+                "upload confirmado. O padrão é private."
+            ),
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 12))
+        self.publish_channel = tk.StringVar(master=self.root)
+        self.publish_channel_ids: dict[str, str] = {}
+        self.publish_video = tk.StringVar(master=self.root)
+        self.publish_title = tk.StringVar(master=self.root)
+        self.publish_tags = tk.StringVar(master=self.root)
+        self.publish_privacy = tk.StringVar(master=self.root, value="private")
+        self.publish_status = tk.StringVar(
+            master=self.root, value="Nenhuma publicação selecionada."
+        )
+        ttk.Label(frame, text="Canal").grid(row=2, column=0, sticky="w", pady=4)
+        self.publish_channel_combo = ttk.Combobox(
+            frame, textvariable=self.publish_channel, state="readonly"
+        )
+        self.publish_channel_combo.grid(row=2, column=1, sticky="ew", pady=4)
+        ttk.Button(
+            frame, text="Vincular Brand Plan", command=self.link_publish_brand_ui
+        ).grid(row=2, column=2, padx=(8, 0))
+        ttk.Label(frame, text="Vídeo final").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=self.publish_video).grid(
+            row=3, column=1, sticky="ew", pady=4
+        )
+        ttk.Button(
+            frame, text="Selecionar...", command=self.choose_publication_video
+        ).grid(row=3, column=2, padx=(8, 0))
+        ttk.Label(frame, text="Título").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=self.publish_title).grid(
+            row=4, column=1, columnspan=2, sticky="ew", pady=4
+        )
+        ttk.Label(frame, text="Descrição").grid(row=5, column=0, sticky="nw", pady=4)
+        self.publish_description = ScrolledText(frame, height=4, wrap="word")
+        self.publish_description.grid(
+            row=5, column=1, columnspan=2, sticky="nsew", pady=4
+        )
+        metadata = ttk.Frame(frame)
+        metadata.grid(row=6, column=0, columnspan=3, sticky="ew", pady=4)
+        metadata.columnconfigure(1, weight=1)
+        ttk.Label(metadata, text="Tags (vírgula)").grid(row=0, column=0, sticky="w")
+        ttk.Entry(metadata, textvariable=self.publish_tags).grid(
+            row=0, column=1, sticky="ew", padx=8
+        )
+        ttk.Label(metadata, text="Privacidade").grid(row=0, column=2, sticky="e")
+        ttk.Combobox(
+            metadata,
+            textvariable=self.publish_privacy,
+            values=("private", "unlisted", "public"),
+            state="readonly",
+            width=10,
+        ).grid(row=0, column=3, padx=(8, 0))
+        actions = ttk.Frame(frame)
+        actions.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
+        for label, command in (
+            ("Criar para revisão", self.create_publication_ui),
+            ("Salvar revisão", self.revise_publication_ui),
+            ("Aprovar selecionada", self.approve_publication_ui),
+            ("Dry-run", self.dry_run_publication_ui),
+            ("Upload real...", self.upload_publication_ui),
+            ("Atualizar", self.refresh_publications),
+        ):
+            button = ttk.Button(actions, text=label, command=command)
+            button.pack(side="left", padx=(0, 6))
+            if label == "Upload real...":
+                self.publish_upload_button = button
+        ttk.Label(frame, textvariable=self.publish_status).grid(
+            row=8, column=0, columnspan=3, sticky="w"
+        )
+        self.publication_tree = ttk.Treeview(
+            frame,
+            columns=(
+                "id",
+                "channel",
+                "identity",
+                "youtube",
+                "video",
+                "title",
+                "privacy",
+                "status",
+                "remote",
+                "error",
+            ),
+            show="headings",
+            height=10,
+        )
+        for column, label, width in (
+            ("id", "ID", 45),
+            ("channel", "Canal", 110),
+            ("identity", "Google Identity", 110),
+            ("youtube", "YouTube Channel ID", 145),
+            ("video", "Vídeo", 160),
+            ("title", "Título", 180),
+            ("privacy", "Privacy", 65),
+            ("status", "Status", 145),
+            ("remote", "Remote video ID", 120),
+            ("error", "Último erro", 200),
+        ):
+            self.publication_tree.heading(column, text=label)
+            self.publication_tree.column(
+                column, width=width, stretch=column in {"video", "error"}
+            )
+        self.publication_tree.grid(
+            row=9, column=0, columnspan=3, sticky="nsew", pady=(4, 0)
+        )
+        self.publication_tree.bind(
+            "<<TreeviewSelect>>", lambda _event: self.load_publication_review_ui()
+        )
+        self.refresh_publications()
+
     def _build_automatic_tab(self, frame: ttk.Frame, settings: Settings) -> None:
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(11, weight=1)
@@ -2528,6 +2659,8 @@ class AutoShortsWindow:
             selected = current if current in names else (names[0] if names else "")
             self._set_theme(selected)
             self.refresh_theme_details()
+            if hasattr(self, "publication_tree"):
+                self.refresh_publications()
             self.auto_status.set(f"Configuração pronta: {len(names)} tema(s).")
             if not silent:
                 self.auto_log(f"Configuração carregada: {self.auto_config_path.get()}")
@@ -2937,6 +3070,301 @@ class AutoShortsWindow:
         self.load_automation_config_ui(silent=True)
         self._set_theme(theme_name)
         self.refresh_theme_details()
+
+    def choose_publication_video(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Selecionar vídeo final",
+            filetypes=[("Vídeo", "*.mp4 *.mov *.mkv *.webm"), ("Todos", "*")],
+        )
+        if path:
+            self.publish_video.set(path)
+
+    def refresh_publications(self) -> None:
+        if not hasattr(self, "publication_tree"):
+            return
+        selected = self.publication_tree.selection()
+        for row in self.publication_tree.get_children():
+            self.publication_tree.delete(row)
+        self.publish_channel_ids = {}
+        if self.automation_config is not None:
+            for theme in self.automation_config.themes:
+                for channel in theme.channels:
+                    label = f"{theme.name} · Slot {channel.slot} · {channel.name}"
+                    self.publish_channel_ids[label] = channel.channel_id
+            labels = tuple(self.publish_channel_ids)
+            self.publish_channel_combo.configure(values=labels)
+            if labels and self.publish_channel.get() not in self.publish_channel_ids:
+                self.publish_channel.set(labels[0])
+        configured_themes = (
+            self.automation_config.themes if self.automation_config else ()
+        )
+        names = {
+            channel.channel_id: channel.name
+            for theme in configured_themes
+            for channel in theme.channels
+        }
+        with StateStore(self.state_db_path) as store:
+            publications = store.publications()
+        for item in publications:
+            iid = f"publication-{item.publication_id}"
+            self.publication_tree.insert(
+                "",
+                "end",
+                iid=iid,
+                values=(
+                    item.publication_id,
+                    names.get(item.publishing_channel_id, item.publishing_channel_id),
+                    item.google_identity_id,
+                    item.youtube_channel_id,
+                    item.video_path.name,
+                    item.title,
+                    item.privacy_status,
+                    item.status.value,
+                    item.remote_video_id or "—",
+                    item.last_error or "—",
+                ),
+            )
+        if selected and self.publication_tree.exists(selected[0]):
+            self.publication_tree.selection_set(selected[0])
+        self.publish_status.set(
+            f"{len(publications)} publicação(ões) persistida(s)."
+        )
+
+    def _selected_publication_id(self, *, notify: bool = True) -> int | None:
+        selected = self.publication_tree.selection()
+        if not selected:
+            if notify:
+                messagebox.showinfo("Publicação", "Selecione uma publicação.")
+            return None
+        return int(selected[0].removeprefix("publication-"))
+
+    def load_publication_review_ui(self) -> None:
+        publication_id = self._selected_publication_id(notify=False)
+        if publication_id is None:
+            return
+        with StateStore(self.state_db_path) as store:
+            item = store.publication(publication_id)
+        if item is None:
+            return
+        self.publish_video.set(str(item.video_path))
+        self.publish_title.set(item.title)
+        self.publish_description.delete("1.0", "end")
+        self.publish_description.insert("1.0", item.description)
+        self.publish_tags.set(", ".join(item.tags))
+        self.publish_privacy.set(item.privacy_status)
+        self.publish_status.set(
+            f"Publicação {item.publication_id}: {item.status.value}"
+        )
+
+    def _publishing_channel_context(self):
+        if self.automation_config is None:
+            raise ValueError("Carregue a configuração de automação.")
+        channel_id = self.publish_channel_ids.get(self.publish_channel.get())
+        if not channel_id:
+            raise ValueError("Selecione um canal de publicação.")
+        for theme in self.automation_config.themes:
+            for channel in theme.channels:
+                if channel.channel_id == channel_id:
+                    return theme, channel
+        raise KeyError(f"Publishing channel not found: {channel_id}")
+
+    def link_publish_brand_ui(self) -> None:
+        try:
+            theme, channel = self._publishing_channel_context()
+            with StateStore(self.state_db_path) as store:
+                plan = next(
+                    (
+                        item
+                        for item in store.planned_channel_brands(
+                            theme.output_subdirectory
+                        )
+                        if item.slot == channel.slot
+                    ),
+                    None,
+                )
+                if plan is None:
+                    raise ValueError("Nenhum Brand Plan corresponde ao tema e slot.")
+                if not messagebox.askyesno(
+                    "Vincular Brand Plan",
+                    f"Canal operacional: {channel.name}\n"
+                    f"Brand Plan: {plan.public_name}\n\n"
+                    "Confirmar o vínculo explícito?",
+                ):
+                    return
+                kit = link_approved_brand_plan(
+                    theme=theme,
+                    publishing_channel=channel,
+                    planned_brand=plan,
+                    state_store=store,
+                )
+        except Exception as exc:
+            messagebox.showerror("Vínculo de branding", str(exc))
+            return
+        self.refresh_theme_details()
+        messagebox.showinfo(
+            "Vínculo de branding", f"Brand Plan vinculado: {kit.public_name}"
+        )
+
+    def create_publication_ui(self) -> None:
+        try:
+            _theme, channel = self._publishing_channel_context()
+            tags = tuple(item.strip() for item in self.publish_tags.get().split(","))
+            metadata = PublicationMetadata(
+                self.publish_title.get(),
+                self.publish_description.get("1.0", "end-1c"),
+                tags,
+                self.publish_privacy.get(),
+            )
+            with StateStore(self.state_db_path) as store:
+                service = YouTubePublicationService(
+                    self.automation_config,
+                    store,
+                    self.credential_store,
+                )
+                record = service.create_for_review(
+                    channel.channel_id, Path(self.publish_video.get()), metadata
+                )
+        except Exception as exc:
+            messagebox.showerror("Criar publicação", str(exc))
+            return
+        self.refresh_publications()
+        self.publication_tree.selection_set(f"publication-{record.publication_id}")
+        messagebox.showinfo(
+            "Publicação", f"Pacote {record.publication_id} pronto para revisão."
+        )
+
+    def revise_publication_ui(self) -> None:
+        publication_id = self._selected_publication_id()
+        if publication_id is None or self.automation_config is None:
+            return
+        metadata = PublicationMetadata(
+            self.publish_title.get(),
+            self.publish_description.get("1.0", "end-1c"),
+            tuple(item.strip() for item in self.publish_tags.get().split(",")),
+            self.publish_privacy.get(),
+        )
+        try:
+            with StateStore(self.state_db_path) as store:
+                record = YouTubePublicationService(
+                    self.automation_config, store, self.credential_store
+                ).revise(publication_id, metadata)
+        except Exception as exc:
+            messagebox.showerror("Revisar publicação", str(exc))
+            return
+        self.refresh_publications()
+        self.publication_tree.selection_set(f"publication-{record.publication_id}")
+        messagebox.showinfo("Publicação", "Revisão salva; aprovação é necessária.")
+
+    def approve_publication_ui(self) -> None:
+        publication_id = self._selected_publication_id()
+        if publication_id is None or self.automation_config is None:
+            return
+        if not messagebox.askyesno(
+            "Aprovar publicação",
+            "Aprovar metadata, vídeo e destino para um upload posterior?",
+        ):
+            return
+        try:
+            with StateStore(self.state_db_path) as store:
+                record = YouTubePublicationService(
+                    self.automation_config, store, self.credential_store
+                ).approve(publication_id)
+        except Exception as exc:
+            messagebox.showerror("Aprovar publicação", str(exc))
+            return
+        self.refresh_publications()
+        messagebox.showinfo("Publicação", f"Status: {record.status.value}")
+
+    def dry_run_publication_ui(self) -> None:
+        publication_id = self._selected_publication_id()
+        if publication_id is None or self.automation_config is None:
+            return
+        try:
+            with StateStore(self.state_db_path) as store:
+                result = YouTubePublicationService(
+                    self.automation_config, store, self.credential_store
+                ).preflight(publication_id)
+        except Exception as exc:
+            messagebox.showerror("Dry-run de publicação", str(exc))
+            self.refresh_publications()
+            return
+        self.refresh_publications()
+        messagebox.showinfo(
+            "Dry-run concluído",
+            f"Canal: {result.youtube_channel_title}\n"
+            f"Google Identity: {result.google_identity_label}\n"
+            f"Vídeo: {result.media.width}×{result.media.height}\n"
+            f"Privacy: {result.publication.privacy_status}\n\n"
+            "Nenhum vídeo foi enviado.",
+        )
+
+    def upload_publication_ui(self) -> None:
+        publication_id = self._selected_publication_id()
+        if publication_id is None or self.automation_config is None:
+            return
+        with StateStore(self.state_db_path) as store:
+            record = store.publication(publication_id)
+        if record is None:
+            return
+        if record.status != PublicationStatus.APPROVED_FOR_PUBLISH:
+            messagebox.showerror(
+                "Upload YouTube", "A publicação precisa estar explicitamente aprovada."
+            )
+            return
+        if not messagebox.askyesno(
+            "Confirmar upload real",
+            f"Isto enviará um vídeo REAL ao YouTube.\n\n"
+            f"Channel ID: {record.youtube_channel_id}\n"
+            f"Privacy: {record.privacy_status}\n"
+            f"Arquivo: {record.video_path.name}\n\nContinuar?",
+        ):
+            return
+        if record.privacy_status == "public" and not messagebox.askyesno(
+            "Confirmação adicional",
+            "O vídeo ficará PÚBLICO. Confirma novamente?",
+        ):
+            return
+        config = self.automation_config
+        self.publish_upload_button.configure(state="disabled")
+        self.publish_status.set("Upload real em andamento...")
+
+        def worker() -> None:
+            try:
+                with StateStore(self.state_db_path) as store:
+                    uploaded = YouTubePublicationService(
+                        config, store, self.credential_store
+                    ).upload_approved(publication_id)
+            except Exception as exc:
+                error = str(exc)
+                self.root.after(0, lambda: self._finish_upload_ui(None, error))
+                return
+            self.root.after(0, lambda: self._finish_upload_ui(uploaded, None))
+
+        self.publish_running = True
+        self.publish_thread = Thread(
+            target=worker, name="youtube-upload", daemon=False
+        )
+        self.publish_thread.start()
+
+    def _finish_upload_ui(self, uploaded, error: str | None) -> None:
+        self.publish_running = False
+        self.publish_upload_button.configure(state="normal")
+        self.refresh_publications()
+        if self.closing:
+            self.publish_status.set(
+                "Upload encerrado; fechando AutoShorts..."
+                if not error
+                else f"Upload encerrado com erro: {error}"
+            )
+            return
+        if error:
+            messagebox.showerror("Upload YouTube", error)
+            return
+        messagebox.showinfo(
+            "Upload concluído",
+            f"Remote video ID: {uploaded.remote_video_id}\n"
+            f"Status: {uploaded.status.value}",
+        )
 
     def connect_youtube_ui(self) -> None:
         channel_id = self._selected_channel_id()
@@ -3623,16 +4051,17 @@ class AutoShortsWindow:
             and not self.controller.busy
             and not self.automation_running
             and not self.automation_controller.busy
+            and not self.publish_running
         ):
             self.destroy()
             return
         self.poll_id = self.root.after(75, self.poll)
 
     def close(self) -> None:
-        if self.running or self.automation_running:
+        if self.running or self.automation_running or self.publish_running:
             if not messagebox.askyesno(
                 "Fechar AutoShorts",
-                "Cancelar o processamento e fechar após encerrar com segurança?",
+                "Fechar após os trabalhos em andamento encerrarem com segurança?",
             ):
                 return
             self.closing = True
@@ -3640,6 +4069,10 @@ class AutoShortsWindow:
                 self.cancel()
             if self.automation_running:
                 self.cancel_automation()
+            if self.publish_running:
+                self.publish_status.set(
+                    "Aguardando o upload terminar com segurança antes de fechar..."
+                )
         else:
             self.destroy()
 

@@ -151,13 +151,22 @@ class AutomationConfig:
         if len(ids) != len(set(ids)):
             raise ValueError("Duplicate Google identity ID.")
         known = set(ids)
+        channel_ids: list[str] = []
+        youtube_ids: list[str] = []
         for theme in self.themes:
             for channel in theme.channels:
+                channel_ids.append(channel.channel_id)
+                if channel.youtube_channel_id:
+                    youtube_ids.append(channel.youtube_channel_id)
                 if channel.google_identity_id not in {None, *known}:
                     raise ValueError(
                         f"Channel '{channel.name}' references an unknown "
                         "Google identity."
                     )
+        if len(channel_ids) != len(set(channel_ids)):
+            raise ValueError("Publishing channel IDs must be globally unique.")
+        if len(youtube_ids) != len(set(youtube_ids)):
+            raise ValueError("YouTube channel IDs must be globally unique.")
 
     def theme(self, name: str) -> ThemeProfile:
         for item in self.themes:

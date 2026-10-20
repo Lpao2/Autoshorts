@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from autoshorts.automation_config import (
@@ -11,7 +11,13 @@ from autoshorts.automation_config import (
     PublishingChannel,
     ThemeProfile,
 )
-from autoshorts.brand_identity import ChannelBrandKit
+from autoshorts.brand_assets import BrandAssetStatus, BrandAssetType
+from autoshorts.brand_identity import BrandKitStatus, ChannelBrandKit
+from autoshorts.brand_planning import (
+    PlannedBrandStatus,
+    PlannedChannelBrand,
+    materialize_brand_plan,
+)
 from autoshorts.state_store import ChannelCredentialBinding, StateStore
 from autoshorts.theme_catalog import ChannelArchetype, ThemeTemplate
 
@@ -88,3 +94,33 @@ def resolve_theme_channel_setups(
             )
         )
     return tuple(resolved)
+
+
+def link_approved_brand_plan(
+    *,
+    theme: ThemeProfile,
+    publishing_channel: PublishingChannel,
+    planned_brand: PlannedChannelBrand,
+    state_store: StateStore,
+) -> ChannelBrandKit:
+    """Explicitly materialize a reviewed catalog plan for an operational channel."""
+    if publishing_channel not in theme.channels:
+        raise ValueError("Publishing channel does not belong to the selected theme.")
+    if planned_brand.theme_key != theme.output_subdirectory:
+        raise ValueError("Brand Plan belongs to a different theme.")
+    if planned_brand.slot != publishing_channel.slot:
+        raise ValueError("Brand Plan slot does not match the publishing channel.")
+    if planned_brand.status != PlannedBrandStatus.APPROVED:
+        raise ValueError("Brand Plan must be approved before it can be linked.")
+    assets = state_store.brand_assets(planned_brand.brand_plan_id)
+    for asset_type in BrandAssetType:
+        versions = [item for item in assets if item.asset_type == asset_type]
+        current = max(versions, key=lambda item: item.version, default=None)
+        if current is None or current.status != BrandAssetStatus.APPROVED:
+            raise ValueError(
+                f"Current {asset_type.value.lower()} must be approved before linking."
+            )
+    kit = materialize_brand_plan(planned_brand, publishing_channel)
+    return state_store.approve_brand_kit(
+        replace(kit, status=BrandKitStatus.APPROVED)
+    )

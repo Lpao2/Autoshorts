@@ -44,7 +44,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 class VideoStatus(StrEnum):
@@ -67,6 +67,16 @@ class ShortStatus(StrEnum):
     QUEUED = "QUEUED"
     POSTED = "POSTED"
     FAILED = "FAILED"
+
+
+class PublicationStatus(StrEnum):
+    READY_FOR_REVIEW = "READY_FOR_REVIEW"
+    APPROVED_FOR_PUBLISH = "APPROVED_FOR_PUBLISH"
+    UPLOADING = "UPLOADING"
+    PUBLISHED = "PUBLISHED"
+    FAILED_RETRYABLE = "FAILED_RETRYABLE"
+    FAILED_PERMANENT = "FAILED_PERMANENT"
+    UPLOAD_UNCERTAIN = "UPLOAD_UNCERTAIN"
 
 
 VIDEO_TRANSITIONS: dict[VideoStatus, frozenset[VideoStatus]] = {
@@ -201,6 +211,44 @@ class ChannelCredentialBinding:
     connected_at: str
     last_verified_at: str
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationRecord:
+    publication_id: int
+    idempotency_key: str
+    brand_plan_id: str
+    publishing_channel_id: str
+    google_identity_id: str
+    youtube_channel_id: str
+    source_short_id: int | None
+    video_path: Path
+    video_checksum: str
+    title: str
+    description: str
+    tags: tuple[str, ...]
+    privacy_status: str
+    status: PublicationStatus
+    remote_video_id: str | None
+    created_at: str
+    updated_at: str
+    approved_at: str | None
+    published_at: str | None
+    last_error: str | None
+    error_category: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationAttempt:
+    attempt_id: int
+    publication_id: int
+    attempt_number: int
+    started_at: str
+    finished_at: str | None
+    status: str
+    remote_video_id: str | None
+    error_category: str | None
+    error_message: str | None
 
 
 def default_state_db_path(project_root: Path | None = None) -> Path:
@@ -612,6 +660,15 @@ class StateStore:
         ).fetchone()
         return _channel_binding(row) if row else None
 
+    def get_channel_binding_by_youtube_id(
+        self, youtube_channel_id: str
+    ) -> ChannelCredentialBinding | None:
+        row = self.connection.execute(
+            "SELECT * FROM channel_bindings WHERE youtube_channel_id = ?",
+            (youtube_channel_id,),
+        ).fetchone()
+        return _channel_binding(row) if row else None
+
     def save_channel_binding(self, binding: ChannelCredentialBinding) -> None:
         with self.connection:
             self.connection.execute(
@@ -651,6 +708,286 @@ class StateStore:
                 (publishing_channel_id,),
             )
         return cursor.rowcount == 1
+
+    def create_publication(
+        self,
+        *,
+        idempotency_key: str,
+        brand_plan_id: str,
+        publishing_channel_id: str,
+        google_identity_id: str,
+        youtube_channel_id: str,
+        source_short_id: int | None,
+        video_path: Path,
+        video_checksum: str,
+        title: str,
+        description: str,
+        tags: tuple[str, ...],
+        privacy_status: str,
+    ) -> PublicationRecord:
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO publications (
+                    idempotency_key, brand_plan_id, publishing_channel_id,
+                    google_identity_id, youtube_channel_id, video_path,
+                    source_short_id, video_checksum, title, description, tags_json,
+                    privacy_status,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO NOTHING
+                """,
+                (
+                    idempotency_key,
+                    brand_plan_id,
+                    publishing_channel_id,
+                    google_identity_id,
+                    youtube_channel_id,
+                    str(video_path),
+                    source_short_id,
+                    video_checksum,
+                    title,
+                    description,
+                    json.dumps(tags, ensure_ascii=False),
+                    privacy_status,
+                    PublicationStatus.READY_FOR_REVIEW,
+                    now,
+                    now,
+                ),
+            )
+        record = self.publication_by_key(idempotency_key)
+        if record is None:
+            raise RuntimeError("Publication could not be persisted.")
+        return record
+
+    def publication(self, publication_id: int) -> PublicationRecord | None:
+        row = self.connection.execute(
+            "SELECT * FROM publications WHERE id = ?", (publication_id,)
+        ).fetchone()
+        return _publication_record(row) if row else None
+
+    def publication_by_key(self, idempotency_key: str) -> PublicationRecord | None:
+        row = self.connection.execute(
+            "SELECT * FROM publications WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        return _publication_record(row) if row else None
+
+    def publications(self) -> tuple[PublicationRecord, ...]:
+        rows = self.connection.execute(
+            "SELECT * FROM publications ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+        return tuple(_publication_record(row) for row in rows)
+
+    def approve_publication(self, publication_id: int) -> PublicationRecord:
+        now = _now()
+        allowed = (
+            PublicationStatus.READY_FOR_REVIEW,
+            PublicationStatus.FAILED_RETRYABLE,
+            PublicationStatus.FAILED_PERMANENT,
+        )
+        with self.connection:
+            cursor = self.connection.execute(
+                f"""UPDATE publications
+                SET status=?, approved_at=?, updated_at=?, last_error=NULL,
+                    error_category=NULL
+                WHERE id=? AND status IN ({','.join('?' for _ in allowed)})""",
+                (
+                    PublicationStatus.APPROVED_FOR_PUBLISH,
+                    now,
+                    now,
+                    publication_id,
+                    *allowed,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "A publicação precisa estar em revisão ou falha confirmada "
+                "antes da aprovação."
+            )
+        return self._required_publication(publication_id)
+
+    def revise_publication(
+        self,
+        publication_id: int,
+        *,
+        title: str,
+        description: str,
+        tags: tuple[str, ...],
+        privacy_status: str,
+    ) -> PublicationRecord:
+        allowed = (
+            PublicationStatus.READY_FOR_REVIEW,
+            PublicationStatus.APPROVED_FOR_PUBLISH,
+            PublicationStatus.FAILED_RETRYABLE,
+            PublicationStatus.FAILED_PERMANENT,
+        )
+        now = _now()
+        with self.connection:
+            cursor = self.connection.execute(
+                f"""UPDATE publications
+                SET title=?, description=?, tags_json=?, privacy_status=?,
+                    status=?, approved_at=NULL, updated_at=?, last_error=NULL,
+                    error_category=NULL
+                WHERE id=? AND status IN ({','.join('?' for _ in allowed)})""",
+                (
+                    title,
+                    description,
+                    json.dumps(tags, ensure_ascii=False),
+                    privacy_status,
+                    PublicationStatus.READY_FOR_REVIEW,
+                    now,
+                    publication_id,
+                    *allowed,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ValueError("Published, active or uncertain publication is immutable.")
+        return self._required_publication(publication_id)
+
+    def start_publication_attempt(
+        self, publication_id: int
+    ) -> tuple[PublicationRecord, PublicationAttempt]:
+        now = _now()
+        with self.connection:
+            cursor = self.connection.execute(
+                """UPDATE publications SET status=?, updated_at=?
+                WHERE id=? AND status=? AND remote_video_id IS NULL""",
+                (
+                    PublicationStatus.UPLOADING,
+                    now,
+                    publication_id,
+                    PublicationStatus.APPROVED_FOR_PUBLISH,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    "A publicação não está aprovada ou já possui tentativa ativa."
+                )
+            number = self.connection.execute(
+                """SELECT COALESCE(MAX(attempt_number), 0) + 1
+                FROM publication_attempts WHERE publication_id=?""",
+                (publication_id,),
+            ).fetchone()[0]
+            attempt_id = self.connection.execute(
+                """INSERT INTO publication_attempts
+                (publication_id, attempt_number, started_at, status)
+                VALUES (?, ?, ?, 'STARTED')""",
+                (publication_id, number, now),
+            ).lastrowid
+        return (
+            self._required_publication(publication_id),
+            self._required_publication_attempt(int(attempt_id)),
+        )
+
+    def finish_publication_attempt(
+        self,
+        publication_id: int,
+        attempt_id: int,
+        *,
+        status: PublicationStatus,
+        remote_video_id: str | None = None,
+        error_category: str | None = None,
+        error_message: str | None = None,
+    ) -> PublicationRecord:
+        allowed = {
+            PublicationStatus.PUBLISHED,
+            PublicationStatus.FAILED_RETRYABLE,
+            PublicationStatus.FAILED_PERMANENT,
+            PublicationStatus.UPLOAD_UNCERTAIN,
+        }
+        if status not in allowed:
+            raise ValueError("Invalid terminal publication status.")
+        if status == PublicationStatus.PUBLISHED and not remote_video_id:
+            raise ValueError("Published upload requires a remote video ID.")
+        now = _now()
+        with self.connection:
+            attempt = self.connection.execute(
+                """UPDATE publication_attempts
+                SET finished_at=?, status=?, remote_video_id=?, error_category=?,
+                    error_message=?
+                WHERE id=? AND publication_id=? AND status='STARTED'""",
+                (
+                    now,
+                    status,
+                    remote_video_id,
+                    error_category,
+                    error_message,
+                    attempt_id,
+                    publication_id,
+                ),
+            )
+            if attempt.rowcount != 1:
+                raise ValueError("Publication attempt is not active.")
+            publication = self.connection.execute(
+                """UPDATE publications
+                SET status=?, remote_video_id=?, updated_at=?, published_at=?,
+                    last_error=?, error_category=?
+                WHERE id=? AND status=?""",
+                (
+                    status,
+                    remote_video_id,
+                    now,
+                    now if status == PublicationStatus.PUBLISHED else None,
+                    error_message,
+                    error_category,
+                    publication_id,
+                    PublicationStatus.UPLOADING,
+                ),
+            )
+            if publication.rowcount != 1:
+                raise ValueError("Publication is not uploading.")
+            if status == PublicationStatus.PUBLISHED:
+                source = self.connection.execute(
+                    "SELECT source_short_id FROM publications WHERE id=?",
+                    (publication_id,),
+                ).fetchone()
+                if source and source["source_short_id"] is not None:
+                    self.connection.execute(
+                        """UPDATE shorts SET status=?, posted_at=?, updated_at=?,
+                            error=NULL WHERE id=?""",
+                        (
+                            ShortStatus.POSTED,
+                            now,
+                            now,
+                            source["source_short_id"],
+                        ),
+                    )
+        return self._required_publication(publication_id)
+
+    def publication_attempts(
+        self, publication_id: int
+    ) -> tuple[PublicationAttempt, ...]:
+        rows = self.connection.execute(
+            """SELECT * FROM publication_attempts WHERE publication_id=?
+            ORDER BY attempt_number""",
+            (publication_id,),
+        ).fetchall()
+        return tuple(_publication_attempt(row) for row in rows)
+
+    def short_by_path(self, path: Path) -> ShortRecord | None:
+        resolved = str(Path(path).resolve())
+        row = self.connection.execute(
+            """SELECT * FROM shorts
+            WHERE file_path=? OR queue_path=? ORDER BY id LIMIT 1""",
+            (resolved, resolved),
+        ).fetchone()
+        return _short_record(row) if row else None
+
+    def _required_publication(self, publication_id: int) -> PublicationRecord:
+        record = self.publication(publication_id)
+        if record is None:
+            raise KeyError(f"Unknown publication: {publication_id}")
+        return record
+
+    def _required_publication_attempt(self, attempt_id: int) -> PublicationAttempt:
+        row = self.connection.execute(
+            "SELECT * FROM publication_attempts WHERE id=?", (attempt_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown publication attempt: {attempt_id}")
+        return _publication_attempt(row)
 
     def queued_metadata(self, youtube_id: str) -> tuple[QueueMetadata, ...]:
         """Return complete publication metadata in editorial rank order."""
@@ -1637,6 +1974,52 @@ class StateStore:
                     last_verified_at TEXT NOT NULL,
                     status TEXT NOT NULL
                 );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_youtube_channel_binding
+                    ON channel_bindings(youtube_channel_id);
+                CREATE TABLE IF NOT EXISTS publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    brand_plan_id TEXT NOT NULL,
+                    publishing_channel_id TEXT NOT NULL,
+                    google_identity_id TEXT NOT NULL,
+                    youtube_channel_id TEXT NOT NULL,
+                    source_short_id INTEGER,
+                    video_path TEXT NOT NULL,
+                    video_checksum TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    tags_json TEXT NOT NULL,
+                    privacy_status TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    remote_video_id TEXT UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    approved_at TEXT,
+                    published_at TEXT,
+                    last_error TEXT,
+                    error_category TEXT,
+                    FOREIGN KEY (brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id),
+                    FOREIGN KEY (source_short_id) REFERENCES shorts(id)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_publication_video_destination
+                    ON publications(publishing_channel_id, video_checksum);
+                CREATE INDEX IF NOT EXISTS idx_publications_status
+                    ON publications(status);
+                CREATE TABLE IF NOT EXISTS publication_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    publication_id INTEGER NOT NULL,
+                    attempt_number INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    status TEXT NOT NULL,
+                    remote_video_id TEXT,
+                    error_category TEXT,
+                    error_message TEXT,
+                    FOREIGN KEY (publication_id) REFERENCES publications(id)
+                        ON DELETE CASCADE,
+                    UNIQUE (publication_id, attempt_number)
+                );
                 CREATE TABLE IF NOT EXISTS theme_catalog (
                     theme_key TEXT PRIMARY KEY, display_name TEXT NOT NULL,
                     description TEXT NOT NULL, tags_json TEXT NOT NULL,
@@ -1831,6 +2214,9 @@ class StateStore:
             version = 16
         if version == 16:
             self._migrate_v16_to_v17()
+            version = 17
+        if version == 17:
+            self._migrate_v17_to_v18()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -2200,6 +2586,60 @@ class StateStore:
                 """
             )
 
+    def _migrate_v17_to_v18(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_youtube_channel_binding
+                    ON channel_bindings(youtube_channel_id);
+                CREATE TABLE IF NOT EXISTS publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    brand_plan_id TEXT NOT NULL,
+                    publishing_channel_id TEXT NOT NULL,
+                    google_identity_id TEXT NOT NULL,
+                    youtube_channel_id TEXT NOT NULL,
+                    source_short_id INTEGER,
+                    video_path TEXT NOT NULL,
+                    video_checksum TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    tags_json TEXT NOT NULL,
+                    privacy_status TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    remote_video_id TEXT UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    approved_at TEXT,
+                    published_at TEXT,
+                    last_error TEXT,
+                    error_category TEXT,
+                    FOREIGN KEY (brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id),
+                    FOREIGN KEY (source_short_id) REFERENCES shorts(id)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_publication_video_destination
+                    ON publications(publishing_channel_id, video_checksum);
+                CREATE INDEX IF NOT EXISTS idx_publications_status
+                    ON publications(status);
+                CREATE TABLE IF NOT EXISTS publication_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    publication_id INTEGER NOT NULL,
+                    attempt_number INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    status TEXT NOT NULL,
+                    remote_video_id TEXT,
+                    error_category TEXT,
+                    error_message TEXT,
+                    FOREIGN KEY (publication_id) REFERENCES publications(id)
+                        ON DELETE CASCADE,
+                    UNIQUE (publication_id, attempt_number)
+                );
+                PRAGMA user_version = 18;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -2318,4 +2758,44 @@ def _channel_binding(row: sqlite3.Row) -> ChannelCredentialBinding:
         connected_at=row["connected_at"],
         last_verified_at=row["last_verified_at"],
         status=row["status"],
+    )
+
+
+def _publication_record(row: sqlite3.Row) -> PublicationRecord:
+    return PublicationRecord(
+        publication_id=row["id"],
+        idempotency_key=row["idempotency_key"],
+        brand_plan_id=row["brand_plan_id"],
+        publishing_channel_id=row["publishing_channel_id"],
+        google_identity_id=row["google_identity_id"],
+        youtube_channel_id=row["youtube_channel_id"],
+        source_short_id=row["source_short_id"],
+        video_path=Path(row["video_path"]),
+        video_checksum=row["video_checksum"],
+        title=row["title"],
+        description=row["description"],
+        tags=tuple(json.loads(row["tags_json"])),
+        privacy_status=row["privacy_status"],
+        status=PublicationStatus(row["status"]),
+        remote_video_id=row["remote_video_id"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        approved_at=row["approved_at"],
+        published_at=row["published_at"],
+        last_error=row["last_error"],
+        error_category=row["error_category"],
+    )
+
+
+def _publication_attempt(row: sqlite3.Row) -> PublicationAttempt:
+    return PublicationAttempt(
+        attempt_id=row["id"],
+        publication_id=row["publication_id"],
+        attempt_number=row["attempt_number"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        status=row["status"],
+        remote_video_id=row["remote_video_id"],
+        error_category=row["error_category"],
+        error_message=row["error_message"],
     )

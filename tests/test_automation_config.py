@@ -3,7 +3,12 @@ import json
 import pytest
 
 from autoshorts.ai_analysis import parse_analysis_response
-from autoshorts.automation_config import load_automation_config
+from autoshorts.automation_config import (
+    AutomationConfig,
+    PublishingChannel,
+    ThemeProfile,
+    load_automation_config,
+)
 from autoshorts.automation_pipeline import AutomationRequest, _safe_creator_directory
 
 
@@ -86,4 +91,49 @@ def test_automation_request_rejects_invalid_limits(tmp_path, monkeypatch):
             AutomationRequest("tech", 0, 30, tmp_path, download_only=True),
             FakeConfig(),
             None,
+        )
+
+
+def test_channel_and_youtube_ids_are_globally_unique():
+    with pytest.raises(ValueError, match="globally unique"):
+        AutomationConfig(
+            (
+                ThemeProfile(
+                    "A",
+                    "",
+                    (),
+                    "a",
+                    channels=(PublishingChannel("same", "A", 1),),
+                ),
+                ThemeProfile(
+                    "B",
+                    "",
+                    (),
+                    "b",
+                    channels=(PublishingChannel("same", "B", 1),),
+                ),
+            )
+        )
+    with pytest.raises(ValueError, match="YouTube channel IDs"):
+        AutomationConfig(
+            (
+                ThemeProfile(
+                    "A",
+                    "",
+                    (),
+                    "a",
+                    channels=(
+                        PublishingChannel("a", "A", 1, youtube_channel_id="UC"),
+                    ),
+                ),
+                ThemeProfile(
+                    "B",
+                    "",
+                    (),
+                    "b",
+                    channels=(
+                        PublishingChannel("b", "B", 1, youtube_channel_id="UC"),
+                    ),
+                ),
+            )
         )

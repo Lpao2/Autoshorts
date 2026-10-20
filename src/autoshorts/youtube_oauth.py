@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -31,6 +31,10 @@ class PendingChannelConnection:
     google_identity_id: str
     channel: YouTubeChannelIdentity
     credential_payload: str = field(repr=False)
+
+
+class OAuthCredentialError(RuntimeError):
+    """Safe user-facing OAuth failure that never includes credential payloads."""
 
 
 class OAuthBackend(Protocol):
@@ -140,6 +144,14 @@ class YouTubeConnectionService:
         channel = self._channel(pending.publishing_channel_id)
         if channel.google_identity_id != pending.google_identity_id:
             raise ValueError("A Google Identity do canal mudou durante a conexão.")
+        conflict = self.state_store.get_channel_binding_by_youtube_id(
+            pending.channel.channel_id
+        )
+        if conflict and conflict.publishing_channel_id != channel.channel_id:
+            raise ValueError(
+                "Este YouTube Channel ID já está vinculado a outro canal de "
+                "publicação."
+            )
         previous = self.state_store.get_channel_binding(channel.channel_id)
         previous_payload = (
             self.credential_store.read(previous.credential_ref) if previous else None
@@ -173,10 +185,21 @@ class YouTubeConnectionService:
         binding = self.state_store.get_channel_binding(publishing_channel_id)
         if binding is None:
             raise KeyError(f"Canal sem binding: {publishing_channel_id}")
-        payload = self.credential_store.read(binding.credential_ref)
-        credentials = self.backend.load(payload, YOUTUBE_SCOPES)
-        actual = self.backend.identify_channel(credentials)
+        channel = self._channel(publishing_channel_id)
+        if channel.google_identity_id != binding.google_identity_id:
+            self._mark_invalid(binding, "INVALID")
+            raise OAuthCredentialError(
+                "O binding OAuth pertence a outra Google Identity. Reconecte o canal."
+            )
+        try:
+            payload = self.credential_store.read(binding.credential_ref)
+            credentials = self.backend.load(payload, YOUTUBE_SCOPES)
+            actual = self.backend.identify_channel(credentials)
+        except Exception:
+            self._mark_invalid(binding, "REVOKED")
+            raise OAuthCredentialError("OAuth credential revoked or invalid.") from None
         if actual.channel_id != binding.youtube_channel_id:
+            self._mark_invalid(binding, "INVALID")
             raise ValueError(
                 "O canal autenticado não corresponde ao youtube_channel_id persistido."
             )
@@ -196,6 +219,16 @@ class YouTubeConnectionService:
         self.state_store.save_channel_binding(verified)
         return verified
 
+    def load_verified_credentials(self, publishing_channel_id: str) -> object:
+        """Verify the remote channel, persist refreshes, then reload credentials."""
+        binding = self.verify_binding(publishing_channel_id)
+        try:
+            payload = self.credential_store.read(binding.credential_ref)
+            return self.backend.load(payload, YOUTUBE_SCOPES)
+        except Exception:
+            self._mark_invalid(binding, "REVOKED")
+            raise OAuthCredentialError("OAuth credential revoked or invalid.") from None
+
     def disconnect(self, publishing_channel_id: str) -> bool:
         binding = self.state_store.get_channel_binding(publishing_channel_id)
         if binding is None:
@@ -210,6 +243,11 @@ class YouTubeConnectionService:
                 if channel.channel_id == publishing_channel_id:
                     return channel
         raise KeyError(f"Publishing channel not found: {publishing_channel_id}")
+
+    def _mark_invalid(
+        self, binding: ChannelCredentialBinding, status: str
+    ) -> None:
+        self.state_store.save_channel_binding(replace(binding, status=status))
 
     @staticmethod
     def _client_secret_path() -> Path:
