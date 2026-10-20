@@ -106,6 +106,8 @@ def discover_creator_videos(
     *,
     quantity: int,
     age_days: int,
+    min_duration_seconds: int | None = None,
+    max_duration_seconds: int | None = None,
     access: YouTubeAccess | None = None,
     skip_handler: SkipHandler | None = None,
     cancel: Event | None = None,
@@ -123,6 +125,9 @@ def discover_creator_videos(
         "extract_flat": "in_playlist",
         "playlistend": limit,
         "ignoreerrors": True,
+        "socket_timeout": 15,
+        "retries": 1,
+        "extractor_retries": 1,
     }
     try:
         with yt_dlp.YoutubeDL(flat_options) as ydl:
@@ -142,12 +147,45 @@ def discover_creator_videos(
         if not url:
             _skip(skip_handler, creator_name, title, "", "unavailable", "URL ausente")
             continue
+        flat_duration = _optional_int(entry.get("duration"))
+        if (
+            flat_duration is not None
+            and min_duration_seconds is not None
+            and flat_duration < min_duration_seconds
+        ):
+            reason = "shorts" if flat_duration <= 180 else "duration"
+            _skip(
+                skip_handler,
+                creator_name,
+                title,
+                url,
+                reason,
+                f"{flat_duration}s",
+            )
+            continue
+        if (
+            flat_duration is not None
+            and max_duration_seconds is not None
+            and flat_duration > max_duration_seconds
+        ):
+            _skip(
+                skip_handler,
+                creator_name,
+                title,
+                url,
+                "duration",
+                f"{flat_duration}s",
+            )
+            continue
         try:
             hydrate_options = {
                 **shared,
                 "quiet": True,
                 "skip_download": True,
                 "noplaylist": True,
+                "socket_timeout": 15,
+                "retries": 1,
+                "extractor_retries": 1,
             }
             with yt_dlp.YoutubeDL(hydrate_options) as ydl:
                 hydrated = ydl.extract_info(url, download=False)

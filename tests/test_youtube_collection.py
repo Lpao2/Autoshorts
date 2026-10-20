@@ -170,6 +170,35 @@ def test_scan_limit_is_bounded():
     assert candidate_scan_limit(1000) == 100
 
 
+def test_flat_duration_filter_avoids_unnecessary_hydration(monkeypatch):
+    flat = {
+        "entries": [
+            {"id": "short", "title": "Short", "duration": 60},
+            {"id": "valid", "title": "Valid", "duration": 1200},
+        ]
+    }
+    hydrated = {
+        "id": "valid",
+        "title": "Valid",
+        "duration": 1200,
+        "upload_date": date.today().strftime("%Y%m%d"),
+    }
+    install_fake_ytdlp(monkeypatch, [flat, hydrated])
+    skipped = []
+    result = discover_creator_videos(
+        "Creator",
+        "https://youtube.example/videos",
+        quantity=1,
+        age_days=30,
+        min_duration_seconds=900,
+        max_duration_seconds=2400,
+        skip_handler=skipped.append,
+    )
+    assert [item.youtube_id for item in result] == ["valid"]
+    assert skipped[0].reason == "shorts"
+    assert len(FakeYoutubeDL.options) == 2
+
+
 @pytest.mark.parametrize(
     ("raw", "friendly"),
     [

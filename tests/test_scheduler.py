@@ -346,7 +346,7 @@ def test_schema_migration_is_idempotent(tmp_path):
     with StateStore(path) as store:
         store.connection.execute("PRAGMA user_version=23")
     with StateStore(path) as store:
-        assert store.schema_version == 24
+        assert store.schema_version == 25
         assert store.scheduler_settings().max_attempts == 3
         assert store.scheduler_jobs() == ()
 

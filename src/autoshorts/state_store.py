@@ -64,7 +64,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 class VideoStatus(StrEnum):
@@ -136,6 +136,13 @@ class VideoRecord:
     updated_at: str
     processed_at: str | None
     error: str | None
+    platform: str
+    content_source_id: int | None
+    duration_seconds: int | None
+    published_at: str | None
+    local_path: Path | None
+    checksum: str | None
+    validated_at: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +332,10 @@ class StateStore:
         creator_name: str,
         theme_name: str,
         title: str,
+        platform: str = "youtube",
+        content_source_id: int | None = None,
+        duration_seconds: int | None = None,
+        published_at: str | None = None,
     ) -> bool:
         """Register globally; return False when this YouTube ID already exists."""
         youtube_id = youtube_id.strip()
@@ -337,12 +348,22 @@ class StateStore:
                 """
                 INSERT INTO videos (
                     youtube_id, source_url, creator_name, theme_name, title,
-                    status, discovered_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    status, discovered_at, updated_at, platform,
+                    content_source_id, duration_seconds, published_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(youtube_id) DO UPDATE SET
                     source_url = excluded.source_url,
                     creator_name = excluded.creator_name,
-                    title = excluded.title
+                    title = excluded.title,
+                    content_source_id = COALESCE(
+                        excluded.content_source_id, videos.content_source_id
+                    ),
+                    duration_seconds = COALESCE(
+                        excluded.duration_seconds, videos.duration_seconds
+                    ),
+                    published_at = COALESCE(
+                        excluded.published_at, videos.published_at
+                    )
                 """,
                 (
                     youtube_id,
@@ -353,9 +374,49 @@ class StateStore:
                     VideoStatus.DISCOVERED,
                     now,
                     now,
+                    platform,
+                    content_source_id,
+                    duration_seconds,
+                    published_at,
                 ),
             )
         return not existed
+
+    def record_downloaded_video(
+        self,
+        youtube_id: str,
+        *,
+        local_path: Path,
+        checksum: str,
+        duration_seconds: int,
+    ) -> VideoRecord:
+        """Atomically promote a validated download and persist its provenance."""
+        current = self.get_video(youtube_id)
+        if current is None:
+            raise KeyError(f"Unknown YouTube ID: {youtube_id}")
+        if current.status != VideoStatus.DOWNLOADING:
+            raise ValueError(
+                f"Invalid video transition: {current.status} -> DOWNLOADED"
+            )
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """UPDATE videos SET status=?, local_path=?, checksum=?,
+                    duration_seconds=?, validated_at=?, updated_at=?, error=NULL
+                WHERE youtube_id=?""",
+                (
+                    VideoStatus.DOWNLOADED,
+                    str(Path(local_path).resolve()),
+                    checksum,
+                    duration_seconds,
+                    now,
+                    now,
+                    youtube_id,
+                ),
+            )
+        record = self.get_video(youtube_id)
+        assert record is not None
+        return record
 
     def get_video(self, youtube_id: str) -> VideoRecord | None:
         row = self.connection.execute(
@@ -2644,8 +2705,17 @@ class StateStore:
                     discovered_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     processed_at TEXT,
-                    error TEXT
+                    error TEXT,
+                    platform TEXT NOT NULL DEFAULT 'youtube',
+                    content_source_id INTEGER,
+                    duration_seconds INTEGER,
+                    published_at TEXT,
+                    local_path TEXT,
+                    checksum TEXT,
+                    validated_at TEXT
                 );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_platform_external
+                    ON videos(platform, youtube_id);
 
                 CREATE TABLE IF NOT EXISTS shorts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3113,6 +3183,9 @@ class StateStore:
             version = 23
         if version == 23:
             self._migrate_v23_to_v24()
+            version = 24
+        if version == 24:
+            self._migrate_v24_to_v25()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -3749,6 +3822,37 @@ class StateStore:
                 (now,),
             )
 
+    def _migrate_v24_to_v25(self) -> None:
+        """Persist source-video discovery and validated download provenance."""
+        with self.connection:
+            table = self.connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='videos'"
+            ).fetchone()
+            if table:
+                existing = {
+                    row["name"]
+                    for row in self.connection.execute("PRAGMA table_info(videos)")
+                }
+                additions = {
+                    "platform": "TEXT NOT NULL DEFAULT 'youtube'",
+                    "content_source_id": "INTEGER",
+                    "duration_seconds": "INTEGER",
+                    "published_at": "TEXT",
+                    "local_path": "TEXT",
+                    "checksum": "TEXT",
+                    "validated_at": "TEXT",
+                }
+                for name, declaration in additions.items():
+                    if name not in existing:
+                        self.connection.execute(
+                            f"ALTER TABLE videos ADD COLUMN {name} {declaration}"
+                        )
+                self.connection.execute(
+                    """CREATE UNIQUE INDEX IF NOT EXISTS
+                    idx_videos_platform_external ON videos(platform, youtube_id)"""
+                )
+            self.connection.execute("PRAGMA user_version = 25")
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -3923,6 +4027,13 @@ def _video_record(row: sqlite3.Row) -> VideoRecord:
         updated_at=row["updated_at"],
         processed_at=row["processed_at"],
         error=row["error"],
+        platform=row["platform"],
+        content_source_id=row["content_source_id"],
+        duration_seconds=row["duration_seconds"],
+        published_at=row["published_at"],
+        local_path=Path(row["local_path"]) if row["local_path"] else None,
+        checksum=row["checksum"],
+        validated_at=row["validated_at"],
     )
 
 
