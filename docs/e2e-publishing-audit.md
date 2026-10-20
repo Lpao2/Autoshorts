@@ -26,7 +26,8 @@
 ## Estado após a implementação
 
 - Schema v18 adiciona `publications`, `publication_attempts` e unicidade de
-  YouTube Channel ID.
+  YouTube Channel ID. Schema v19 repara bancos v18 iniciais que não possuíam a
+  coluna opcional `publications.source_short_id`.
 - O vínculo Brand Plan → canal reutiliza `ChannelBrandKit.source_plan_id` e
   exige uma ação explícita.
 - O preflight confere arquivo e checksum, metadata, plano, assets, identity,

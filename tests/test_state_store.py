@@ -95,6 +95,50 @@ def test_migrates_v14_and_rejects_only_future_schema(tmp_path):
         StateStore(future)
 
 
+def test_migrates_early_v18_publications_without_source_short_id(tmp_path):
+    database = tmp_path / "v18.db"
+    with StateStore(database):
+        pass
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        ALTER TABLE publications RENAME TO publications_v18;
+        CREATE TABLE publications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            brand_plan_id TEXT NOT NULL,
+            publishing_channel_id TEXT NOT NULL,
+            google_identity_id TEXT NOT NULL,
+            youtube_channel_id TEXT NOT NULL,
+            video_path TEXT NOT NULL,
+            video_checksum TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            tags_json TEXT NOT NULL,
+            privacy_status TEXT NOT NULL,
+            status TEXT NOT NULL,
+            remote_video_id TEXT UNIQUE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            approved_at TEXT,
+            published_at TEXT,
+            last_error TEXT,
+            error_category TEXT
+        );
+        DROP TABLE publications_v18;
+        PRAGMA user_version = 18;
+        """
+    )
+    connection.close()
+
+    with StateStore(database) as store:
+        assert store.schema_version == SCHEMA_VERSION
+        assert store.connection.execute(
+            "SELECT name FROM pragma_table_info('publications') "
+            "WHERE name='source_short_id'"
+        ).fetchone()
+
+
 def test_global_deduplication_uses_only_youtube_id(tmp_path):
     with StateStore(tmp_path / "state.db") as store:
         assert register(store, theme="LoL")

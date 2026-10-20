@@ -44,7 +44,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 class VideoStatus(StrEnum):
@@ -2217,6 +2217,9 @@ class StateStore:
             version = 17
         if version == 17:
             self._migrate_v17_to_v18()
+            version = 18
+        if version == 18:
+            self._migrate_v18_to_v19()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -2639,6 +2642,20 @@ class StateStore:
                 PRAGMA user_version = 18;
                 """
             )
+
+    def _migrate_v18_to_v19(self) -> None:
+        """Repair early v18 databases created without the Short linkage."""
+        columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(publications)")
+        }
+        with self.connection:
+            if "source_short_id" not in columns:
+                self.connection.execute(
+                    "ALTER TABLE publications ADD COLUMN source_short_id INTEGER "
+                    "REFERENCES shorts(id)"
+                )
+            self.connection.execute("PRAGMA user_version = 19")
 
 
 def _now() -> str:
