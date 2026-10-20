@@ -27,11 +27,17 @@ from autoshorts.brand_planning import (
     global_brand_collisions,
 )
 from autoshorts.editorial_sources import (
+    ChannelPostingOverride,
     ContentSource,
+    PostingConfidence,
+    PostingStrategy,
+    PostingWindow,
     SourceRightsStatus,
     SourceValidationStatus,
     ThemeContentSource,
     ThemeMarketProfile,
+    ThemePostingProfile,
+    TimingPolicy,
 )
 from autoshorts.theme_catalog import (
     AuthorizationStatus,
@@ -51,7 +57,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 
 class VideoStatus(StrEnum):
@@ -1326,6 +1332,194 @@ class StateStore:
             result.append((_theme_content_source(row), _content_source(source_row)))
         return tuple(result)
 
+    def save_theme_posting_profile(
+        self,
+        *,
+        theme_market_profile_id: int,
+        timezone: str,
+        timing_policy: TimingPolicy,
+        strategy: PostingStrategy = PostingStrategy.SEEDED,
+        confidence: PostingConfidence = PostingConfidence.MEDIUM,
+        enabled: bool = True,
+        source_note: str = "",
+        last_reviewed_at: str | None = None,
+    ) -> ThemePostingProfile:
+        # Construction validates the IANA timezone before persistence.
+        ThemePostingProfile(
+            0,
+            theme_market_profile_id,
+            timezone,
+            timing_policy,
+            strategy,
+            confidence,
+            enabled,
+            source_note,
+            last_reviewed_at,
+            "",
+            "",
+        )
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO theme_posting_profiles (
+                    theme_market_profile_id, timezone, timing_policy, strategy,
+                    confidence, enabled, source_note, last_reviewed_at,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(theme_market_profile_id) DO UPDATE SET
+                    timezone=excluded.timezone,
+                    timing_policy=excluded.timing_policy,
+                    strategy=excluded.strategy,
+                    confidence=excluded.confidence,
+                    enabled=excluded.enabled,
+                    source_note=excluded.source_note,
+                    last_reviewed_at=excluded.last_reviewed_at,
+                    updated_at=excluded.updated_at""",
+                (
+                    theme_market_profile_id,
+                    timezone,
+                    timing_policy,
+                    strategy,
+                    confidence,
+                    enabled,
+                    source_note,
+                    last_reviewed_at,
+                    now,
+                    now,
+                ),
+            )
+        profile = self.theme_posting_profile(theme_market_profile_id)
+        if profile is None:
+            raise RuntimeError("Theme posting profile could not be persisted.")
+        return profile
+
+    def theme_posting_profile(
+        self, theme_market_profile_id: int
+    ) -> ThemePostingProfile | None:
+        row = self.connection.execute(
+            """SELECT * FROM theme_posting_profiles
+            WHERE theme_market_profile_id=?""",
+            (theme_market_profile_id,),
+        ).fetchone()
+        return _theme_posting_profile(row) if row else None
+
+    def theme_posting_profiles(self) -> tuple[ThemePostingProfile, ...]:
+        rows = self.connection.execute(
+            "SELECT * FROM theme_posting_profiles ORDER BY theme_market_profile_id"
+        ).fetchall()
+        return tuple(_theme_posting_profile(row) for row in rows)
+
+    def replace_posting_windows(
+        self,
+        posting_profile_id: int,
+        windows: tuple[tuple[int, str, str, tuple[str, ...], bool, bool], ...],
+    ) -> tuple[PostingWindow, ...]:
+        priorities = [item[0] for item in windows]
+        if len(priorities) != len(set(priorities)):
+            raise ValueError("Posting window priorities must be unique.")
+        normalized = []
+        for priority, start, end, days, experimental, enabled in windows:
+            _validate_posting_window(priority, start, end, days)
+            normalized.append(
+                (priority, start, end, tuple(days), experimental, enabled)
+            )
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM posting_windows WHERE posting_profile_id=?",
+                (posting_profile_id,),
+            )
+            self.connection.executemany(
+                """INSERT INTO posting_windows (
+                    posting_profile_id, priority, start_local_time, end_local_time,
+                    days_of_week_json, experimental, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    (
+                        posting_profile_id,
+                        priority,
+                        start,
+                        end,
+                        json.dumps(days),
+                        experimental,
+                        enabled,
+                        now,
+                        now,
+                    )
+                    for priority, start, end, days, experimental, enabled in normalized
+                ),
+            )
+        return self.posting_windows(posting_profile_id)
+
+    def posting_windows(self, posting_profile_id: int) -> tuple[PostingWindow, ...]:
+        rows = self.connection.execute(
+            """SELECT * FROM posting_windows WHERE posting_profile_id=?
+            ORDER BY priority""",
+            (posting_profile_id,),
+        ).fetchall()
+        return tuple(_posting_window(row) for row in rows)
+
+    def save_channel_posting_override(
+        self,
+        *,
+        publishing_channel_id: str,
+        posting_profile_id: int,
+        timezone: str | None = None,
+        timing_policy: TimingPolicy | None = None,
+        strategy: PostingStrategy | None = None,
+        confidence: PostingConfidence | None = None,
+        enabled: bool = True,
+        source_note: str = "",
+    ) -> ChannelPostingOverride:
+        if timezone:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(timezone)
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO channel_posting_overrides (
+                    publishing_channel_id, posting_profile_id, timezone,
+                    timing_policy, strategy, confidence, enabled, source_note,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(publishing_channel_id) DO UPDATE SET
+                    posting_profile_id=excluded.posting_profile_id,
+                    timezone=excluded.timezone,
+                    timing_policy=excluded.timing_policy,
+                    strategy=excluded.strategy,
+                    confidence=excluded.confidence,
+                    enabled=excluded.enabled,
+                    source_note=excluded.source_note,
+                    updated_at=excluded.updated_at""",
+                (
+                    publishing_channel_id,
+                    posting_profile_id,
+                    timezone,
+                    timing_policy,
+                    strategy,
+                    confidence,
+                    enabled,
+                    source_note,
+                    now,
+                    now,
+                ),
+            )
+        override = self.channel_posting_override(publishing_channel_id)
+        if override is None:
+            raise RuntimeError("Channel posting override could not be persisted.")
+        return override
+
+    def channel_posting_override(
+        self, publishing_channel_id: str
+    ) -> ChannelPostingOverride | None:
+        row = self.connection.execute(
+            """SELECT * FROM channel_posting_overrides
+            WHERE publishing_channel_id=?""",
+            (publishing_channel_id,),
+        ).fetchone()
+        return _channel_posting_override(row) if row else None
+
     def save_brand_generation(self, result: BrandGenerationResult) -> int:
         now = _now()
         usage = result.usage
@@ -2521,6 +2715,40 @@ class StateStore:
                         ON DELETE CASCADE,
                     CHECK(target_duration_min_seconds < target_duration_max_seconds)
                 );
+                CREATE TABLE IF NOT EXISTS theme_posting_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_market_profile_id INTEGER NOT NULL UNIQUE,
+                    timezone TEXT NOT NULL, timing_policy TEXT NOT NULL,
+                    strategy TEXT NOT NULL, confidence TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    source_note TEXT NOT NULL DEFAULT '', last_reviewed_at TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(theme_market_profile_id)
+                        REFERENCES theme_market_profiles(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS posting_windows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    posting_profile_id INTEGER NOT NULL,
+                    priority INTEGER NOT NULL CHECK(priority > 0),
+                    start_local_time TEXT NOT NULL, end_local_time TEXT NOT NULL,
+                    days_of_week_json TEXT NOT NULL,
+                    experimental INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(posting_profile_id, priority),
+                    FOREIGN KEY(posting_profile_id)
+                        REFERENCES theme_posting_profiles(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS channel_posting_overrides (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    posting_profile_id INTEGER NOT NULL,
+                    timezone TEXT, timing_policy TEXT, strategy TEXT, confidence TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    source_note TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(posting_profile_id)
+                        REFERENCES theme_posting_profiles(id) ON DELETE CASCADE
+                );
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -2587,6 +2815,9 @@ class StateStore:
             version = 21
         if version == 21:
             self._migrate_v21_to_v22()
+            version = 22
+        if version == 22:
+            self._migrate_v22_to_v23()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -3127,6 +3358,49 @@ class StateStore:
                     )
             self.connection.execute("PRAGMA user_version = 22")
 
+    def _migrate_v22_to_v23(self) -> None:
+        """Add market posting policies and optional channel overrides."""
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS theme_posting_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_market_profile_id INTEGER NOT NULL UNIQUE,
+                    timezone TEXT NOT NULL, timing_policy TEXT NOT NULL,
+                    strategy TEXT NOT NULL, confidence TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    source_note TEXT NOT NULL DEFAULT '', last_reviewed_at TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(theme_market_profile_id)
+                        REFERENCES theme_market_profiles(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS posting_windows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    posting_profile_id INTEGER NOT NULL,
+                    priority INTEGER NOT NULL CHECK(priority > 0),
+                    start_local_time TEXT NOT NULL, end_local_time TEXT NOT NULL,
+                    days_of_week_json TEXT NOT NULL,
+                    experimental INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(posting_profile_id, priority),
+                    FOREIGN KEY(posting_profile_id)
+                        REFERENCES theme_posting_profiles(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS channel_posting_overrides (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    posting_profile_id INTEGER NOT NULL,
+                    timezone TEXT, timing_policy TEXT, strategy TEXT, confidence TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    source_note TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(posting_profile_id)
+                        REFERENCES theme_posting_profiles(id) ON DELETE CASCADE
+                );
+                PRAGMA user_version = 23;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -3185,6 +3459,69 @@ def _theme_content_source(row: sqlite3.Row) -> ThemeContentSource:
         row["created_at"],
         row["updated_at"],
     )
+
+
+def _theme_posting_profile(row: sqlite3.Row) -> ThemePostingProfile:
+    return ThemePostingProfile(
+        row["id"],
+        row["theme_market_profile_id"],
+        row["timezone"],
+        TimingPolicy(row["timing_policy"]),
+        PostingStrategy(row["strategy"]),
+        PostingConfidence(row["confidence"]),
+        bool(row["enabled"]),
+        row["source_note"],
+        row["last_reviewed_at"],
+        row["created_at"],
+        row["updated_at"],
+    )
+
+
+def _posting_window(row: sqlite3.Row) -> PostingWindow:
+    return PostingWindow(
+        row["id"],
+        row["posting_profile_id"],
+        row["priority"],
+        row["start_local_time"],
+        row["end_local_time"],
+        tuple(json.loads(row["days_of_week_json"])),
+        bool(row["experimental"]),
+        bool(row["enabled"]),
+        row["created_at"],
+        row["updated_at"],
+    )
+
+
+def _channel_posting_override(row: sqlite3.Row) -> ChannelPostingOverride:
+    return ChannelPostingOverride(
+        row["publishing_channel_id"],
+        row["posting_profile_id"],
+        row["timezone"],
+        TimingPolicy(row["timing_policy"]) if row["timing_policy"] else None,
+        PostingStrategy(row["strategy"]) if row["strategy"] else None,
+        PostingConfidence(row["confidence"]) if row["confidence"] else None,
+        bool(row["enabled"]),
+        row["source_note"],
+        row["created_at"],
+        row["updated_at"],
+    )
+
+
+def _validate_posting_window(
+    priority: int, start: str, end: str, days: tuple[str, ...]
+) -> None:
+    if priority < 1:
+        raise ValueError("Posting window priority must be positive.")
+    for value in (start, end):
+        try:
+            datetime.strptime(value, "%H:%M")
+        except ValueError as exc:
+            raise ValueError(f"Invalid local posting time: {value}") from exc
+    if start == end:
+        raise ValueError("Posting window start and end cannot be equal.")
+    allowed = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+    if not days or len(days) != len(set(days)) or not set(days) <= allowed:
+        raise ValueError("Posting window days must be unique weekday abbreviations.")
 
 
 def _brand_asset_record(row):

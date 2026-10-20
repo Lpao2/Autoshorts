@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from autoshorts.editorial_sources import SourceRightsStatus, SourceValidationStatus
+from autoshorts.editorial_sources import (
+    PostingConfidence,
+    PostingStrategy,
+    SourceRightsStatus,
+    SourceValidationStatus,
+    TimingPolicy,
+)
 from autoshorts.state_store import StateStore
 
 
@@ -71,3 +77,51 @@ def import_editorial_seed(path: Path, state: StateStore) -> tuple[int, int]:
             )
             association_count += 1
     return len(profiles), association_count
+
+
+def import_posting_seed(path: Path, state: StateStore) -> tuple[int, int]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != 1:
+        raise ValueError("Unsupported posting seed schema version.")
+    profiles = payload.get("profiles")
+    if not isinstance(profiles, list):
+        raise ValueError("Posting seed profiles must be a list.")
+    window_count = 0
+    for raw in profiles:
+        market = state.theme_market_profile(
+            raw["theme_key"],
+            raw["platform"],
+            raw["region_code"],
+            raw["language_code"],
+        )
+        if market is None:
+            raise KeyError(f"Theme market profile not found: {raw['theme_key']}")
+        posting = state.save_theme_posting_profile(
+            theme_market_profile_id=market.profile_id,
+            timezone=raw["timezone"],
+            timing_policy=TimingPolicy(raw["timing_policy"]),
+            strategy=PostingStrategy(raw["strategy"]),
+            confidence=PostingConfidence(raw["confidence"]),
+            enabled=bool(raw["enabled"]),
+            source_note=raw.get("source_note", ""),
+            last_reviewed_at=raw.get("last_reviewed_at"),
+        )
+        windows = raw.get("windows")
+        if not isinstance(windows, list) or len(windows) < 1:
+            raise ValueError("Each posting profile must contain posting windows.")
+        state.replace_posting_windows(
+            posting.posting_profile_id,
+            tuple(
+                (
+                    int(window["priority"]),
+                    window["start_local_time"],
+                    window["end_local_time"],
+                    tuple(window["days_of_week"]),
+                    bool(window["experimental"]),
+                    bool(window["enabled"]),
+                )
+                for window in windows
+            ),
+        )
+        window_count += len(windows)
+    return len(profiles), window_count

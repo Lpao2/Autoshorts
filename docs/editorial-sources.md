@@ -24,3 +24,23 @@ As amostras armazenam a data do upload mais recente, a quantidade de vídeos
 analisados e as contagens long-form e dentro da faixa de 900–2400 segundos. A
 validação inicial usa os 20 uploads mais recentes de cada canal e mantém
 `rights_status=UNKNOWN`.
+
+## Política de horário
+
+`theme_posting_profiles` pertence a um `theme_market_profiles` e armazena o
+timezone IANA, a política (`SCHEDULED`, `HYBRID` ou `FRESHNESS_FIRST`), a
+estratégia e a confiança. `posting_windows` mantém horários locais; nenhuma
+conversão para UTC ocorre na persistência. Os dias são preferenciais e não
+proíbem publicação fora deles.
+
+O seed inicial pode ser reaplicado de forma idempotente:
+
+```bash
+autoshorts-editorial import-schedules config/posting-schedules.br-pt-BR.seed.json
+autoshorts-editorial schedules
+```
+
+`channel_posting_overrides` permite que um canal sobrescreva futuramente os
+campos escalares herdados sem duplicar o perfil do tema. Não há overrides
+cadastrados no seed. A resolução disponível apenas compõe a configuração; ela
+não agenda jobs, não inicia daemon e não publica vídeos.

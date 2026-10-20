@@ -1,0 +1,818 @@
+{
+  "schema_version": 1,
+  "purpose": "one-time reviewed posting seed; SQLite is the operational source of truth",
+  "profiles": [
+    {
+      "theme_key": "lol",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "20:00",
+          "end_local_time": "23:00",
+          "days_of_week": [
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "06:00",
+          "end_local_time": "07:30",
+          "days_of_week": [
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "fe",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "20:00",
+          "end_local_time": "23:00",
+          "days_of_week": [
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "06:00",
+          "end_local_time": "08:00",
+          "days_of_week": [
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "filmes",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "18:00",
+          "end_local_time": "21:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "06:00",
+          "end_local_time": "08:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "finance-business",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "HYBRID",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "17:30",
+          "end_local_time": "20:00",
+          "days_of_week": [
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "07:00",
+          "end_local_time": "08:30",
+          "days_of_week": [
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "futebol",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "FRESHNESS_FIRST",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "18:00",
+          "end_local_time": "23:30",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "12:00",
+          "end_local_time": "14:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "history-science-curiosities",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "19:00",
+          "end_local_time": "21:30",
+          "days_of_week": [
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "07:00",
+          "end_local_time": "09:00",
+          "days_of_week": [
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "academia",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "17:00",
+          "end_local_time": "20:00",
+          "days_of_week": [
+            "Mon",
+            "Thu",
+            "Sat"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "06:00",
+          "end_local_time": "08:00",
+          "days_of_week": [
+            "Mon",
+            "Thu",
+            "Sat"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "animais",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "05:30",
+          "end_local_time": "08:00",
+          "days_of_week": [
+            "Thu",
+            "Fri"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "12:00",
+          "end_local_time": "14:00",
+          "days_of_week": [
+            "Thu",
+            "Fri"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "anime",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "18:00",
+          "end_local_time": "22:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "06:00",
+          "end_local_time": "08:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "atual",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "FRESHNESS_FIRST",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "19:00",
+          "end_local_time": "22:00",
+          "days_of_week": [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "07:00",
+          "end_local_time": "09:00",
+          "days_of_week": [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "cars-motorcycles",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "HYBRID",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "18:00",
+          "end_local_time": "21:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "12:00",
+          "end_local_time": "14:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "combat-sports",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "FRESHNESS_FIRST",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "19:00",
+          "end_local_time": "23:30",
+          "days_of_week": [
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "12:00",
+          "end_local_time": "14:00",
+          "days_of_week": [
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "comedia",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "06:00",
+          "end_local_time": "09:00",
+          "days_of_week": [
+            "Fri",
+            "Sun",
+            "Mon"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "19:00",
+          "end_local_time": "22:00",
+          "days_of_week": [
+            "Fri",
+            "Sun",
+            "Mon"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "comida",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "05:30",
+          "end_local_time": "07:30",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "11:00",
+          "end_local_time": "13:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "desenho",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "17:00",
+          "end_local_time": "20:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "09:00",
+          "end_local_time": "11:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "influ",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "HYBRID",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "19:00",
+          "end_local_time": "22:00",
+          "days_of_week": [
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "12:00",
+          "end_local_time": "14:00",
+          "days_of_week": [
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "mine",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "19:00",
+          "end_local_time": "22:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "10:00",
+          "end_local_time": "12:00",
+          "days_of_week": [
+            "Fri",
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "mysteries-true-crime",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "11:00",
+          "end_local_time": "14:00",
+          "days_of_week": [
+            "Sat",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "20:00",
+          "end_local_time": "22:00",
+          "days_of_week": [
+            "Sat",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "relationships-behavior",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "SCHEDULED",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "18:00",
+          "end_local_time": "21:00",
+          "days_of_week": [
+            "Tue",
+            "Sun"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "12:00",
+          "end_local_time": "14:00",
+          "days_of_week": [
+            "Tue",
+            "Sun"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "theme_key": "technology-ai",
+      "platform": "youtube",
+      "region_code": "BR",
+      "language_code": "pt-BR",
+      "timezone": "America/Sao_Paulo",
+      "timing_policy": "HYBRID",
+      "strategy": "SEEDED",
+      "confidence": "MEDIUM",
+      "enabled": true,
+      "source_note": "Seed editorial inicial fornecido pelo usuário; dias são preferenciais, não bloqueios.",
+      "windows": [
+        {
+          "priority": 1,
+          "label": "Principal",
+          "start_local_time": "18:00",
+          "end_local_time": "21:00",
+          "days_of_week": [
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri"
+          ],
+          "experimental": false,
+          "enabled": true
+        },
+        {
+          "priority": 2,
+          "label": "Teste",
+          "start_local_time": "07:00",
+          "end_local_time": "10:00",
+          "days_of_week": [
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri"
+          ],
+          "experimental": true,
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}
