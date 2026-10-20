@@ -44,7 +44,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 class VideoStatus(StrEnum):
@@ -228,6 +228,17 @@ class PublicationRecord:
     description: str
     tags: tuple[str, ...]
     privacy_status: str
+    made_for_kids: bool | None
+    contains_synthetic_media: bool | None
+    has_paid_product_placement: bool | None
+    category_id: str | None
+    category_name: str | None
+    default_language: str | None
+    license: str | None
+    embeddable: bool | None
+    public_stats_viewable: bool | None
+    publish_at: str | None
+    recording_date: str | None
     status: PublicationStatus
     remote_video_id: str | None
     created_at: str
@@ -724,6 +735,17 @@ class StateStore:
         description: str,
         tags: tuple[str, ...],
         privacy_status: str,
+        made_for_kids: bool | None,
+        contains_synthetic_media: bool | None,
+        has_paid_product_placement: bool | None,
+        category_id: str | None,
+        category_name: str | None,
+        default_language: str | None,
+        license: str | None,
+        embeddable: bool | None,
+        public_stats_viewable: bool | None,
+        publish_at: str | None,
+        recording_date: str | None,
     ) -> PublicationRecord:
         now = _now()
         with self.connection:
@@ -733,9 +755,15 @@ class StateStore:
                     idempotency_key, brand_plan_id, publishing_channel_id,
                     google_identity_id, youtube_channel_id, video_path,
                     source_short_id, video_checksum, title, description, tags_json,
-                    privacy_status,
+                    privacy_status, made_for_kids, contains_synthetic_media,
+                    has_paid_product_placement, category_id, category_name,
+                    default_language, license, embeddable, public_stats_viewable,
+                    publish_at, recording_date,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
                 ON CONFLICT(idempotency_key) DO NOTHING
                 """,
                 (
@@ -751,6 +779,17 @@ class StateStore:
                     description,
                     json.dumps(tags, ensure_ascii=False),
                     privacy_status,
+                    made_for_kids,
+                    contains_synthetic_media,
+                    has_paid_product_placement,
+                    category_id,
+                    category_name,
+                    default_language,
+                    license,
+                    embeddable,
+                    public_stats_viewable,
+                    publish_at,
+                    recording_date,
                     PublicationStatus.READY_FOR_REVIEW,
                     now,
                     now,
@@ -792,7 +831,7 @@ class StateStore:
                 f"""UPDATE publications
                 SET status=?, approved_at=?, updated_at=?, last_error=NULL,
                     error_category=NULL
-                WHERE id=? AND status IN ({','.join('?' for _ in allowed)})""",
+                WHERE id=? AND status IN ({",".join("?" for _ in allowed)})""",
                 (
                     PublicationStatus.APPROVED_FOR_PUBLISH,
                     now,
@@ -816,6 +855,17 @@ class StateStore:
         description: str,
         tags: tuple[str, ...],
         privacy_status: str,
+        made_for_kids: bool | None,
+        contains_synthetic_media: bool | None,
+        has_paid_product_placement: bool | None,
+        category_id: str | None,
+        category_name: str | None,
+        default_language: str | None,
+        license: str | None,
+        embeddable: bool | None,
+        public_stats_viewable: bool | None,
+        publish_at: str | None,
+        recording_date: str | None,
     ) -> PublicationRecord:
         allowed = (
             PublicationStatus.READY_FOR_REVIEW,
@@ -828,14 +878,29 @@ class StateStore:
             cursor = self.connection.execute(
                 f"""UPDATE publications
                 SET title=?, description=?, tags_json=?, privacy_status=?,
+                    made_for_kids=?, contains_synthetic_media=?,
+                    has_paid_product_placement=?, category_id=?, category_name=?,
+                    default_language=?, license=?, embeddable=?,
+                    public_stats_viewable=?, publish_at=?, recording_date=?,
                     status=?, approved_at=NULL, updated_at=?, last_error=NULL,
                     error_category=NULL
-                WHERE id=? AND status IN ({','.join('?' for _ in allowed)})""",
+                WHERE id=? AND status IN ({",".join("?" for _ in allowed)})""",
                 (
                     title,
                     description,
                     json.dumps(tags, ensure_ascii=False),
                     privacy_status,
+                    made_for_kids,
+                    contains_synthetic_media,
+                    has_paid_product_placement,
+                    category_id,
+                    category_name,
+                    default_language,
+                    license,
+                    embeddable,
+                    public_stats_viewable,
+                    publish_at,
+                    recording_date,
                     PublicationStatus.READY_FOR_REVIEW,
                     now,
                     publication_id,
@@ -1990,6 +2055,17 @@ class StateStore:
                     description TEXT NOT NULL,
                     tags_json TEXT NOT NULL,
                     privacy_status TEXT NOT NULL,
+                    made_for_kids INTEGER,
+                    contains_synthetic_media INTEGER,
+                    has_paid_product_placement INTEGER,
+                    category_id TEXT,
+                    category_name TEXT,
+                    default_language TEXT,
+                    license TEXT,
+                    embeddable INTEGER,
+                    public_stats_viewable INTEGER,
+                    publish_at TEXT,
+                    recording_date TEXT,
                     status TEXT NOT NULL,
                     remote_video_id TEXT UNIQUE,
                     created_at TEXT NOT NULL,
@@ -2220,6 +2296,9 @@ class StateStore:
             version = 18
         if version == 18:
             self._migrate_v18_to_v19()
+            version = 19
+        if version == 19:
+            self._migrate_v19_to_v20()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -2657,6 +2736,31 @@ class StateStore:
                 )
             self.connection.execute("PRAGMA user_version = 19")
 
+    def _migrate_v19_to_v20(self) -> None:
+        columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(publications)")
+        }
+        with self.connection:
+            for definition in (
+                "made_for_kids INTEGER",
+                "contains_synthetic_media INTEGER",
+                "has_paid_product_placement INTEGER",
+                "category_id TEXT",
+                "category_name TEXT",
+                "default_language TEXT",
+                "license TEXT",
+                "embeddable INTEGER",
+                "public_stats_viewable INTEGER",
+                "publish_at TEXT",
+                "recording_date TEXT",
+            ):
+                if definition.split()[0] not in columns:
+                    self.connection.execute(
+                        f"ALTER TABLE publications ADD COLUMN {definition}"
+                    )
+            self.connection.execute("PRAGMA user_version = 20")
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -2693,9 +2797,7 @@ def _brand_asset_record(row):
         else None,
         row["source_package"],
         row["source_file"],
-        Path(row["source_preserved_path"])
-        if row["source_preserved_path"]
-        else None,
+        Path(row["source_preserved_path"]) if row["source_preserved_path"] else None,
         row["source_checksum"],
         row["source_width"],
         row["source_height"],
@@ -2793,6 +2895,17 @@ def _publication_record(row: sqlite3.Row) -> PublicationRecord:
         description=row["description"],
         tags=tuple(json.loads(row["tags_json"])),
         privacy_status=row["privacy_status"],
+        made_for_kids=_optional_bool(row["made_for_kids"]),
+        contains_synthetic_media=_optional_bool(row["contains_synthetic_media"]),
+        has_paid_product_placement=_optional_bool(row["has_paid_product_placement"]),
+        category_id=row["category_id"],
+        category_name=row["category_name"],
+        default_language=row["default_language"],
+        license=row["license"],
+        embeddable=_optional_bool(row["embeddable"]),
+        public_stats_viewable=_optional_bool(row["public_stats_viewable"]),
+        publish_at=row["publish_at"],
+        recording_date=row["recording_date"],
         status=PublicationStatus(row["status"]),
         remote_video_id=row["remote_video_id"],
         created_at=row["created_at"],
@@ -2802,6 +2915,10 @@ def _publication_record(row: sqlite3.Row) -> PublicationRecord:
         last_error=row["last_error"],
         error_category=row["error_category"],
     )
+
+
+def _optional_bool(value: int | None) -> bool | None:
+    return None if value is None else bool(value)
 
 
 def _publication_attempt(row: sqlite3.Row) -> PublicationAttempt:

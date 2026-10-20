@@ -41,6 +41,31 @@ def create_parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--privacy", choices=("private", "unlisted", "public"), default="private"
     )
+    create.add_argument(
+        "--made-for-kids", action=argparse.BooleanOptionalAction, default=False
+    )
+    create.add_argument(
+        "--contains-synthetic-media",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    create.add_argument(
+        "--paid-product-placement", action=argparse.BooleanOptionalAction, default=False
+    )
+    create.add_argument("--category-id")
+    create.add_argument("--category-name")
+    create.add_argument("--default-language", default="pt-BR")
+    create.add_argument(
+        "--license", choices=("youtube", "creativeCommon"), default="youtube"
+    )
+    create.add_argument(
+        "--embeddable", action=argparse.BooleanOptionalAction, default=True
+    )
+    create.add_argument(
+        "--public-stats", action=argparse.BooleanOptionalAction, default=True
+    )
+    create.add_argument("--publish-at")
+    create.add_argument("--recording-date")
     for name in ("approve", "dry-run"):
         command = commands.add_parser(name)
         command.add_argument("publication_id", type=int)
@@ -93,8 +118,7 @@ def _run(arguments, config, state: StateStore) -> int:
         return 0
     if command == "audit":
         binding_count = sum(
-            state.get_channel_binding(item.channel_id) is not None
-            for item in channels
+            state.get_channel_binding(item.channel_id) is not None for item in channels
         )
         brand_count = sum(
             state.get_approved_brand_kit(item.channel_id) is not None
@@ -139,18 +163,27 @@ def _run(arguments, config, state: StateStore) -> int:
         )
         print(f"linked={kit.public_name} source_plan_id={kit.source_plan_id}")
         return 0
-    service = YouTubePublicationService(
-        config, state, FilesystemCredentialStore()
-    )
+    service = YouTubePublicationService(config, state, FilesystemCredentialStore())
     if command == "create":
         record = service.create_for_review(
             arguments.channel,
             arguments.video,
             PublicationMetadata(
-                arguments.title,
-                arguments.description,
-                tuple(arguments.tag),
-                arguments.privacy,
+                title=arguments.title,
+                description=arguments.description,
+                tags=tuple(arguments.tag),
+                privacy_status=arguments.privacy,
+                made_for_kids=arguments.made_for_kids,
+                contains_synthetic_media=arguments.contains_synthetic_media,
+                has_paid_product_placement=arguments.paid_product_placement,
+                category_id=arguments.category_id,
+                category_name=arguments.category_name,
+                default_language=arguments.default_language,
+                license=arguments.license,
+                embeddable=arguments.embeddable,
+                public_stats_viewable=arguments.public_stats,
+                publish_at=arguments.publish_at,
+                recording_date=arguments.recording_date,
             ),
         )
         print(f"publication_id={record.publication_id} status={record.status}")
@@ -169,6 +202,23 @@ def _run(arguments, config, state: StateStore) -> int:
             f"media={result.media.width}x{result.media.height} "
             f"privacy={result.publication.privacy_status}"
         )
+        publication = result.publication
+        synthetic = "YES" if publication.contains_synthetic_media else "NO"
+        paid = "YES" if publication.has_paid_product_placement else "NO"
+        license_name = (
+            "YouTube Standard"
+            if publication.license == "youtube"
+            else "Creative Commons"
+        )
+        print("Audience:")
+        print(f"Made for kids: {'YES' if publication.made_for_kids else 'NO'}")
+        print(f"Synthetic/altered media: {synthetic}")
+        print(f"Paid product placement: {paid}")
+        print(f"Category: {publication.category_name or publication.category_id}")
+        print(f"Language: {publication.default_language}")
+        print(f"License: {license_name}")
+        print(f"Embeddable: {'YES' if publication.embeddable else 'NO'}")
+        print(f"Public stats: {'YES' if publication.public_stats_viewable else 'NO'}")
         return 0
     record = state.publication(publication_id)
     if record is None:

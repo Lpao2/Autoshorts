@@ -91,6 +91,8 @@ def configured_service(tmp_path, *, uploader=None):
         (),
         plan.theme_key,
         channels=(channel,),
+        youtube_category_id="20",
+        youtube_category_name="Gaming",
     )
     config = AutomationConfig((theme,), (identity,))
     link_approved_brand_plan(
@@ -288,6 +290,39 @@ def test_metadata_validation_rejects_publication_api_limits():
         PublicationMetadata("x" * 101).validated()
     with pytest.raises(ValueError, match="Privacy"):
         replace(PublicationMetadata("ok"), privacy_status="secret").validated()
+    with pytest.raises(ValueError, match="Made for kids"):
+        replace(
+            PublicationMetadata("ok", category_id="20"), made_for_kids=None
+        ).validated()
+    with pytest.raises(ValueError, match="Synthetic"):
+        replace(
+            PublicationMetadata("ok", category_id="20"),
+            contains_synthetic_media=None,
+        ).validated()
+    with pytest.raises(ValueError, match="Paid product"):
+        replace(
+            PublicationMetadata("ok", category_id="20"),
+            has_paid_product_placement=None,
+        ).validated()
+
+
+def test_theme_category_and_explicit_declarations_are_persisted(tmp_path):
+    service, store, channel, _plan, video, _uploader, _connection = configured_service(
+        tmp_path
+    )
+    publication = service.create_for_review(
+        channel.channel_id, video, PublicationMetadata("Title")
+    )
+    assert publication.category_id == "20"
+    assert publication.category_name == "Gaming"
+    assert publication.made_for_kids is False
+    assert publication.contains_synthetic_media is False
+    assert publication.has_paid_product_placement is False
+    assert publication.default_language == "pt-BR"
+    assert publication.license == "youtube"
+    assert publication.embeddable is True
+    assert publication.public_stats_viewable is True
+    store.close()
 
 
 def test_official_backend_uses_resumable_videos_insert(tmp_path, monkeypatch):
@@ -321,12 +356,31 @@ def test_official_backend_uses_resumable_videos_insert(tmp_path, monkeypatch):
     video = tmp_path / "video.mp4"
     video.write_bytes(b"video")
     remote_id = GoogleYouTubeUploadBackend().upload(
-        object(), video, PublicationMetadata("Title", "Description", ("tag",))
+        object(),
+        video,
+        PublicationMetadata(
+            "Title",
+            "Description",
+            ("tag",),
+            category_id="20",
+            category_name="Gaming",
+        ),
     )
     assert remote_id == "youtube-video-id"
     assert calls["media"] == (str(video), 8 * 1024 * 1024, True)
-    assert calls["insert"]["part"] == "snippet,status"
-    assert calls["insert"]["body"]["status"] == {"privacyStatus": "private"}
+    assert calls["insert"]["part"] == "snippet,status,paidProductPlacementDetails"
+    assert calls["insert"]["body"]["snippet"]["categoryId"] == "20"
+    assert calls["insert"]["body"]["status"] == {
+        "privacyStatus": "private",
+        "selfDeclaredMadeForKids": False,
+        "containsSyntheticMedia": False,
+        "license": "youtube",
+        "embeddable": True,
+        "publicStatsViewable": True,
+    }
+    assert calls["insert"]["body"]["paidProductPlacementDetails"] == {
+        "hasPaidProductPlacement": False
+    }
     assert calls["retries"] == 3
 
 

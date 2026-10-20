@@ -121,6 +121,8 @@ class ThemeProfile:
     policy: ThemePolicy = field(default_factory=ThemePolicy)
     theme_id: str = ""
     channels: tuple[PublishingChannel, ...] = ()
+    youtube_category_id: str | None = None
+    youtube_category_name: str | None = None
 
     def __post_init__(self) -> None:
         if not self.theme_id:
@@ -334,6 +336,8 @@ def automation_config_from_dict(data: object) -> AutomationConfig:
                 policy=policy,
                 theme_id=theme_id,
                 channels=channels,
+                youtube_category_id=_optional_text(raw_theme.get("youtube_category_id")),
+                youtube_category_name=_optional_text(raw_theme.get("youtube_category_name")),
             )
         )
     return AutomationConfig(tuple(themes), tuple(identities))
@@ -357,6 +361,8 @@ def automation_config_to_dict(config: AutomationConfig) -> dict[str, object]:
                 "enabled": theme.enabled,
                 "prompt": theme.prompt,
                 "output_subdirectory": theme.output_subdirectory,
+                "youtube_category_id": theme.youtube_category_id,
+                "youtube_category_name": theme.youtube_category_name,
                 "creators": [
                     {
                         "name": creator.name,

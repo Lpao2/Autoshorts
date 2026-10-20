@@ -70,7 +70,10 @@ autoshorts-publish create \
   --video /caminho/short-final.mp4 \
   --title "Título revisado" \
   --description "Descrição revisada" \
-  --tag shorts --privacy private
+  --tag shorts --privacy private \
+  --no-made-for-kids --no-contains-synthetic-media \
+  --no-paid-product-placement --default-language pt-BR \
+  --license youtube --embeddable --public-stats
 autoshorts-publish approve <publication_id>
 autoshorts-publish dry-run <publication_id>
 autoshorts-publish upload <publication_id> --confirm-upload
@@ -93,9 +96,43 @@ duplicar um vídeo que talvez já tenha sido aceito.
 
 Erros não carregam access token, refresh token ou payload de credencial.
 
+## Metadata oficial e limites do Studio
+
+Cada nova Publication persiste e revisa audiência infantil, declaração de
+conteúdo sintético/alterado, promoção paga, categoria por tema, idioma, licença,
+incorporação, estatísticas públicas e os campos opcionais de agendamento/data de
+gravação. Audiência, conteúdo sintético e promoção paga nunca podem ficar
+indefinidos na aprovação. O preset do tema LoL usa `20 / Gaming`; outros temas
+devem configurar seu próprio `youtube_category_id` e `youtube_category_name`.
+
+| Configuração do Studio | Suportada pela API? | Campo API | AutoShorts cobre? |
+|---|---|---|---|
+| Criado para crianças | Sim | `status.selfDeclaredMadeForKids` | Sim, explícito e obrigatório |
+| Conteúdo alterado/sintético | Sim | `status.containsSyntheticMedia` | Sim, explícito e obrigatório |
+| Promoção paga | Sim no upload | `paidProductPlacementDetails.hasPaidProductPlacement` | Sim, explícito e obrigatório |
+| Categoria | Sim | `snippet.categoryId` | Sim, preset por tema e editável |
+| Idioma da metadata | Sim | `snippet.defaultLanguage` | Sim |
+| Licença | Sim | `status.license` | Sim |
+| Incorporação | Sim | `status.embeddable` | Sim |
+| Estatísticas públicas | Sim | `status.publicStatsViewable` | Sim |
+| Agendamento | Sim, somente vídeo privado nunca publicado | `status.publishAt` | Sim, opcional |
+| Data de gravação | Sim | `recordingDetails.recordingDate` | Sim, opcional |
+| Restrição de idade | Não gravável por `videos.insert/update` | `contentDetails.contentRating.ytRating` é informativo | Studio |
+| Comentários | Apenas defaults do canal/Studio | Sem campo gravável em `video` | Não |
+| Exibir contagem de likes/ratings | Não exposta para escrita | Sem campo gravável equivalente | Não |
+| Remix/amostragem de Shorts | Não exposta para escrita | Sem campo na Data API v3 | Studio |
+| Capítulos automáticos | Apenas default do canal/Studio | Sem campo na Data API v3 | Não |
+| Lugares automáticos | Não exposta para escrita | Sem campo na Data API v3 | Studio |
+
+Fontes oficiais: recurso [`videos`](https://developers.google.com/youtube/data/reference/rest/v3/videos),
+[`videos.insert`](https://developers.google.com/youtube/data/reference/rest/v3/videos/insert),
+[`videos.update`](https://developers.google.com/youtube/data/reference/rest/v3/videos/update)
+e [`videoCategories.list`](https://developers.google.com/youtube/data/reference/rest/v3/videoCategories/list).
+
 ## Escopo atual
 
-- Upload: vídeo, título, descrição, tags e privacy status.
+- Upload: vídeo, metadata editorial, audiência, declarações, categoria, idioma,
+  licença, incorporação, estatísticas e datas suportadas oficialmente.
 - Transporte: `videos.insert` resumable pela biblioteca oficial Google.
 - Thumbnail customizada: ainda não suportada.
 - Scheduler: fora deste smoke test; nenhum agendamento automático foi ativado.

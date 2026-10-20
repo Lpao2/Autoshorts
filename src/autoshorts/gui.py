@@ -1043,9 +1043,7 @@ class AutoShortsWindow:
                         Path(__file__).resolve().parents[2], store
                     ).discover_staging(Path(selected))
             except (OSError, ValueError) as exc:
-                messagebox.showerror(
-                    "Importação externa", str(exc), parent=dialog
-                )
+                messagebox.showerror("Importação externa", str(exc), parent=dialog)
                 return
             self._import_external_assets(requests, dialog, refresh)
 
@@ -1063,9 +1061,7 @@ class AutoShortsWindow:
                         Path(__file__).resolve().parents[2], store
                     ).read_manifest(Path(selected))
             except (json.JSONDecodeError, OSError, ValueError) as exc:
-                messagebox.showerror(
-                    "Importação externa", str(exc), parent=dialog
-                )
+                messagebox.showerror("Importação externa", str(exc), parent=dialog)
                 return
             self._import_external_assets(requests, dialog, refresh)
 
@@ -1099,12 +1095,12 @@ class AutoShortsWindow:
             text="Gerar assets pendentes — todos",
             command=lambda: generate_pending(all_themes=True),
         ).pack(side="left", padx=6)
-        ttk.Button(
-            batch, text="Importar pasta/lote", command=import_folder
-        ).pack(side="left")
-        ttk.Button(
-            batch, text="Importar manifest JSON", command=import_manifest
-        ).pack(side="left", padx=6)
+        ttk.Button(batch, text="Importar pasta/lote", command=import_folder).pack(
+            side="left"
+        )
+        ttk.Button(batch, text="Importar manifest JSON", command=import_manifest).pack(
+            side="left", padx=6
+        )
         refresh()
 
     def _confirm_external_asset_imports(self, requests, parent) -> bool:
@@ -1160,9 +1156,9 @@ class AutoShortsWindow:
 
         actions = ttk.Frame(body)
         actions.pack(fill="x", pady=(8, 0))
-        ttk.Button(
-            actions, text="Cancelar", command=lambda: finish(False)
-        ).pack(side="right")
+        ttk.Button(actions, text="Cancelar", command=lambda: finish(False)).pack(
+            side="right"
+        )
         ttk.Button(
             actions, text="Confirmar importação", command=lambda: finish(True)
         ).pack(side="right", padx=6)
@@ -1187,8 +1183,7 @@ class AutoShortsWindow:
         messagebox.showinfo(
             "Importação externa",
             f"Importados: {imported}\nDuplicados: {duplicates}\n"
-            f"Falhos: {len(result.failed)}"
-            + (f"\n\n{details}" if details else ""),
+            f"Falhos: {len(result.failed)}" + (f"\n\n{details}" if details else ""),
             parent=parent,
         )
         refresh()
@@ -1301,9 +1296,9 @@ class AutoShortsWindow:
                     if asset.preview_path and asset.preview_path.is_file():
                         webbrowser.open(asset.preview_path.resolve().as_uri())
 
-            ttk.Button(
-                window, text="Abrir previews", command=open_previews
-            ).pack(pady=(0, 10))
+            ttk.Button(window, text="Abrir previews", command=open_previews).pack(
+                pady=(0, 10)
+            )
 
         def regenerate(plan, asset_type) -> None:
             if self.brand_image_provider is None:
@@ -1385,8 +1380,7 @@ class AutoShortsWindow:
             template, plans, assets = current_context()
             heading.configure(
                 text=(
-                    f"{template.display_name} — "
-                    f"tema {index.get() + 1} de {len(themes)}"
+                    f"{template.display_name} — tema {index.get() + 1} de {len(themes)}"
                 )
             )
             for column, plan in enumerate(plans):
@@ -1458,9 +1452,7 @@ class AutoShortsWindow:
                 ttk.Button(
                     import_row,
                     text="Importar logo",
-                    command=lambda item=plan: import_plan(
-                        item, (BrandAssetType.LOGO,)
-                    ),
+                    command=lambda item=plan: import_plan(item, (BrandAssetType.LOGO,)),
                 ).pack(side="left", padx=2)
                 ttk.Button(
                     import_row,
@@ -1472,9 +1464,7 @@ class AutoShortsWindow:
                 ttk.Button(
                     card,
                     text="Importar ambos",
-                    command=lambda item=plan: import_plan(
-                        item, tuple(BrandAssetType)
-                    ),
+                    command=lambda item=plan: import_plan(item, tuple(BrandAssetType)),
                 ).pack(pady=2)
                 ttk.Button(
                     card,
@@ -1529,17 +1519,13 @@ class AutoShortsWindow:
             ):
                 return
             for plan in plans:
-                review(
-                    plan, tuple(BrandAssetType), BrandAssetStatus.APPROVED
-                )
+                review(plan, tuple(BrandAssetType), BrandAssetStatus.APPROVED)
 
         previous = ttk.Button(
             navigation, text="Tema anterior", command=lambda: move(-1)
         )
         previous.pack(side="left")
-        following = ttk.Button(
-            navigation, text="Próximo tema", command=lambda: move(1)
-        )
+        following = ttk.Button(navigation, text="Próximo tema", command=lambda: move(1))
         following.pack(side="left", padx=6)
         ttk.Button(
             navigation,
@@ -1629,6 +1615,15 @@ class AutoShortsWindow:
         self.publish_title = tk.StringVar(master=self.root)
         self.publish_tags = tk.StringVar(master=self.root)
         self.publish_privacy = tk.StringVar(master=self.root, value="private")
+        self.publish_made_for_kids = tk.BooleanVar(master=self.root, value=False)
+        self.publish_synthetic = tk.BooleanVar(master=self.root, value=False)
+        self.publish_paid = tk.BooleanVar(master=self.root, value=False)
+        self.publish_category_id = tk.StringVar(master=self.root)
+        self.publish_category_name = tk.StringVar(master=self.root)
+        self.publish_language = tk.StringVar(master=self.root, value="pt-BR")
+        self.publish_license = tk.StringVar(master=self.root, value="youtube")
+        self.publish_embeddable = tk.BooleanVar(master=self.root, value=True)
+        self.publish_public_stats = tk.BooleanVar(master=self.root, value=True)
         self.publish_status = tk.StringVar(
             master=self.root, value="Nenhuma publicação selecionada."
         )
@@ -1671,8 +1666,42 @@ class AutoShortsWindow:
             state="readonly",
             width=10,
         ).grid(row=0, column=3, padx=(8, 0))
+        declarations = ttk.Frame(frame)
+        declarations.grid(row=7, column=0, columnspan=3, sticky="ew", pady=4)
+        for column, (label, variable) in enumerate(
+            (
+                ("Criado para crianças", self.publish_made_for_kids),
+                ("Conteúdo sintético/alterado", self.publish_synthetic),
+                ("Promoção paga", self.publish_paid),
+                ("Incorporação", self.publish_embeddable),
+                ("Estatísticas públicas", self.publish_public_stats),
+            )
+        ):
+            ttk.Checkbutton(declarations, text=label, variable=variable).grid(
+                row=0, column=column, padx=4
+            )
+        ttk.Label(declarations, text="Categoria ID/nome").grid(
+            row=1, column=0, sticky="e"
+        )
+        ttk.Entry(declarations, textvariable=self.publish_category_id, width=6).grid(
+            row=1, column=1
+        )
+        ttk.Entry(declarations, textvariable=self.publish_category_name, width=16).grid(
+            row=1, column=2
+        )
+        ttk.Label(declarations, text="Idioma").grid(row=1, column=3, sticky="e")
+        ttk.Entry(declarations, textvariable=self.publish_language, width=9).grid(
+            row=1, column=4
+        )
+        ttk.Combobox(
+            declarations,
+            textvariable=self.publish_license,
+            values=("youtube", "creativeCommon"),
+            state="readonly",
+            width=15,
+        ).grid(row=1, column=5)
         actions = ttk.Frame(frame)
-        actions.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
+        actions.grid(row=8, column=0, columnspan=3, sticky="ew", pady=8)
         for label, command in (
             ("Criar para revisão", self.create_publication_ui),
             ("Salvar revisão", self.revise_publication_ui),
@@ -1686,7 +1715,7 @@ class AutoShortsWindow:
             if label == "Upload real...":
                 self.publish_upload_button = button
         ttk.Label(frame, textvariable=self.publish_status).grid(
-            row=8, column=0, columnspan=3, sticky="w"
+            row=9, column=0, columnspan=3, sticky="w"
         )
         self.publication_tree = ttk.Treeview(
             frame,
@@ -3126,9 +3155,7 @@ class AutoShortsWindow:
             )
         if selected and self.publication_tree.exists(selected[0]):
             self.publication_tree.selection_set(selected[0])
-        self.publish_status.set(
-            f"{len(publications)} publicação(ões) persistida(s)."
-        )
+        self.publish_status.set(f"{len(publications)} publicação(ões) persistida(s).")
 
     def _selected_publication_id(self, *, notify: bool = True) -> int | None:
         selected = self.publication_tree.selection()
@@ -3152,6 +3179,15 @@ class AutoShortsWindow:
         self.publish_description.insert("1.0", item.description)
         self.publish_tags.set(", ".join(item.tags))
         self.publish_privacy.set(item.privacy_status)
+        self.publish_made_for_kids.set(bool(item.made_for_kids))
+        self.publish_synthetic.set(bool(item.contains_synthetic_media))
+        self.publish_paid.set(bool(item.has_paid_product_placement))
+        self.publish_category_id.set(item.category_id or "")
+        self.publish_category_name.set(item.category_name or "")
+        self.publish_language.set(item.default_language or "pt-BR")
+        self.publish_license.set(item.license or "youtube")
+        self.publish_embeddable.set(bool(item.embeddable))
+        self.publish_public_stats.set(bool(item.public_stats_viewable))
         self.publish_status.set(
             f"Publicação {item.publication_id}: {item.status.value}"
         )
@@ -3167,6 +3203,25 @@ class AutoShortsWindow:
                 if channel.channel_id == channel_id:
                     return theme, channel
         raise KeyError(f"Publishing channel not found: {channel_id}")
+
+    def _publication_metadata_ui(self, theme, tags) -> PublicationMetadata:
+        return PublicationMetadata(
+            title=self.publish_title.get(),
+            description=self.publish_description.get("1.0", "end-1c"),
+            tags=tags,
+            privacy_status=self.publish_privacy.get(),
+            made_for_kids=self.publish_made_for_kids.get(),
+            contains_synthetic_media=self.publish_synthetic.get(),
+            has_paid_product_placement=self.publish_paid.get(),
+            category_id=self.publish_category_id.get().strip()
+            or theme.youtube_category_id,
+            category_name=self.publish_category_name.get().strip()
+            or theme.youtube_category_name,
+            default_language=self.publish_language.get(),
+            license=self.publish_license.get(),
+            embeddable=self.publish_embeddable.get(),
+            public_stats_viewable=self.publish_public_stats.get(),
+        )
 
     def link_publish_brand_ui(self) -> None:
         try:
@@ -3207,14 +3262,9 @@ class AutoShortsWindow:
 
     def create_publication_ui(self) -> None:
         try:
-            _theme, channel = self._publishing_channel_context()
+            theme, channel = self._publishing_channel_context()
             tags = tuple(item.strip() for item in self.publish_tags.get().split(","))
-            metadata = PublicationMetadata(
-                self.publish_title.get(),
-                self.publish_description.get("1.0", "end-1c"),
-                tags,
-                self.publish_privacy.get(),
-            )
+            metadata = self._publication_metadata_ui(theme, tags)
             with StateStore(self.state_db_path) as store:
                 service = YouTubePublicationService(
                     self.automation_config,
@@ -3237,11 +3287,9 @@ class AutoShortsWindow:
         publication_id = self._selected_publication_id()
         if publication_id is None or self.automation_config is None:
             return
-        metadata = PublicationMetadata(
-            self.publish_title.get(),
-            self.publish_description.get("1.0", "end-1c"),
-            tuple(item.strip() for item in self.publish_tags.get().split(",")),
-            self.publish_privacy.get(),
+        theme, _channel = self._publishing_channel_context()
+        metadata = self._publication_metadata_ui(
+            theme, tuple(item.strip() for item in self.publish_tags.get().split(","))
         )
         try:
             with StateStore(self.state_db_path) as store:
@@ -3289,12 +3337,25 @@ class AutoShortsWindow:
             self.refresh_publications()
             return
         self.refresh_publications()
+        publication = result.publication
+        synthetic = "YES" if publication.contains_synthetic_media else "NO"
+        paid = "YES" if publication.has_paid_product_placement else "NO"
+        category = publication.category_name or publication.category_id
+        public_stats = "YES" if publication.public_stats_viewable else "NO"
         messagebox.showinfo(
             "Dry-run concluído",
             f"Canal: {result.youtube_channel_title}\n"
             f"Google Identity: {result.google_identity_label}\n"
             f"Vídeo: {result.media.width}×{result.media.height}\n"
             f"Privacy: {result.publication.privacy_status}\n\n"
+            f"Made for kids: {'YES' if result.publication.made_for_kids else 'NO'}\n"
+            f"Synthetic/altered media: {synthetic}\n"
+            f"Paid product placement: {paid}\n"
+            f"Category: {category}\n"
+            f"Language: {result.publication.default_language}\n"
+            f"License: {result.publication.license}\n"
+            f"Embeddable: {'YES' if result.publication.embeddable else 'NO'}\n"
+            f"Public stats: {public_stats}\n\n"
             "Nenhum vídeo foi enviado.",
         )
 
@@ -3341,9 +3402,7 @@ class AutoShortsWindow:
             self.root.after(0, lambda: self._finish_upload_ui(uploaded, None))
 
         self.publish_running = True
-        self.publish_thread = Thread(
-            target=worker, name="youtube-upload", daemon=False
-        )
+        self.publish_thread = Thread(target=worker, name="youtube-upload", daemon=False)
         self.publish_thread.start()
 
     def _finish_upload_ui(self, uploaded, error: str | None) -> None:

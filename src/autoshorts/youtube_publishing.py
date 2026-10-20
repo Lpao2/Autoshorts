@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -31,6 +32,17 @@ class PublicationMetadata:
     description: str = ""
     tags: tuple[str, ...] = ()
     privacy_status: str = "private"
+    made_for_kids: bool | None = False
+    contains_synthetic_media: bool | None = False
+    has_paid_product_placement: bool | None = False
+    category_id: str | None = None
+    category_name: str | None = None
+    default_language: str = "pt-BR"
+    license: str = "youtube"
+    embeddable: bool = True
+    public_stats_viewable: bool = True
+    publish_at: str | None = None
+    recording_date: str | None = None
 
     def validated(self) -> PublicationMetadata:
         title = self.title.strip()
@@ -48,8 +60,45 @@ class PublicationMetadata:
             raise ValueError("A publication tag is too long.")
         if len(",".join(tags)) > 500:
             raise ValueError("Combined YouTube tags cannot exceed 500 characters.")
+        if self.made_for_kids is None:
+            raise ValueError("Made for kids must be explicitly declared.")
+        if self.contains_synthetic_media is None:
+            raise ValueError("Synthetic/altered media must be explicitly declared.")
+        if self.has_paid_product_placement is None:
+            raise ValueError("Paid product placement must be explicitly declared.")
+        if not self.category_id or not self.category_id.isdigit():
+            raise ValueError("A numeric YouTube category ID is required.")
+        if not self.default_language.strip():
+            raise ValueError("Default language is required.")
+        if self.license not in {"youtube", "creativeCommon"}:
+            raise ValueError("License must be youtube or creativeCommon.")
+        for label, value in (
+            ("publish_at", self.publish_at),
+            ("recording_date", self.recording_date),
+        ):
+            if value:
+                try:
+                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise ValueError(f"{label} must use ISO 8601 format.") from exc
+        if self.publish_at and self.privacy_status != "private":
+            raise ValueError("Scheduled publishing requires private privacy status.")
         return PublicationMetadata(
-            title, description, tags, self.privacy_status
+            title,
+            description,
+            tags,
+            self.privacy_status,
+            self.made_for_kids,
+            self.contains_synthetic_media,
+            self.has_paid_product_placement,
+            self.category_id,
+            self.category_name,
+            self.default_language.strip(),
+            self.license,
+            self.embeddable,
+            self.public_stats_viewable,
+            self.publish_at,
+            self.recording_date,
         )
 
 
@@ -111,16 +160,32 @@ class GoogleYouTubeUploadBackend:
                 "title": metadata.title,
                 "description": metadata.description,
                 "tags": list(metadata.tags),
+                "categoryId": metadata.category_id,
+                "defaultLanguage": metadata.default_language,
             },
-            "status": {"privacyStatus": metadata.privacy_status},
+            "status": {
+                "privacyStatus": metadata.privacy_status,
+                "selfDeclaredMadeForKids": metadata.made_for_kids,
+                "containsSyntheticMedia": metadata.contains_synthetic_media,
+                "license": metadata.license,
+                "embeddable": metadata.embeddable,
+                "publicStatsViewable": metadata.public_stats_viewable,
+            },
+            "paidProductPlacementDetails": {
+                "hasPaidProductPlacement": metadata.has_paid_product_placement
+            },
         }
+        parts = ["snippet", "status", "paidProductPlacementDetails"]
+        if metadata.publish_at:
+            body["status"]["publishAt"] = metadata.publish_at
+        if metadata.recording_date:
+            body["recordingDetails"] = {"recordingDate": metadata.recording_date}
+            parts.append("recordingDetails")
         try:
             request = (
-                build(
-                    "youtube", "v3", credentials=credentials, cache_discovery=False
-                )
+                build("youtube", "v3", credentials=credentials, cache_discovery=False)
                 .videos()
-                .insert(part="snippet,status", body=body, media_body=media)
+                .insert(part=",".join(parts), body=body, media_body=media)
             )
         except Exception:
             raise YouTubeUploadFailure(
@@ -179,6 +244,13 @@ class YouTubePublicationService:
         metadata: PublicationMetadata,
     ) -> PublicationRecord:
         channel, identity = self._target(publishing_channel_id)
+        theme = next(t for t in self.config.themes if channel in t.channels)
+        if metadata.category_id is None:
+            metadata = replace(
+                metadata,
+                category_id=theme.youtube_category_id,
+                category_name=theme.youtube_category_name,
+            )
         binding = self._connected_binding(channel, identity)
         kit = self.state_store.get_approved_brand_kit(channel.channel_id)
         if kit is None or not kit.source_plan_id:
@@ -204,17 +276,7 @@ class YouTubePublicationService:
         key = _idempotency_key(channel.channel_id, checksum)
         existing = self.state_store.publication_by_key(key)
         if existing is not None:
-            if (
-                existing.title,
-                existing.description,
-                existing.tags,
-                existing.privacy_status,
-            ) != (
-                clean.title,
-                clean.description,
-                clean.tags,
-                clean.privacy_status,
-            ):
+            if _publication_metadata(existing) != clean:
                 raise ValueError(
                     "Este vídeo já possui uma publicação para o canal. Revise o "
                     "registro existente em vez de criar outro."
@@ -233,18 +295,19 @@ class YouTubePublicationService:
             description=clean.description,
             tags=clean.tags,
             privacy_status=clean.privacy_status,
+            made_for_kids=clean.made_for_kids,
+            contains_synthetic_media=clean.contains_synthetic_media,
+            has_paid_product_placement=clean.has_paid_product_placement,
+            category_id=clean.category_id,
+            category_name=clean.category_name,
+            default_language=clean.default_language,
+            license=clean.license,
+            embeddable=clean.embeddable,
+            public_stats_viewable=clean.public_stats_viewable,
+            publish_at=clean.publish_at,
+            recording_date=clean.recording_date,
         )
-        if (
-            created.title,
-            created.description,
-            created.tags,
-            created.privacy_status,
-        ) != (
-            clean.title,
-            clean.description,
-            clean.tags,
-            clean.privacy_status,
-        ):
+        if _publication_metadata(created) != clean:
             raise ValueError(
                 "A concurrent publication already exists with different metadata."
             )
@@ -257,9 +320,13 @@ class YouTubePublicationService:
     def revise(
         self, publication_id: int, metadata: PublicationMetadata
     ) -> PublicationRecord:
-        publication, _channel, _identity, _media = self._local_preflight(
-            publication_id
-        )
+        publication, _channel, _identity, _media = self._local_preflight(publication_id)
+        if metadata.category_id is None:
+            metadata = replace(
+                metadata,
+                category_id=publication.category_id,
+                category_name=publication.category_name,
+            )
         clean = metadata.validated()
         return self.state_store.revise_publication(
             publication.publication_id,
@@ -267,6 +334,17 @@ class YouTubePublicationService:
             description=clean.description,
             tags=clean.tags,
             privacy_status=clean.privacy_status,
+            made_for_kids=clean.made_for_kids,
+            contains_synthetic_media=clean.contains_synthetic_media,
+            has_paid_product_placement=clean.has_paid_product_placement,
+            category_id=clean.category_id,
+            category_name=clean.category_name,
+            default_language=clean.default_language,
+            license=clean.license,
+            embeddable=clean.embeddable,
+            public_stats_viewable=clean.public_stats_viewable,
+            publish_at=clean.publish_at,
+            recording_date=clean.recording_date,
         )
 
     def preflight(self, publication_id: int) -> PublicationPreflight:
@@ -284,9 +362,12 @@ class YouTubePublicationService:
         )
 
     def upload_approved(self, publication_id: int) -> PublicationRecord:
+        current = self.state_store.publication(publication_id)
+        if current is None:
+            raise KeyError(f"Unknown publication: {publication_id}")
+        if current.status == PublicationStatus.PUBLISHED:
+            return current
         publication, channel, _identity, _media = self._local_preflight(publication_id)
-        if publication.status == PublicationStatus.PUBLISHED:
-            return publication
         if publication.status != PublicationStatus.APPROVED_FOR_PUBLISH:
             raise ValueError("Publication must be explicitly approved before upload.")
         credentials = self.connection_service.load_verified_credentials(
@@ -295,12 +376,7 @@ class YouTubePublicationService:
         publication, attempt = self.state_store.start_publication_attempt(
             publication_id
         )
-        metadata = PublicationMetadata(
-            publication.title,
-            publication.description,
-            publication.tags,
-            publication.privacy_status,
-        )
+        metadata = _publication_metadata(publication)
         try:
             remote_id = self.upload_backend.upload(
                 credentials, publication.video_path, metadata
@@ -366,12 +442,7 @@ class YouTubePublicationService:
         if _checksum(path) != publication.video_checksum:
             raise ValueError("O arquivo de vídeo mudou desde a criação do pacote.")
         media = self.media_probe(path)
-        PublicationMetadata(
-            publication.title,
-            publication.description,
-            publication.tags,
-            publication.privacy_status,
-        ).validated()
+        _publication_metadata(publication).validated()
         return publication, channel, identity, media
 
     def _target(
@@ -431,9 +502,7 @@ class YouTubePublicationService:
             matching = [item for item in assets if item.asset_type == asset_type]
             current = max(matching, key=lambda item: item.version, default=None)
             if current is None or current.status != BrandAssetStatus.APPROVED:
-                raise ValueError(
-                    f"Current {asset_type.value.lower()} is not approved."
-                )
+                raise ValueError(f"Current {asset_type.value.lower()} is not approved.")
 
 
 def _checksum(path: Path) -> str:
@@ -444,6 +513,26 @@ def _checksum(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _publication_metadata(publication: PublicationRecord) -> PublicationMetadata:
+    return PublicationMetadata(
+        publication.title,
+        publication.description,
+        publication.tags,
+        publication.privacy_status,
+        publication.made_for_kids,
+        publication.contains_synthetic_media,
+        publication.has_paid_product_placement,
+        publication.category_id,
+        publication.category_name,
+        publication.default_language or "",
+        publication.license or "",
+        bool(publication.embeddable),
+        bool(publication.public_stats_viewable),
+        publication.publish_at,
+        publication.recording_date,
+    )
 
 
 def _idempotency_key(publishing_channel_id: str, video_checksum: str) -> str:
