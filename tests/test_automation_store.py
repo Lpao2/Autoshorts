@@ -170,7 +170,7 @@ def test_legacy_accounts_migrate_to_channels_and_policy_persists(tmp_path):
     assert loaded.policy == ThemePolicy(3, 30, 3)
 
 
-def test_channel_crud_preserves_slot_order_and_limit(tmp_path):
+def test_channel_crud_preserves_slots_and_allows_archived_channels(tmp_path):
     store = AutomationStore(tmp_path / "automation.json")
     config = store.add_theme(
         AutomationConfig(()), name="LoL", output_subdirectory="lol"
@@ -187,8 +187,17 @@ def test_channel_crud_preserves_slot_order_and_limit(tmp_path):
         "Channel 2",
         "Channel 3",
     ]
-    with pytest.raises(ValueError, match="máximo 3"):
-        store.add_channel(config, "LoL", name="Channel 4", slot=1)
+    config = store.add_channel(
+        config, "LoL", name="Archived Channel", slot=1, enabled=False
+    )
+    assert len(config.theme("LoL").channels) == 4
+    with pytest.raises(ValueError, match="at most 3"):
+        store.edit_channel(
+            config,
+            "LoL",
+            config.theme("LoL").channels[-1].channel_id,
+            enabled=True,
+        )
     channel_id = config.theme("LoL").channels[1].channel_id
     config = store.edit_channel(
         config,
@@ -204,6 +213,7 @@ def test_channel_crud_preserves_slot_order_and_limit(tmp_path):
     assert [item.name for item in config.theme("LoL").channels] == [
         "Channel 1",
         "Channel 3",
+        "Archived Channel",
     ]
 
 

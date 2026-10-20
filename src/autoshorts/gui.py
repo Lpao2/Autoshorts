@@ -2342,9 +2342,10 @@ class AutoShortsWindow:
             messagebox.showinfo("Identidade", "Selecione um tema operacional.")
             return
         theme_profile = self.automation_config.theme(self._current_theme_name())
-        if len(theme_profile.channels) != 3:
+        if sum(channel.enabled for channel in theme_profile.channels) != 3:
             messagebox.showerror(
-                "Identidade", "A geração coordenada exige exatamente três canais."
+                "Identidade",
+                "A geração coordenada exige exatamente três canais ativos.",
             )
             return
         with StateStore(self.state_db_path) as store:

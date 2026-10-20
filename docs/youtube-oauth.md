@@ -56,6 +56,14 @@ referenciar a mesma `GoogleIdentity`, mas continuam com autorizações isoladas;
 isso evita presumir que um token possa selecionar silenciosamente canais
 diferentes.
 
+Uma `GoogleIdentity` representa a Conta Google organizacional e não contém
+tokens. Cada `ChannelCredentialBinding` liga um `PublishingChannel` a exatamente
+um YouTube Channel ID e referencia seu próprio arquivo secreto. Assim, uma mesma
+Conta Google pode administrar vários canais, mas cada canal passa uma vez pelo
+onboarding OAuth e recebe uma credencial persistente separada. Canais legados ou
+arquivados podem permanecer desativados sem consumir um dos três slots ativos do
+tema; isso preserva bindings e histórico durante trocas de canal.
+
 ## Verificar, reconectar e desconectar
 
 **Verificar conexão** carrega a credencial, renova o access token quando
@@ -64,6 +72,19 @@ persistido. Divergência invalida a operação e nunca altera o destino.
 
 **Reconectar** repete OAuth e exige nova confirmação. **Desconectar** remove o
 arquivo secreto e o binding SQLite, sem excluir o canal ou a Google identity.
+
+## Persistência e modo Testing
+
+O fluxo solicita `access_type=offline` e `prompt=consent`. O refresh token fica
+no arquivo `0600` do binding e a biblioteca Google renova o access token quando
+necessário; o payload atualizado é regravado atomicamente após a validação.
+
+O status Publishing do consent screen não pode ser inferido com segurança pelo
+client secret ou pelo token local e deve ser conferido no Google Cloud. Segundo
+a documentação oficial, apps External em `Testing` recebem refresh tokens com
+validade de sete dias quando usam scopes além de identidade básica. Para um
+scheduler persistente, o app deve chegar a `Production` e cumprir a verificação
+aplicável antes da operação contínua.
 
 ## Publicação controlada
 
@@ -85,3 +106,4 @@ Referências oficiais:
 
 - https://developers.google.com/youtube/data/guides/auth/installed-apps
 - https://developers.google.com/youtube/data/guides/implementation/channels
+- https://developers.google.com/identity/protocols/oauth2#expiration

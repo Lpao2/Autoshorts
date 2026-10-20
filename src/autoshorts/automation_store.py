@@ -356,8 +356,6 @@ class AutomationStore:
         posting_policy: PostingPolicy | None = None,
     ) -> AutomationConfig:
         theme = config.theme(theme_name)
-        if len(theme.channels) >= 3:
-            raise ValueError("Um tema pode ter no máximo 3 canais.")
         channel = PublishingChannel(
             str(uuid4()),
             name.strip(),
