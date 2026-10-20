@@ -246,10 +246,21 @@ class YouTubePublicationService:
         channel, identity = self._target(publishing_channel_id)
         theme = next(t for t in self.config.themes if channel in t.channels)
         if metadata.category_id is None:
+            market = self.state_store.theme_market_profile(
+                theme.output_subdirectory,
+                "youtube",
+                "BR",
+                metadata.default_language or "pt-BR",
+            )
+            if market is None or not market.enabled:
+                raise ValueError(
+                    "O tema não possui perfil editorial ativo para youtube/BR/"
+                    f"{metadata.default_language or 'pt-BR'}."
+                )
             metadata = replace(
                 metadata,
-                category_id=theme.youtube_category_id,
-                category_name=theme.youtube_category_name,
+                category_id=market.youtube_category_id,
+                category_name=market.youtube_category_name,
             )
         binding = self._connected_binding(channel, identity)
         kit = self.state_store.get_approved_brand_kit(channel.channel_id)

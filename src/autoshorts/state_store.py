@@ -26,6 +26,13 @@ from autoshorts.brand_planning import (
     PlannedIdentityAssignment,
     global_brand_collisions,
 )
+from autoshorts.editorial_sources import (
+    ContentSource,
+    SourceRightsStatus,
+    SourceValidationStatus,
+    ThemeContentSource,
+    ThemeMarketProfile,
+)
 from autoshorts.theme_catalog import (
     AuthorizationStatus,
     BrandBlueprint,
@@ -44,7 +51,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 22
 
 
 class VideoStatus(StrEnum):
@@ -1091,6 +1098,233 @@ class StateStore:
             "SELECT * FROM theme_catalog ORDER BY display_name COLLATE NOCASE"
         ).fetchall()
         return tuple(self._theme_template(row) for row in rows)
+
+    def save_theme_market_profile(
+        self,
+        *,
+        theme_key: str,
+        platform: str,
+        region_code: str,
+        language_code: str,
+        youtube_category_id: str,
+        youtube_category_name: str,
+        enabled: bool = True,
+        is_default_for_theme: bool = False,
+    ) -> ThemeMarketProfile:
+        """Upsert one platform/market profile without overwriting other markets."""
+        now = _now()
+        with self.connection:
+            if is_default_for_theme:
+                self.connection.execute(
+                    "UPDATE theme_market_profiles SET is_default_for_theme=0 "
+                    "WHERE theme_key=? AND platform=?",
+                    (theme_key, platform),
+                )
+            self.connection.execute(
+                """INSERT INTO theme_market_profiles (
+                    theme_key, platform, region_code, language_code,
+                    youtube_category_id, youtube_category_name, enabled,
+                    is_default_for_theme, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(theme_key, platform, region_code, language_code)
+                DO UPDATE SET
+                    youtube_category_id=excluded.youtube_category_id,
+                    youtube_category_name=excluded.youtube_category_name,
+                    enabled=excluded.enabled,
+                    is_default_for_theme=excluded.is_default_for_theme,
+                    updated_at=excluded.updated_at""",
+                (
+                    theme_key,
+                    platform,
+                    region_code,
+                    language_code,
+                    youtube_category_id,
+                    youtube_category_name,
+                    enabled,
+                    is_default_for_theme,
+                    now,
+                    now,
+                ),
+            )
+        profile = self.theme_market_profile(
+            theme_key, platform, region_code, language_code
+        )
+        if profile is None:
+            raise RuntimeError("Theme market profile could not be persisted.")
+        return profile
+
+    def theme_market_profile(
+        self, theme_key: str, platform: str, region_code: str, language_code: str
+    ) -> ThemeMarketProfile | None:
+        row = self.connection.execute(
+            """SELECT * FROM theme_market_profiles
+            WHERE theme_key=? AND platform=? AND region_code=? AND language_code=?""",
+            (theme_key, platform, region_code, language_code),
+        ).fetchone()
+        return _theme_market_profile(row) if row else None
+
+    def theme_market_profiles(self) -> tuple[ThemeMarketProfile, ...]:
+        rows = self.connection.execute(
+            """SELECT * FROM theme_market_profiles
+            ORDER BY theme_key, platform, region_code, language_code"""
+        ).fetchall()
+        return tuple(_theme_market_profile(row) for row in rows)
+
+    def save_content_source(
+        self,
+        *,
+        platform: str,
+        external_channel_id: str,
+        display_name: str,
+        handle: str | None,
+        channel_url: str,
+        region_code: str,
+        language_code: str,
+        source_kind: str = "CREATOR_CHANNEL",
+        validation_status: SourceValidationStatus = SourceValidationStatus.PENDING,
+        last_validated_at: str | None = None,
+        latest_upload_at: str | None = None,
+        sampled_video_count: int = 0,
+        sampled_longform_count: int = 0,
+        sampled_target_duration_count: int = 0,
+        observed_duration_min_seconds: int | None = None,
+        observed_duration_max_seconds: int | None = None,
+        enabled: bool = True,
+        rights_status: SourceRightsStatus = SourceRightsStatus.UNKNOWN,
+    ) -> ContentSource:
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO content_sources (
+                    platform, external_channel_id, display_name, handle, channel_url,
+                    region_code, language_code, source_kind, validation_status,
+                    last_validated_at, latest_upload_at, sampled_video_count,
+                    sampled_longform_count, sampled_target_duration_count,
+                    observed_duration_min_seconds, observed_duration_max_seconds,
+                    enabled, rights_status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform, external_channel_id) DO UPDATE SET
+                    display_name=excluded.display_name, handle=excluded.handle,
+                    channel_url=excluded.channel_url, region_code=excluded.region_code,
+                    language_code=excluded.language_code,
+                    source_kind=excluded.source_kind,
+                    validation_status=excluded.validation_status,
+                    last_validated_at=excluded.last_validated_at,
+                    latest_upload_at=excluded.latest_upload_at,
+                    sampled_video_count=excluded.sampled_video_count,
+                    sampled_longform_count=excluded.sampled_longform_count,
+                    sampled_target_duration_count=excluded.sampled_target_duration_count,
+                    observed_duration_min_seconds=excluded.observed_duration_min_seconds,
+                    observed_duration_max_seconds=excluded.observed_duration_max_seconds,
+                    enabled=excluded.enabled, rights_status=excluded.rights_status,
+                    updated_at=excluded.updated_at""",
+                (
+                    platform,
+                    external_channel_id,
+                    display_name,
+                    handle,
+                    channel_url,
+                    region_code,
+                    language_code,
+                    source_kind,
+                    validation_status,
+                    last_validated_at,
+                    latest_upload_at,
+                    sampled_video_count,
+                    sampled_longform_count,
+                    sampled_target_duration_count,
+                    observed_duration_min_seconds,
+                    observed_duration_max_seconds,
+                    enabled,
+                    rights_status,
+                    now,
+                    now,
+                ),
+            )
+        source = self.content_source(platform, external_channel_id)
+        if source is None:
+            raise RuntimeError("Content source could not be persisted.")
+        return source
+
+    def content_source(
+        self, platform: str, external_channel_id: str
+    ) -> ContentSource | None:
+        row = self.connection.execute(
+            "SELECT * FROM content_sources WHERE platform=? AND external_channel_id=?",
+            (platform, external_channel_id),
+        ).fetchone()
+        return _content_source(row) if row else None
+
+    def content_sources(self) -> tuple[ContentSource, ...]:
+        rows = self.connection.execute(
+            "SELECT * FROM content_sources ORDER BY display_name COLLATE NOCASE"
+        ).fetchall()
+        return tuple(_content_source(row) for row in rows)
+
+    def link_theme_content_source(
+        self,
+        *,
+        profile_id: int,
+        source_id: int,
+        priority: int,
+        enabled: bool = True,
+        target_duration_min_seconds: int = 900,
+        target_duration_max_seconds: int = 2400,
+    ) -> ThemeContentSource:
+        if not 1 <= priority <= 5:
+            raise ValueError("Source priority must be between 1 and 5.")
+        if target_duration_min_seconds >= target_duration_max_seconds:
+            raise ValueError("Source target duration range is invalid.")
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO theme_content_sources (
+                    profile_id, source_id, priority, enabled,
+                    target_duration_min_seconds, target_duration_max_seconds,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(profile_id, source_id) DO UPDATE SET
+                    priority=excluded.priority, enabled=excluded.enabled,
+                    target_duration_min_seconds=excluded.target_duration_min_seconds,
+                    target_duration_max_seconds=excluded.target_duration_max_seconds,
+                    updated_at=excluded.updated_at""",
+                (
+                    profile_id,
+                    source_id,
+                    priority,
+                    enabled,
+                    target_duration_min_seconds,
+                    target_duration_max_seconds,
+                    now,
+                    now,
+                ),
+            )
+        row = self.connection.execute(
+            """SELECT * FROM theme_content_sources
+            WHERE profile_id=? AND source_id=?""",
+            (profile_id, source_id),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Theme content source could not be persisted.")
+        return _theme_content_source(row)
+
+    def theme_content_sources(
+        self, profile_id: int
+    ) -> tuple[tuple[ThemeContentSource, ContentSource], ...]:
+        rows = self.connection.execute(
+            """SELECT * FROM theme_content_sources
+            WHERE profile_id=? ORDER BY priority""",
+            (profile_id,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            source_row = self.connection.execute(
+                "SELECT * FROM content_sources WHERE id=?", (row["source_id"],)
+            ).fetchone()
+            if source_row is None:
+                raise RuntimeError("Theme association references a missing source.")
+            result.append((_theme_content_source(row), _content_source(source_row)))
+        return tuple(result)
 
     def save_brand_generation(self, result: BrandGenerationResult) -> int:
         now = _now()
@@ -2239,6 +2473,54 @@ class StateStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_approved_brand_asset
                     ON brand_asset_metadata(brand_plan_id, asset_type)
                     WHERE status = 'APPROVED';
+                CREATE TABLE IF NOT EXISTS theme_market_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_key TEXT NOT NULL, platform TEXT NOT NULL,
+                    region_code TEXT NOT NULL, language_code TEXT NOT NULL,
+                    youtube_category_id TEXT NOT NULL,
+                    youtube_category_name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    is_default_for_theme INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY (theme_key) REFERENCES theme_catalog(theme_key)
+                        ON DELETE CASCADE,
+                    UNIQUE(theme_key, platform, region_code, language_code)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_default_theme_market_profile
+                    ON theme_market_profiles(theme_key, platform)
+                    WHERE is_default_for_theme = 1;
+                CREATE TABLE IF NOT EXISTS content_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform TEXT NOT NULL, external_channel_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL, handle TEXT, channel_url TEXT NOT NULL,
+                    region_code TEXT NOT NULL, language_code TEXT NOT NULL,
+                    source_kind TEXT NOT NULL, validation_status TEXT NOT NULL,
+                    last_validated_at TEXT, latest_upload_at TEXT,
+                    sampled_video_count INTEGER NOT NULL DEFAULT 0,
+                    sampled_longform_count INTEGER NOT NULL DEFAULT 0,
+                    sampled_target_duration_count INTEGER NOT NULL DEFAULT 0,
+                    observed_duration_min_seconds INTEGER,
+                    observed_duration_max_seconds INTEGER,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    rights_status TEXT NOT NULL, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(platform, external_channel_id)
+                );
+                CREATE TABLE IF NOT EXISTS theme_content_sources (
+                    profile_id INTEGER NOT NULL, source_id INTEGER NOT NULL,
+                    priority INTEGER NOT NULL CHECK(priority BETWEEN 1 AND 5),
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    target_duration_min_seconds INTEGER NOT NULL DEFAULT 900,
+                    target_duration_max_seconds INTEGER NOT NULL DEFAULT 2400,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(profile_id, source_id),
+                    UNIQUE(profile_id, priority),
+                    FOREIGN KEY(profile_id) REFERENCES theme_market_profiles(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(source_id) REFERENCES content_sources(id)
+                        ON DELETE CASCADE,
+                    CHECK(target_duration_min_seconds < target_duration_max_seconds)
+                );
                 """
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -2299,6 +2581,12 @@ class StateStore:
             version = 19
         if version == 19:
             self._migrate_v19_to_v20()
+            version = 20
+        if version == 20:
+            self._migrate_v20_to_v21()
+            version = 21
+        if version == 21:
+            self._migrate_v21_to_v22()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -2761,9 +3049,142 @@ class StateStore:
                     )
             self.connection.execute("PRAGMA user_version = 20")
 
+    def _migrate_v20_to_v21(self) -> None:
+        """Add market-aware editorial sources without changing legacy records."""
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS theme_market_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_key TEXT NOT NULL, platform TEXT NOT NULL,
+                    region_code TEXT NOT NULL, language_code TEXT NOT NULL,
+                    youtube_category_id TEXT NOT NULL,
+                    youtube_category_name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    is_default_for_theme INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY (theme_key) REFERENCES theme_catalog(theme_key)
+                        ON DELETE CASCADE,
+                    UNIQUE(theme_key, platform, region_code, language_code)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_default_theme_market_profile
+                    ON theme_market_profiles(theme_key, platform)
+                    WHERE is_default_for_theme = 1;
+                CREATE TABLE IF NOT EXISTS content_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform TEXT NOT NULL, external_channel_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL, handle TEXT, channel_url TEXT NOT NULL,
+                    region_code TEXT NOT NULL, language_code TEXT NOT NULL,
+                    source_kind TEXT NOT NULL, validation_status TEXT NOT NULL,
+                    last_validated_at TEXT, latest_upload_at TEXT,
+                    sampled_video_count INTEGER NOT NULL DEFAULT 0,
+                    sampled_longform_count INTEGER NOT NULL DEFAULT 0,
+                    sampled_target_duration_count INTEGER NOT NULL DEFAULT 0,
+                    observed_duration_min_seconds INTEGER,
+                    observed_duration_max_seconds INTEGER,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    rights_status TEXT NOT NULL, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(platform, external_channel_id)
+                );
+                CREATE TABLE IF NOT EXISTS theme_content_sources (
+                    profile_id INTEGER NOT NULL, source_id INTEGER NOT NULL,
+                    priority INTEGER NOT NULL CHECK(priority BETWEEN 1 AND 5),
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    target_duration_min_seconds INTEGER NOT NULL DEFAULT 900,
+                    target_duration_max_seconds INTEGER NOT NULL DEFAULT 2400,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(profile_id, source_id),
+                    UNIQUE(profile_id, priority),
+                    FOREIGN KEY(profile_id) REFERENCES theme_market_profiles(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(source_id) REFERENCES content_sources(id)
+                        ON DELETE CASCADE,
+                    CHECK(target_duration_min_seconds < target_duration_max_seconds)
+                );
+                PRAGMA user_version = 21;
+                """
+            )
+
+    def _migrate_v21_to_v22(self) -> None:
+        """Persist evidence from the recent-upload validation sample."""
+        columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(content_sources)")
+        }
+        with self.connection:
+            for definition in (
+                "latest_upload_at TEXT",
+                "sampled_video_count INTEGER NOT NULL DEFAULT 0",
+                "sampled_longform_count INTEGER NOT NULL DEFAULT 0",
+                "sampled_target_duration_count INTEGER NOT NULL DEFAULT 0",
+                "observed_duration_min_seconds INTEGER",
+                "observed_duration_max_seconds INTEGER",
+            ):
+                if definition.split()[0] not in columns:
+                    self.connection.execute(
+                        f"ALTER TABLE content_sources ADD COLUMN {definition}"
+                    )
+            self.connection.execute("PRAGMA user_version = 22")
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _theme_market_profile(row: sqlite3.Row) -> ThemeMarketProfile:
+    return ThemeMarketProfile(
+        row["id"],
+        row["theme_key"],
+        row["platform"],
+        row["region_code"],
+        row["language_code"],
+        row["youtube_category_id"],
+        row["youtube_category_name"],
+        bool(row["enabled"]),
+        bool(row["is_default_for_theme"]),
+        row["created_at"],
+        row["updated_at"],
+    )
+
+
+def _content_source(row: sqlite3.Row) -> ContentSource:
+    return ContentSource(
+        row["id"],
+        row["platform"],
+        row["external_channel_id"],
+        row["display_name"],
+        row["handle"],
+        row["channel_url"],
+        row["region_code"],
+        row["language_code"],
+        row["source_kind"],
+        SourceValidationStatus(row["validation_status"]),
+        row["last_validated_at"],
+        row["latest_upload_at"],
+        row["sampled_video_count"],
+        row["sampled_longform_count"],
+        row["sampled_target_duration_count"],
+        row["observed_duration_min_seconds"],
+        row["observed_duration_max_seconds"],
+        bool(row["enabled"]),
+        SourceRightsStatus(row["rights_status"]),
+        row["created_at"],
+        row["updated_at"],
+    )
+
+
+def _theme_content_source(row: sqlite3.Row) -> ThemeContentSource:
+    return ThemeContentSource(
+        row["profile_id"],
+        row["source_id"],
+        row["priority"],
+        bool(row["enabled"]),
+        row["target_duration_min_seconds"],
+        row["target_duration_max_seconds"],
+        row["created_at"],
+        row["updated_at"],
+    )
 
 
 def _brand_asset_record(row):

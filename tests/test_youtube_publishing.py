@@ -95,6 +95,15 @@ def configured_service(tmp_path, *, uploader=None):
         youtube_category_name="Gaming",
     )
     config = AutomationConfig((theme,), (identity,))
+    store.save_theme_market_profile(
+        theme_key=plan.theme_key,
+        platform="youtube",
+        region_code="BR",
+        language_code="pt-BR",
+        youtube_category_id="20",
+        youtube_category_name="Gaming",
+        is_default_for_theme=True,
+    )
     link_approved_brand_plan(
         theme=theme,
         publishing_channel=channel,
