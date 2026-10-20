@@ -314,6 +314,33 @@ def test_pilot_refuses_public_or_scheduled_publication(tmp_path):
     assert executor.calls == 0
 
 
+def test_explicit_time_bypasses_editorial_window_and_is_auditable(tmp_path):
+    now = datetime(2026, 10, 20, 15, 0, tzinfo=UTC)
+    requested = datetime.fromisoformat("2026-10-20T15:03:00-03:00")
+    scheduler, store, _channel, publication, _executor = setup_scheduler(tmp_path)
+
+    job = scheduler.enqueue(
+        publication.publication_id, now, requested_publish_at=requested
+    )
+
+    assert job.requested_publish_at == requested.isoformat()
+    assert job.resolved_publish_at == requested.astimezone(UTC).isoformat()
+
+
+def test_explicit_time_requires_aware_future_instant(tmp_path):
+    now = datetime(2026, 10, 20, 15, 0, tzinfo=UTC)
+    scheduler, _store, _channel, publication, _executor = setup_scheduler(tmp_path)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        scheduler.enqueue(
+            publication.publication_id,
+            now,
+            requested_publish_at=datetime(2026, 10, 20, 15, 3),
+        )
+    with pytest.raises(ValueError, match="future"):
+        scheduler.enqueue(publication.publication_id, now, requested_publish_at=now)
+
+
 def test_schema_migration_is_idempotent(tmp_path):
     path = tmp_path / "state.db"
     with StateStore(path) as store:

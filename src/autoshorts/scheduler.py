@@ -217,12 +217,23 @@ class SchedulerService:
             raise ValueError("Published publications cannot be enqueued.")
         urgency = options.get("urgency", SchedulerUrgency.NORMAL)
         experimental = bool(options.get("experimental", False))
-        schedule, proposed = self.plan_channel(
-            publication.publishing_channel_id,
-            now,
-            urgency=urgency,
-            experimental=experimental,
+        requested = options.get("requested_publish_at")
+        schedule = resolve_channel_posting_schedule(
+            self.config, self.state, publication.publishing_channel_id
         )
+        if requested is not None:
+            if requested.tzinfo is None:
+                raise ValueError("Requested scheduler time must be timezone-aware.")
+            proposed = requested.astimezone(UTC)
+            if proposed <= now.astimezone(UTC):
+                raise ValueError("Requested scheduler time must be in the future.")
+        else:
+            _, proposed = self.plan_channel(
+                publication.publishing_channel_id,
+                now,
+                urgency=urgency,
+                experimental=experimental,
+            )
         job = self.state.enqueue_publication_job(
             publishing_channel_id=publication.publishing_channel_id,
             publication_id=publication_id,
@@ -230,7 +241,7 @@ class SchedulerService:
             timezone=schedule.posting_profile.timezone,
             urgency=urgency,
             use_experimental_window=experimental,
-            requested_publish_at=options.get("requested_publish_at"),
+            requested_publish_at=requested.isoformat() if requested else None,
         )
         if job.state is not SchedulerJobState.QUEUED:
             return job

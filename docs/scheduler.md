@@ -11,6 +11,7 @@ autoshorts-scheduler status
 autoshorts-scheduler list
 autoshorts-scheduler plan
 autoshorts-scheduler enqueue PUBLICATION_ID
+autoshorts-scheduler enqueue PUBLICATION_ID --at 2026-10-20T18:03:00-03:00
 autoshorts-scheduler pause
 autoshorts-scheduler resume
 autoshorts-scheduler pause-channel PUBLISHING_CHANNEL_ID
@@ -22,6 +23,10 @@ autoshorts-scheduler run --confirm-private-uploads
 `plan` não cria jobs nem chama APIs remotas. `run` usa polling local, inicialmente
 45 segundos, e não instala daemon, systemd ou cron. A confirmação explícita é
 obrigatória nos comandos capazes de fazer upload.
+
+`enqueue --at` aceita um instante futuro com timezone explícito e ignora somente
+as janelas editoriais para testes operacionais controlados. O instante solicitado
+e o instante UTC resolvido ficam ambos persistidos no job para auditoria.
 
 ## Segurança e recuperação
 

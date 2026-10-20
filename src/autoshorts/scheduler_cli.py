@@ -56,6 +56,11 @@ def create_parser() -> argparse.ArgumentParser:
     enqueue.add_argument("publication_id", type=int)
     enqueue.add_argument("--fresh", action="store_true")
     enqueue.add_argument("--experimental", action="store_true")
+    enqueue.add_argument(
+        "--at",
+        type=datetime.fromisoformat,
+        help="Explicit timezone-aware execution time, bypassing editorial windows.",
+    )
     for name in ("run", "run-once"):
         command = commands.add_parser(name)
         command.add_argument("--confirm-private-uploads", action="store_true")
@@ -135,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
                 datetime.now(UTC),
                 urgency=urgency,
                 experimental=arguments.experimental,
+                requested_publish_at=arguments.at,
             )
             print(f"job={job.job_id} state={job.state} at={job.resolved_publish_at}")
             return 0
