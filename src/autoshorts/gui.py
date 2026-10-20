@@ -69,6 +69,7 @@ from autoshorts.state_store import (
     default_state_db_path,
 )
 from autoshorts.theme_catalog import CatalogProvenance, CatalogStatus
+from autoshorts.youtube_branding import YouTubeBrandingService
 from autoshorts.youtube_oauth import YouTubeConnectionService
 from autoshorts.youtube_publishing import (
     PublicationMetadata,
@@ -150,6 +151,19 @@ def _asset_version_history(assets) -> dict[str, str]:
         if versions:
             result[asset_type.value] = " · ".join(versions)
     return result
+
+
+def _branding_plan_text(plan) -> str:
+    return (
+        f"Channel:\n{plan.youtube_channel_title}\n{plan.youtube_channel_id}\n\n"
+        f"Brand Plan:\n{plan.public_name}\n\n"
+        f"Description:\n{plan.description}\n\n"
+        f"Banner:\n{plan.banner.file_path}\n"
+        f"{plan.banner.width}x{plan.banner.height}\n{plan.banner.checksum}\n\n"
+        f"Logo (manual):\n{plan.logo.file_path}\n"
+        f"{plan.logo.width}x{plan.logo.height}\n{plan.logo.checksum}\n\n"
+        f"OAuth scopes: {'OK' if plan.oauth_ready else 'NEEDS_REAUTH'}"
+    )
 
 
 def _binding_display(
@@ -1917,6 +1931,16 @@ class AutoShortsWindow:
         self.disconnect_youtube_button.pack(side="left", padx=6)
         ttk.Button(
             account_actions,
+            text="Dry-run branding",
+            command=self.branding_dry_run_ui,
+        ).pack(side="left", padx=(10, 0))
+        ttk.Button(
+            account_actions,
+            text="Aplicar branding",
+            command=self.apply_branding_ui,
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            account_actions,
             text="Gerar identidade",
             command=self.generate_brand_identity_ui,
         ).pack(side="left", padx=(10, 0))
@@ -3494,6 +3518,53 @@ class AutoShortsWindow:
             )
             service.disconnect(channel_id)
         self.refresh_theme_details()
+
+    def branding_dry_run_ui(self) -> None:
+        channel_id = self._selected_channel_id()
+        if self.automation_config is None or not channel_id:
+            messagebox.showinfo("Branding YouTube", "Selecione um canal.")
+            return
+        try:
+            with StateStore(self.state_db_path) as state_store:
+                plan = YouTubeBrandingService(
+                    self.automation_config, state_store, self.credential_store
+                ).dry_run(channel_id)
+        except Exception as exc:
+            messagebox.showerror("Branding YouTube", str(exc))
+            return
+        messagebox.showinfo("Dry-run de branding", _branding_plan_text(plan))
+
+    def apply_branding_ui(self) -> None:
+        channel_id = self._selected_channel_id()
+        if self.automation_config is None or not channel_id:
+            messagebox.showinfo("Branding YouTube", "Selecione um canal.")
+            return
+        try:
+            with StateStore(self.state_db_path) as state_store:
+                service = YouTubeBrandingService(
+                    self.automation_config, state_store, self.credential_store
+                )
+                plan = service.dry_run(channel_id)
+                if not plan.oauth_ready:
+                    raise ValueError(
+                        "OAuth precisa ser reconectado antes de aplicar o branding."
+                    )
+                if not messagebox.askyesno(
+                    "Confirmar branding remoto",
+                    _branding_plan_text(plan)
+                    + "\n\nAplicar descrição, keywords, idioma e banner?",
+                ):
+                    return
+                result = service.apply(channel_id)
+        except Exception as exc:
+            messagebox.showerror("Branding YouTube", str(exc))
+            return
+        messagebox.showinfo(
+            "Branding YouTube",
+            "Branding aplicado e validado.\n"
+            f"Banner remoto: {'PASS' if result.banner_active else 'FAIL'}\n"
+            "Foto de perfil e handle permanecem manuais.",
+        )
 
     @staticmethod
     def _channel_profiles(result: tuple[str, ...]) -> dict[str, object]:

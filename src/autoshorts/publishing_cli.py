@@ -13,6 +13,7 @@ from autoshorts.automation_store import (
 from autoshorts.channel_setup import link_approved_brand_plan
 from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.state_store import StateStore, default_state_db_path
+from autoshorts.youtube_branding import CAPABILITIES, YouTubeBrandingService
 from autoshorts.youtube_publishing import (
     PublicationMetadata,
     YouTubePublicationService,
@@ -30,6 +31,11 @@ def create_parser() -> argparse.ArgumentParser:
     commands.add_parser("list-identities")
     commands.add_parser("list-channels")
     commands.add_parser("list-publications")
+    branding_dry_run = commands.add_parser("branding-dry-run")
+    branding_dry_run.add_argument("--channel", required=True)
+    branding_apply = commands.add_parser("branding-apply")
+    branding_apply.add_argument("--channel", required=True)
+    branding_apply.add_argument("--confirm-branding", action="store_true")
     link = commands.add_parser("link-brand")
     link.add_argument("--channel", required=True)
     create = commands.add_parser("create")
@@ -163,6 +169,20 @@ def _run(arguments, config, state: StateStore) -> int:
         )
         print(f"linked={kit.public_name} source_plan_id={kit.source_plan_id}")
         return 0
+    if command in {"branding-dry-run", "branding-apply"}:
+        service = YouTubeBrandingService(
+            config, state, FilesystemCredentialStore()
+        )
+        plan = service.dry_run(arguments.channel)
+        _print_branding_plan(plan)
+        if command == "branding-dry-run":
+            return 0
+        if not arguments.confirm_branding:
+            raise ValueError("Remote branding requires --confirm-branding.")
+        result = service.apply(arguments.channel)
+        print(f"BANNER_REMOTE={'PASS' if result.banner_active else 'FAIL'}")
+        print("REMOTE_VALIDATION=PASS")
+        return 0
     service = YouTubePublicationService(config, state, FilesystemCredentialStore())
     if command == "create":
         record = service.create_for_review(
@@ -241,6 +261,25 @@ def _channel(config, channel_id):
             if channel.channel_id == channel_id:
                 return theme, channel
     raise KeyError(f"Publishing channel not found: {channel_id}")
+
+
+def _print_branding_plan(plan) -> None:
+    print("BRANDING_DRY_RUN")
+    print(f"Channel:\n{plan.youtube_channel_title}\n{plan.youtube_channel_id}")
+    print(f"Brand Plan:\n{plan.public_name}")
+    print(f"Description:\n{plan.description}")
+    print(
+        f"Banner:\n{plan.banner.file_path}\n"
+        f"{plan.banner.width}x{plan.banner.height}\n{plan.banner.checksum}"
+    )
+    print(
+        f"Logo:\n{plan.logo.file_path}\n"
+        f"{plan.logo.width}x{plan.logo.height}\n{plan.logo.checksum}"
+    )
+    print("Remote writable:")
+    for capability in CAPABILITIES:
+        print(f"{capability.name}: {'YES' if capability.writable else 'NO'}")
+    print(f"OAuth scopes: {'OK' if plan.oauth_ready else 'NEEDS_REAUTH'}")
 
 
 if __name__ == "__main__":

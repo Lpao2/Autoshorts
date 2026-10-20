@@ -16,7 +16,10 @@ from autoshorts.state_store import ChannelCredentialBinding, StateStore
 CLIENT_SECRET_ENV = "AUTOSHORTS_GOOGLE_CLIENT_SECRET"
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
-YOUTUBE_SCOPES = (YOUTUBE_UPLOAD_SCOPE, YOUTUBE_READONLY_SCOPE)
+YOUTUBE_MANAGE_SCOPE = "https://www.googleapis.com/auth/youtube"
+# One consent grants all capabilities used by onboarding: channel inspection,
+# video upload, channel metadata updates, and banner provisioning.
+YOUTUBE_SCOPES = (YOUTUBE_MANAGE_SCOPE,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,8 +196,11 @@ class YouTubeConnectionService:
             )
         try:
             payload = self.credential_store.read(binding.credential_ref)
+            self._require_current_scopes(payload)
             credentials = self.backend.load(payload, YOUTUBE_SCOPES)
             actual = self.backend.identify_channel(credentials)
+        except OAuthCredentialError:
+            raise
         except Exception:
             self._mark_invalid(binding, "REVOKED")
             raise OAuthCredentialError("OAuth credential revoked or invalid.") from None
@@ -248,6 +254,14 @@ class YouTubeConnectionService:
         self, binding: ChannelCredentialBinding, status: str
     ) -> None:
         self.state_store.save_channel_binding(replace(binding, status=status))
+
+    @staticmethod
+    def _require_current_scopes(payload: str) -> None:
+        scopes = json.loads(payload).get("scopes")
+        if scopes is not None and not set(YOUTUBE_SCOPES).issubset(scopes):
+            raise OAuthCredentialError(
+                "OAuth scope outdated; reconnect the channel to authorize branding."
+            )
 
     @staticmethod
     def _client_secret_path() -> Path:

@@ -13,9 +13,9 @@ from autoshorts.automation_config import (
 from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.state_store import StateStore
 from autoshorts.youtube_oauth import (
-    YOUTUBE_READONLY_SCOPE,
+    YOUTUBE_MANAGE_SCOPE,
     YOUTUBE_SCOPES,
-    YOUTUBE_UPLOAD_SCOPE,
+    OAuthCredentialError,
     PendingChannelConnection,
     YouTubeChannelIdentity,
     YouTubeConnectionService,
@@ -93,13 +93,14 @@ def connect(target, channel_id="lol-a"):
     return target.confirm_connection(pending)
 
 
-def test_oauth_requests_exactly_upload_and_readonly_scopes(tmp_path, monkeypatch):
+def test_oauth_requests_manage_scope_needed_for_complete_onboarding(
+    tmp_path, monkeypatch
+):
     backend = Backend()
     target, state, _ = service(tmp_path, monkeypatch, backend=backend)
     pending = target.begin_connection("lol-a")
     assert backend.authorize_scopes == YOUTUBE_SCOPES
-    assert set(YOUTUBE_SCOPES) == {YOUTUBE_UPLOAD_SCOPE, YOUTUBE_READONLY_SCOPE}
-    assert "https://www.googleapis.com/auth/youtube" not in YOUTUBE_SCOPES
+    assert YOUTUBE_SCOPES == (YOUTUBE_MANAGE_SCOPE,)
     target.confirm_connection(pending)
     target.verify_binding("lol-a")
     assert backend.load_scopes == YOUTUBE_SCOPES
@@ -242,4 +243,25 @@ def test_revoked_credential_error_does_not_expose_saved_token(tmp_path, monkeypa
         target.verify_binding("lol-a")
     assert "secret-access-token" not in str(error.value)
     assert state.get_channel_binding("lol-a").status == "REVOKED"
+    state.close()
+
+
+def test_outdated_scope_requires_reauth_without_destroying_binding(
+    tmp_path, monkeypatch
+):
+    target, state, secrets = service(tmp_path, monkeypatch)
+    binding = connect(target)
+    secrets.write(
+        "lol-a",
+        json.dumps(
+            {
+                "token": "secret-access-token",
+                "scopes": ["https://www.googleapis.com/auth/youtube.upload"],
+            }
+        ),
+    )
+    with pytest.raises(OAuthCredentialError, match="scope outdated"):
+        target.verify_binding("lol-a")
+    assert state.get_channel_binding("lol-a") == binding
+    assert state.get_channel_binding("lol-a").status == "CONNECTED"
     state.close()
