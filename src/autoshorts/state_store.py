@@ -39,6 +39,13 @@ from autoshorts.editorial_sources import (
     ThemePostingProfile,
     TimingPolicy,
 )
+from autoshorts.scheduler_models import (
+    PublicationJob,
+    SchedulerJobEvent,
+    SchedulerJobState,
+    SchedulerSettings,
+    SchedulerUrgency,
+)
 from autoshorts.theme_catalog import (
     AuthorizationStatus,
     BrandBlueprint,
@@ -57,7 +64,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 
 class VideoStatus(StrEnum):
@@ -1043,6 +1050,248 @@ class StateStore:
             (publication_id,),
         ).fetchall()
         return tuple(_publication_attempt(row) for row in rows)
+
+    def scheduler_settings(self) -> SchedulerSettings:
+        row = self.connection.execute(
+            "SELECT * FROM scheduler_settings WHERE singleton=1"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Scheduler settings are missing.")
+        return _scheduler_settings(row)
+
+    def update_scheduler_settings(self, **changes: object) -> SchedulerSettings:
+        allowed = {
+            "global_paused",
+            "poll_interval_seconds",
+            "max_attempts",
+            "missed_threshold_hours",
+            "max_publications_per_channel_per_day",
+            "min_spacing_minutes",
+        }
+        if not changes or not set(changes) <= allowed:
+            raise ValueError("Invalid scheduler settings update.")
+        for key, value in changes.items():
+            if key != "global_paused" and int(value) < 1:
+                raise ValueError(f"Scheduler setting must be positive: {key}")
+        assignments = ", ".join(f"{key}=?" for key in changes)
+        values = [
+            int(value) if isinstance(value, bool) else value
+            for value in changes.values()
+        ]
+        with self.connection:
+            self.connection.execute(
+                f"UPDATE scheduler_settings SET {assignments}, "
+                "updated_at=? WHERE singleton=1",
+                (*values, _now()),
+            )
+        return self.scheduler_settings()
+
+    def set_scheduler_channel_paused(
+        self, publishing_channel_id: str, paused: bool
+    ) -> None:
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO scheduler_channel_settings
+                (publishing_channel_id, paused, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(publishing_channel_id) DO UPDATE SET
+                    paused=excluded.paused, updated_at=excluded.updated_at""",
+                (publishing_channel_id, paused, now),
+            )
+
+    def scheduler_channel_paused(self, publishing_channel_id: str) -> bool:
+        row = self.connection.execute(
+            """SELECT paused FROM scheduler_channel_settings
+            WHERE publishing_channel_id=?""",
+            (publishing_channel_id,),
+        ).fetchone()
+        return bool(row["paused"]) if row else False
+
+    def enqueue_publication_job(
+        self,
+        *,
+        publishing_channel_id: str,
+        publication_id: int | None,
+        media_path: Path,
+        timezone: str,
+        priority: int = 100,
+        urgency: SchedulerUrgency = SchedulerUrgency.NORMAL,
+        use_experimental_window: bool = False,
+        requested_publish_at: str | None = None,
+        max_attempts: int | None = None,
+    ) -> PublicationJob:
+        if priority < 1:
+            raise ValueError("Scheduler job priority must be positive.")
+        attempts_limit = max_attempts or self.scheduler_settings().max_attempts
+        if attempts_limit < 1:
+            raise ValueError("Scheduler max_attempts must be positive.")
+        now = _now()
+        with self.connection:
+            cursor = self.connection.execute(
+                """INSERT INTO publication_jobs (
+                    publishing_channel_id, publication_id, media_path,
+                    requested_publish_at, timezone, priority, urgency,
+                    use_experimental_window, state, attempts, max_attempts,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                ON CONFLICT(publication_id) DO NOTHING""",
+                (
+                    publishing_channel_id,
+                    publication_id,
+                    str(Path(media_path).resolve()),
+                    requested_publish_at,
+                    timezone,
+                    priority,
+                    urgency,
+                    use_experimental_window,
+                    SchedulerJobState.QUEUED,
+                    attempts_limit,
+                    now,
+                    now,
+                ),
+            )
+            if cursor.rowcount == 1:
+                job_id = int(cursor.lastrowid)
+                self._record_scheduler_event(
+                    job_id, "ENQUEUED", None, SchedulerJobState.QUEUED, ""
+                )
+            elif publication_id is not None:
+                row = self.connection.execute(
+                    "SELECT id FROM publication_jobs WHERE publication_id=?",
+                    (publication_id,),
+                ).fetchone()
+                job_id = int(row["id"])
+            else:
+                raise RuntimeError("Scheduler job could not be persisted.")
+        return self.scheduler_job(job_id)
+
+    def scheduler_job(self, job_id: int) -> PublicationJob:
+        row = self.connection.execute(
+            "SELECT * FROM publication_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown scheduler job: {job_id}")
+        return _publication_job(row)
+
+    def scheduler_jobs(self) -> tuple[PublicationJob, ...]:
+        rows = self.connection.execute(
+            "SELECT * FROM publication_jobs ORDER BY priority, created_at, id"
+        ).fetchall()
+        return tuple(_publication_job(row) for row in rows)
+
+    def scheduler_job_events(self, job_id: int) -> tuple[SchedulerJobEvent, ...]:
+        rows = self.connection.execute(
+            """SELECT * FROM scheduler_job_events WHERE job_id=?
+            ORDER BY id""",
+            (job_id,),
+        ).fetchall()
+        return tuple(_scheduler_job_event(row) for row in rows)
+
+    def update_scheduler_job(
+        self,
+        job_id: int,
+        *,
+        state: SchedulerJobState,
+        expected: tuple[SchedulerJobState, ...],
+        resolved_publish_at: str | None = None,
+        last_error: str | None = None,
+        increment_attempts: bool = False,
+        upload_started: bool = False,
+        event_type: str = "STATE_CHANGED",
+        event_details: str = "",
+    ) -> PublicationJob:
+        current = self.scheduler_job(job_id)
+        if current.state not in expected:
+            raise ValueError(
+                f"Invalid scheduler transition: {current.state} -> {state}"
+            )
+        now = _now()
+        terminal = state in {
+            SchedulerJobState.COMPLETED,
+            SchedulerJobState.FAILED_PERMANENT,
+            SchedulerJobState.CANCELLED,
+            SchedulerJobState.UPLOAD_UNCERTAIN,
+        }
+        with self.connection:
+            self.connection.execute(
+                """UPDATE publication_jobs SET state=?, resolved_publish_at=?,
+                    attempts=attempts+?, upload_started_at=?, last_error=?,
+                    updated_at=?, started_at=CASE WHEN ?='RUNNING'
+                        THEN ? ELSE started_at END,
+                    finished_at=CASE WHEN ? THEN ? ELSE finished_at END
+                WHERE id=?""",
+                (
+                    state,
+                    resolved_publish_at
+                    if resolved_publish_at is not None
+                    else current.resolved_publish_at,
+                    int(increment_attempts),
+                    now if upload_started else current.upload_started_at,
+                    last_error,
+                    now,
+                    state,
+                    now,
+                    terminal,
+                    now,
+                    job_id,
+                ),
+            )
+            self._record_scheduler_event(
+                job_id, event_type, current.state, state, event_details
+            )
+        return self.scheduler_job(job_id)
+
+    def recover_running_scheduler_jobs(self) -> tuple[PublicationJob, ...]:
+        recovered = []
+        for job in self.scheduler_jobs():
+            if job.state is not SchedulerJobState.RUNNING:
+                continue
+            publication = (
+                self.publication(job.publication_id) if job.publication_id else None
+            )
+            if (
+                publication
+                and publication.status is PublicationStatus.PUBLISHED
+                and publication.remote_video_id
+            ):
+                target = SchedulerJobState.COMPLETED
+                detail = "Persisted remote video confirms completed upload."
+            elif (
+                publication and publication.status is PublicationStatus.UPLOAD_UNCERTAIN
+            ):
+                target = SchedulerJobState.UPLOAD_UNCERTAIN
+                detail = "Publication already records an uncertain upload outcome."
+            elif job.upload_started_at:
+                target = SchedulerJobState.UPLOAD_UNCERTAIN
+                detail = "Process restarted after upload execution became eligible."
+            else:
+                target = SchedulerJobState.SCHEDULED
+                detail = "Process restarted before upload execution began."
+            recovered.append(
+                self.update_scheduler_job(
+                    job.job_id,
+                    state=target,
+                    expected=(SchedulerJobState.RUNNING,),
+                    event_type="CRASH_RECOVERY",
+                    event_details=detail,
+                )
+            )
+        return tuple(recovered)
+
+    def _record_scheduler_event(
+        self,
+        job_id: int,
+        event_type: str,
+        from_state: str | None,
+        to_state: str | None,
+        details: str,
+    ) -> None:
+        self.connection.execute(
+            """INSERT INTO scheduler_job_events
+            (job_id, event_type, from_state, to_state, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            (job_id, event_type, from_state, to_state, details, _now()),
+        )
 
     def short_by_path(self, path: Path) -> ShortRecord | None:
         resolved = str(Path(path).resolve())
@@ -2749,7 +2998,50 @@ class StateStore:
                     FOREIGN KEY(posting_profile_id)
                         REFERENCES theme_posting_profiles(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS scheduler_settings (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    global_paused INTEGER NOT NULL DEFAULT 0,
+                    poll_interval_seconds INTEGER NOT NULL DEFAULT 45,
+                    max_attempts INTEGER NOT NULL DEFAULT 3,
+                    missed_threshold_hours INTEGER NOT NULL DEFAULT 6,
+                    max_publications_per_channel_per_day INTEGER NOT NULL DEFAULT 1,
+                    min_spacing_minutes INTEGER NOT NULL DEFAULT 30,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS scheduler_channel_settings (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    paused INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS publication_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    publishing_channel_id TEXT NOT NULL,
+                    publication_id INTEGER UNIQUE,
+                    media_path TEXT NOT NULL, requested_publish_at TEXT,
+                    resolved_publish_at TEXT, timezone TEXT NOT NULL,
+                    priority INTEGER NOT NULL, urgency TEXT NOT NULL,
+                    use_experimental_window INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 3,
+                    upload_started_at TEXT, last_error TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    started_at TEXT, finished_at TEXT,
+                    FOREIGN KEY(publication_id) REFERENCES publications(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_publication_jobs_due
+                    ON publication_jobs(state, resolved_publish_at, priority);
+                CREATE TABLE IF NOT EXISTS scheduler_job_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL,
+                    event_type TEXT NOT NULL, from_state TEXT, to_state TEXT,
+                    details TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES publication_jobs(id)
+                        ON DELETE CASCADE
+                );
                 """
+                )
+                self.connection.execute(
+                    """INSERT OR IGNORE INTO scheduler_settings
+                    (singleton, updated_at) VALUES (1, ?)""",
+                    (_now(),),
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
@@ -2818,6 +3110,9 @@ class StateStore:
             version = 22
         if version == 22:
             self._migrate_v22_to_v23()
+            version = 23
+        if version == 23:
+            self._migrate_v23_to_v24()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -3401,6 +3696,59 @@ class StateStore:
                 """
             )
 
+    def _migrate_v23_to_v24(self) -> None:
+        """Add persistent publication scheduling and recovery history."""
+        now = _now()
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS scheduler_settings (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    global_paused INTEGER NOT NULL DEFAULT 0,
+                    poll_interval_seconds INTEGER NOT NULL DEFAULT 45,
+                    max_attempts INTEGER NOT NULL DEFAULT 3,
+                    missed_threshold_hours INTEGER NOT NULL DEFAULT 6,
+                    max_publications_per_channel_per_day INTEGER NOT NULL DEFAULT 1,
+                    min_spacing_minutes INTEGER NOT NULL DEFAULT 30,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS scheduler_channel_settings (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    paused INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS publication_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    publishing_channel_id TEXT NOT NULL,
+                    publication_id INTEGER UNIQUE,
+                    media_path TEXT NOT NULL, requested_publish_at TEXT,
+                    resolved_publish_at TEXT, timezone TEXT NOT NULL,
+                    priority INTEGER NOT NULL, urgency TEXT NOT NULL,
+                    use_experimental_window INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 3,
+                    upload_started_at TEXT, last_error TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    started_at TEXT, finished_at TEXT,
+                    FOREIGN KEY(publication_id) REFERENCES publications(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_publication_jobs_due
+                    ON publication_jobs(state, resolved_publish_at, priority);
+                CREATE TABLE IF NOT EXISTS scheduler_job_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL,
+                    event_type TEXT NOT NULL, from_state TEXT, to_state TEXT,
+                    details TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES publication_jobs(id)
+                        ON DELETE CASCADE
+                );
+                PRAGMA user_version = 24;
+                """
+            )
+            self.connection.execute(
+                """INSERT OR IGNORE INTO scheduler_settings
+                (singleton, updated_at) VALUES (1, ?)""",
+                (now,),
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -3690,4 +4038,52 @@ def _publication_attempt(row: sqlite3.Row) -> PublicationAttempt:
         remote_video_id=row["remote_video_id"],
         error_category=row["error_category"],
         error_message=row["error_message"],
+    )
+
+
+def _scheduler_settings(row: sqlite3.Row) -> SchedulerSettings:
+    return SchedulerSettings(
+        bool(row["global_paused"]),
+        row["poll_interval_seconds"],
+        row["max_attempts"],
+        row["missed_threshold_hours"],
+        row["max_publications_per_channel_per_day"],
+        row["min_spacing_minutes"],
+        row["updated_at"],
+    )
+
+
+def _publication_job(row: sqlite3.Row) -> PublicationJob:
+    return PublicationJob(
+        row["id"],
+        row["publishing_channel_id"],
+        row["publication_id"],
+        Path(row["media_path"]),
+        row["requested_publish_at"],
+        row["resolved_publish_at"],
+        row["timezone"],
+        row["priority"],
+        SchedulerUrgency(row["urgency"]),
+        bool(row["use_experimental_window"]),
+        SchedulerJobState(row["state"]),
+        row["attempts"],
+        row["max_attempts"],
+        row["upload_started_at"],
+        row["last_error"],
+        row["created_at"],
+        row["updated_at"],
+        row["started_at"],
+        row["finished_at"],
+    )
+
+
+def _scheduler_job_event(row: sqlite3.Row) -> SchedulerJobEvent:
+    return SchedulerJobEvent(
+        row["id"],
+        row["job_id"],
+        row["event_type"],
+        row["from_state"],
+        row["to_state"],
+        row["details"],
+        row["created_at"],
     )

@@ -26,6 +26,7 @@ autoshorts-gui = "autoshorts.gui:main"
 autoshorts-install-desktop = "autoshorts.desktop:main"
 autoshorts-publish = "autoshorts.publishing_cli:main"
 autoshorts-editorial = "autoshorts.editorial_cli:main"
+autoshorts-scheduler = "autoshorts.scheduler_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
