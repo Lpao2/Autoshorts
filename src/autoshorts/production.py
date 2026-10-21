@@ -285,7 +285,10 @@ def _get_analysis(state, video, transcript, path, provider, theme) -> ResolvedAn
     if record is not None:
         return load_analysis(record.file_path, transcript, youtube_id=video.youtube_id)
     current = state.get_video(video.youtube_id)
-    if current is None or current.status != VideoStatus.TRANSCRIBED:
+    if current is None or current.status not in {
+        VideoStatus.TRANSCRIBED,
+        VideoStatus.ANALYZING,
+    }:
         status = current.status if current else None
         raise RuntimeError(f"Cannot analyze from state {status}.")
     return analyze_transcript(

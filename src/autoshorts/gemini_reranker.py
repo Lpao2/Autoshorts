@@ -14,6 +14,7 @@ from autoshorts.gemini_analysis_provider import (
     GeminiAnalysisError,
     _usage_from_response,
 )
+from autoshorts.gemini_calls import call_gemini, create_gemini_client
 from autoshorts.reranking import (
     CandidateReranker,
     RankedSelection,
@@ -64,9 +65,7 @@ class GeminiCandidateReranker(CandidateReranker):
 
     @classmethod
     def configured(cls, *, model: str | None = None):
-        from google import genai
-
-        return cls(model=model, client=genai.Client())
+        return cls(model=model, client=create_gemini_client())
 
     def prompt_hash(self, theme_prompt: str) -> str:
         return rerank_prompt_fingerprint(RERANK_PROMPT, theme_prompt)
@@ -88,16 +87,20 @@ class GeminiCandidateReranker(CandidateReranker):
             candidates, theme, theme_prompt, title, creator, youtube_id
         )
         started = time.monotonic()
-        response = self._client.models.generate_content(
+        response = call_gemini(
+            operation="candidate_reranking",
             model=self.model,
-            contents=prompt,
-            config={
-                "system_instruction": RERANK_PROMPT,
-                "response_mime_type": "application/json",
-                "response_json_schema": RERANK_SCHEMA,
-                "thinking_config": {"thinking_level": "low"},
-                "temperature": 0.2,
-            },
+            request=lambda: self._client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config={
+                    "system_instruction": RERANK_PROMPT,
+                    "response_mime_type": "application/json",
+                    "response_json_schema": RERANK_SCHEMA,
+                    "thinking_config": {"thinking_level": "low"},
+                    "temperature": 0.2,
+                },
+            ),
         )
         usage = _usage_from_response(response, self.model, time.monotonic() - started)
         try:

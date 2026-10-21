@@ -72,19 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         video = state.get_video(args.source_video_id)
         if video is None:
             raise SystemExit(f"Source video not found: {args.source_video_id}")
-        try:
-            theme = config.theme(video.theme_name)
-        except KeyError:
-            theme = next(
-                (
-                    item
-                    for item in config.themes
-                    if item.name.casefold() == video.theme_name.casefold()
-                ),
-                None,
-            )
-            if theme is None:
-                raise SystemExit(f"Theme not found: {video.theme_name}") from None
+        theme = _resolve_video_theme(config, state, video)
         result = produce_source_video(
             youtube_id=args.source_video_id,
             state=state,
@@ -110,6 +98,42 @@ def main(argv: list[str] | None = None) -> int:
     outcome = "DRY-RUN" if args.dry_run else "REUSED" if result.reused else "READY"
     print(f"Result: {outcome}")
     return 0
+
+
+def _resolve_video_theme(config, state, video):
+    row = state.connection.execute(
+        """SELECT DISTINCT profile.theme_key
+        FROM theme_content_sources link
+        JOIN theme_market_profiles profile ON profile.id=link.profile_id
+        WHERE link.source_id=? AND link.enabled=1 AND profile.enabled=1""",
+        (video.content_source_id,),
+    ).fetchall()
+    keys = {item["theme_key"] for item in row}
+    if len(keys) > 1:
+        raise SystemExit(f"Ambiguous source theme: {video.youtube_id}")
+    theme_key = next(iter(keys), video.theme_name)
+    theme = next(
+        (
+            item
+            for item in config.themes
+            if theme_key
+            in {
+                item.theme_id,
+                item.name,
+                item.name.casefold(),
+                item.output_subdirectory,
+            }
+        ),
+        None,
+    )
+    if theme is None:
+        raise SystemExit(f"Theme not found: {theme_key}")
+    if video.theme_name.casefold() not in {
+        theme.name.casefold(),
+        theme.output_subdirectory.casefold(),
+    }:
+        raise SystemExit(f"Source theme mismatch: {video.youtube_id}")
+    return theme
 
 
 def _caption(args) -> int:

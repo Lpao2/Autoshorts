@@ -9,6 +9,7 @@ from typing import Any
 
 from autoshorts.analysis_cost import estimate_cost_usd
 from autoshorts.automation_events import check_automation_cancelled
+from autoshorts.gemini_calls import call_gemini, create_gemini_client
 from autoshorts.transcript_analysis import (
     AnalysisResult,
     AnalysisUsage,
@@ -87,12 +88,11 @@ class GeminiAnalysisProvider:
             raise RuntimeError("Gemini não configurado. Defina GEMINI_API_KEY.")
         if client is None:
             try:
-                from google import genai
+                client = create_gemini_client(api_key=api_key)
             except ImportError as exc:
                 raise RuntimeError(
                     "Gemini exige o extra analysis: pip install -e '.[analysis]'"
                 ) from exc
-            client = genai.Client(api_key=api_key)
         self._client = client
 
     def analyze(
@@ -112,16 +112,20 @@ class GeminiAnalysisProvider:
             transcript, title, creator, theme, theme_prompt, youtube_id
         )
         started = time.monotonic()
-        response = self._client.models.generate_content(
+        response = call_gemini(
+            operation="segment_analysis",
             model=self.model,
-            contents=prompt,
-            config={
-                "system_instruction": BASE_PROMPT,
-                "response_mime_type": "application/json",
-                "response_json_schema": RESPONSE_SCHEMA,
-                "thinking_config": {"thinking_level": "low"},
-                "temperature": 0.3,
-            },
+            request=lambda: self._client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config={
+                    "system_instruction": BASE_PROMPT,
+                    "response_mime_type": "application/json",
+                    "response_json_schema": RESPONSE_SCHEMA,
+                    "thinking_config": {"thinking_level": "low"},
+                    "temperature": 0.3,
+                },
+            ),
         )
         duration = time.monotonic() - started
         usage = _usage_from_response(response, self.model, duration)

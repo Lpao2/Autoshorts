@@ -10,6 +10,11 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from autoshorts.automation_config import AutomationConfig
+from autoshorts.gemini_calls import (
+    GeminiPermanentError,
+    call_gemini,
+    create_gemini_client,
+)
 from autoshorts.scheduler import SchedulerService
 from autoshorts.scheduler_models import PublicationJob
 from autoshorts.state_store import (
@@ -57,26 +62,28 @@ class GeminiMetadataProvider:
         if client is None and not api_key:
             raise RuntimeError("Gemini metadata requires GEMINI_API_KEY.")
         if client is None:
-            from google import genai
-
-            client = genai.Client(api_key=api_key)
+            client = create_gemini_client(api_key=api_key)
         self._client = client
 
     def generate(self, prompt: str) -> GeneratedMetadata:
-        response = self._client.models.generate_content(
+        response = call_gemini(
+            operation="metadata",
             model=self.model,
-            contents=prompt,
-            config={
-                "system_instruction": (
-                    "Você cria metadata honesta e concisa para YouTube Shorts. "
-                    "Use somente fatos presentes no trecho. Evite clickbait falso, "
-                    "ALL CAPS, links inventados e tags irrelevantes."
-                ),
-                "response_mime_type": "application/json",
-                "response_json_schema": _RESPONSE_SCHEMA,
-                "temperature": 0.35,
-                "thinking_config": {"thinking_level": "low"},
-            },
+            request=lambda: self._client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config={
+                    "system_instruction": (
+                        "Você cria metadata honesta e concisa para YouTube Shorts. "
+                        "Use somente fatos presentes no trecho. Evite clickbait falso, "
+                        "ALL CAPS, links inventados e tags irrelevantes."
+                    ),
+                    "response_mime_type": "application/json",
+                    "response_json_schema": _RESPONSE_SCHEMA,
+                    "temperature": 0.35,
+                    "thinking_config": {"thinking_level": "low"},
+                },
+            ),
         )
         raw = response.parsed
         if not isinstance(raw, dict):
@@ -176,9 +183,14 @@ def generate_metadata_draft(
             True,
         ).validated()
     except Exception as exc:
+        failure_status = (
+            MetadataDraftStatus.FAILED_CONFIGURATION
+            if isinstance(exc, GeminiPermanentError)
+            else MetadataDraftStatus.FAILED_RECOVERABLE
+        )
         state.save_metadata_draft(
             **base,
-            status=MetadataDraftStatus.FAILED_RECOVERABLE,
+            status=failure_status,
             title="",
             description="",
             tags=(),

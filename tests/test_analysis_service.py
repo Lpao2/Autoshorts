@@ -42,6 +42,14 @@ class FailingProvider(Provider):
         raise BilledFailure
 
 
+class TransientProvider(Provider):
+    def analyze(self, *_args, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("503 UNAVAILABLE")
+        return super().analyze(*_args, **kwargs)
+
+
 def prepared_store(tmp_path):
     store = StateStore(tmp_path / "state.db")
     store.register_video(
@@ -145,4 +153,36 @@ def test_billed_invalid_response_is_counted_once(tmp_path):
         )
     assert provider.calls == 1
     assert store.monthly_ai_cost("gemini") == pytest.approx(0.00013125)
+    store.close()
+
+
+def test_analysis_resumes_from_analyzing_without_duplicate_records(tmp_path):
+    store, _ = prepared_store(tmp_path)
+    provider = TransientProvider()
+    artifact = tmp_path / "lol" / ".work" / "video" / "analysis.json"
+    values = dict(
+        youtube_id="video",
+        transcript=transcript(),
+        artifact_path=artifact,
+        provider=provider,
+        state_store=store,
+        title="title",
+        creator="creator",
+        theme="lol",
+        theme_prompt="humor",
+    )
+
+    with pytest.raises(RuntimeError, match="503"):
+        analyze_transcript(**values)
+    assert store.get_video("video").status is VideoStatus.ANALYZING
+
+    resolved = analyze_transcript(**values)
+    assert resolved.result.selections
+    assert store.get_video("video").status is VideoStatus.ANALYZED
+    analyses = store.connection.execute("SELECT count(*) FROM analyses").fetchone()[0]
+    transcripts = store.connection.execute(
+        "SELECT count(*) FROM transcripts"
+    ).fetchone()[0]
+    assert analyses == 1
+    assert transcripts == 1
     store.close()

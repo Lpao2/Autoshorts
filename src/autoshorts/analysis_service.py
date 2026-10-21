@@ -38,7 +38,15 @@ def analyze_transcript(
         spent = state_store.monthly_ai_cost("gemini")
         if spent >= monthly_budget_usd():
             raise RuntimeError("Limite mensal de IA do AutoShorts atingido.")
-    state_store.transition_video(youtube_id, VideoStatus.ANALYZING)
+    current = state_store.get_video(youtube_id)
+    if current is None or current.status not in {
+        VideoStatus.TRANSCRIBED,
+        VideoStatus.ANALYZING,
+    }:
+        status = current.status if current else None
+        raise RuntimeError(f"Cannot analyze from state {status}.")
+    if current.status is VideoStatus.TRANSCRIBED:
+        state_store.transition_video(youtube_id, VideoStatus.ANALYZING)
     emit(AutomationEvent("analysis_started", creator=creator, title=title))
     try:
         result = provider.analyze(

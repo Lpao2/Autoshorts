@@ -20,6 +20,7 @@ from autoshorts.orchestrator import (
     ProductionOutcome,
     get_channel_inventory,
 )
+from autoshorts.production_cli import _resolve_video_theme
 from autoshorts.state_store import MetadataDraftStatus, ReviewPolicy, StateStore
 
 
@@ -68,6 +69,52 @@ def test_inventory_policy_thresholds(tmp_path, monkeypatch, inventory, deficit, 
     )
     plan = orchestrator.inspect_channel(orchestrator.active_channels()[0])
     assert (plan.deficit, plan.action) == (deficit, action)
+    state.close()
+
+
+@pytest.mark.parametrize(
+    ("name", "slug"),
+    (
+        ("LoL", "lol"),
+        ("Finanças", "finance-business"),
+        ("Tecnologia", "technology-ai"),
+        ("Fé", "fe"),
+    ),
+)
+def test_cli_resolves_video_theme_from_sqlite_relation(tmp_path, name, slug):
+    channel = PublishingChannel("channel", "Channel", 1)
+    theme = ThemeProfile(name, "Prompt", (), slug, channels=(channel,))
+    config = AutomationConfig((theme,))
+    state = StateStore(tmp_path / "state.db")
+    source = state.connection.execute(
+        """INSERT INTO content_sources
+        (platform, external_channel_id, display_name, channel_url, region_code,
+         language_code, source_kind, validation_status, rights_status,
+         created_at, updated_at)
+        VALUES ('youtube', ?, 'Source', 'https://youtube.test/source', 'BR',
+                'pt-BR', 'CREATOR', 'PASS', 'APPROVED', 'now', 'now')""",
+        (f"UC-{slug}",),
+    )
+    source_id = source.lastrowid
+    profile = state.connection.execute(
+        """INSERT INTO theme_market_profiles
+        (theme_key, platform, region_code, language_code, youtube_category_id,
+         youtube_category_name, enabled, is_default_for_theme, created_at, updated_at)
+        VALUES (?, 'youtube', 'BR', 'pt-BR', '22', 'People & Blogs', 1, 1,
+                'now', 'now')""",
+        (slug,),
+    )
+    state.connection.execute(
+        """INSERT INTO theme_content_sources
+        (profile_id, source_id, priority, enabled, created_at, updated_at)
+        VALUES (?, ?, 1, 1, 'now', 'now')""",
+        (profile.lastrowid, source_id),
+    )
+    video = SimpleNamespace(
+        youtube_id="video", theme_name=slug, content_source_id=source_id
+    )
+
+    assert _resolve_video_theme(config, state, video) is theme
     state.close()
 
 
@@ -181,6 +228,26 @@ def test_oldest_attempt_wins_after_every_channel_had_an_opportunity(tmp_path):
     state.close()
 
 
+def test_pipeline_resumes_assigned_analysis_before_discovery(tmp_path):
+    state = StateStore(tmp_path / "state.db")
+    state.register_video(
+        youtube_id="partial-video",
+        source_url="https://youtube.test/partial-video",
+        creator_name="Creator",
+        theme_name="lol",
+        title="Partial",
+    )
+    state.connection.execute(
+        "UPDATE videos SET status='ANALYZING' WHERE youtube_id='partial-video'"
+    )
+    state.assign_source_to_channel("partial-video", "channel-1")
+    producer = object.__new__(PipelineChannelProducer)
+    producer.state = state
+
+    assert producer._resumable_source("channel-1") == "partial-video"
+    state.close()
+
+
 def test_dry_run_has_no_side_effects_and_limit_is_zero(tmp_path):
     state, orchestrator, worker = setup_orchestrator(tmp_path)
     before = state.connection.total_changes
@@ -251,6 +318,9 @@ def test_pipeline_producer_respects_review_policy(
     monkeypatch.setattr(orchestrator_module, "ingest", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         orchestrator_module, "produce_source_video", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        PipelineChannelProducer, "_resumable_source", lambda *_args: None
     )
     draft = SimpleNamespace(
         draft_id=8,

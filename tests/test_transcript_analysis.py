@@ -192,6 +192,38 @@ class FakeModels:
         )
 
 
+class FlakyModels(FakeModels):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def generate_content(self, **kwargs):
+        self.calls += 1
+        if self.calls < 3:
+            error = RuntimeError("503 UNAVAILABLE")
+            error.status_code = 503
+            raise error
+        return super().generate_content(**kwargs)
+
+
+def test_analysis_provider_retries_without_duplicate_result(monkeypatch):
+    models = FlakyModels()
+    monkeypatch.setattr("autoshorts.gemini_calls.time.sleep", lambda _delay: None)
+    provider = GeminiAnalysisProvider(client=SimpleNamespace(models=models))
+
+    result = provider.analyze(
+        transcript(),
+        title="Título",
+        creator="Criador",
+        theme="lol",
+        theme_prompt="Priorize humor",
+        youtube_id="video",
+    )
+
+    assert models.calls == 3
+    assert len(result.candidates) == 5
+
+
 def test_gemini_uses_structured_output_theme_prompt_and_real_usage():
     models = FakeModels()
     provider = GeminiAnalysisProvider(client=SimpleNamespace(models=models))

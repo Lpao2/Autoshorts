@@ -197,40 +197,52 @@ class PipelineChannelProducer:
                 "Theme requires exactly one active/default market profile."
             )
         profile = (preferred or profiles)[0]
-        report = discover_next_source_video(
-            profile,
-            self.state,
-            maximum_age_days=context.theme.policy.maximum_age_days,
-            access=self.access,
-        )
-        if report.selected is None:
-            raise RuntimeError("No eligible source video was discovered.")
-        source_id = report.selected.external_video_id
-        try:
-            ingest(
-                report.selected,
+        source_id = self._resumable_source(context.channel.channel_id)
+        if source_id is None:
+            report = discover_next_source_video(
                 profile,
                 self.state,
-                workspace=self.workspace,
-                ffprobe_path=self.settings.ffprobe_path,
-                ffmpeg_path=self.settings.ffmpeg_path,
+                maximum_age_days=context.theme.policy.maximum_age_days,
                 access=self.access,
             )
-        except Exception as exc:
-            retry_after = record_ingestion_failure(
-                self.state, profile, source_id, exc
+            if report.selected is None:
+                raise RuntimeError("No eligible source video was discovered.")
+            source_id = report.selected.external_video_id
+            try:
+                ingest(
+                    report.selected,
+                    profile,
+                    self.state,
+                    workspace=self.workspace,
+                    ffprobe_path=self.settings.ffprobe_path,
+                    ffmpeg_path=self.settings.ffmpeg_path,
+                    access=self.access,
+                )
+            except Exception as exc:
+                retry_after = record_ingestion_failure(
+                    self.state, profile, source_id, exc
+                )
+                LOGGER.warning(
+                    "YouTube source=%s video=%s attempt=recorded access=%s "
+                    "result=%s retry_after=%s",
+                    report.selected.source.display_name,
+                    source_id,
+                    self.access.mode,
+                    getattr(
+                        getattr(exc, "category", None), "value", "DOWNLOAD_ERROR"
+                    ),
+                    retry_after or "never",
+                )
+                raise
+            self.state.assign_source_to_channel(
+                source_id, context.channel.channel_id
             )
-            LOGGER.warning(
-                "YouTube source=%s video=%s attempt=recorded access=%s "
-                "result=%s retry_after=%s",
-                report.selected.source.display_name,
+        else:
+            LOGGER.info(
+                "Resuming source=%s channel=%s from persisted pipeline state.",
                 source_id,
-                self.access.mode,
-                getattr(getattr(exc, "category", None), "value", "DOWNLOAD_ERROR"),
-                retry_after or "never",
+                context.channel.name,
             )
-            raise
-        self.state.assign_source_to_channel(source_id, context.channel.channel_id)
         produce_source_video(
             youtube_id=source_id,
             state=self.state,
@@ -264,6 +276,23 @@ class PipelineChannelProducer:
             )
             result = draft.status.value
         return ProductionOutcome(source_id, draft.draft_id, result)
+
+    def _resumable_source(self, channel_id: str) -> str | None:
+        row = self.state.connection.execute(
+            """SELECT assignment.youtube_id
+            FROM orchestrator_artifact_assignments assignment
+            JOIN videos video ON video.youtube_id=assignment.youtube_id
+            LEFT JOIN ready_artifacts ready ON ready.youtube_id=video.youtube_id
+            WHERE assignment.publishing_channel_id=? AND ready.youtube_id IS NULL
+              AND video.status IN (
+                  'TRANSCRIBED', 'ANALYZING', 'ANALYZED', 'SEGMENT_SELECTED',
+                  'RENDERING', 'RENDERED', 'CAPTIONED'
+              )
+            ORDER BY assignment.created_at, assignment.youtube_id
+            LIMIT 1""",
+            (channel_id,),
+        ).fetchone()
+        return row["youtube_id"] if row else None
 
 
 class Orchestrator:
