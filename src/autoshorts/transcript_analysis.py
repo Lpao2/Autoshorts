@@ -49,6 +49,10 @@ class AnalysisResult:
     candidates: tuple[ClipSelection, ...] = ()
 
 
+class CandidateQualityError(RuntimeError):
+    """No technically valid candidate met the configured quality threshold."""
+
+
 @dataclass(frozen=True, slots=True)
 class ClipPolicy:
     min_duration_seconds: float = 20
@@ -135,9 +139,11 @@ def select_top_candidates(
         headlines.add(headline_key)
         ranges.append((start, end))
         if len(selected) == 3:
-            return tuple(selected)
-    raise ValueError(
-        "Qualidade insuficiente: menos de 3 candidatos válidos, diversos e com "
+            break
+    if selected:
+        return tuple(selected)
+    raise CandidateQualityError(
+        "Qualidade insuficiente: nenhum candidato tecnicamente válido com "
         f"score mínimo {policy.min_score:.2f}."
     )
 
@@ -148,8 +154,8 @@ def resolve_clip_selections(
     policy: ClipPolicy = DEFAULT_CLIP_POLICY,
     preserve_order: bool = False,
 ) -> ClipAnalysis:
-    if len(result.selections) != 3:
-        raise ValueError("A análise deve conter exatamente 3 seleções.")
+    if not 1 <= len(result.selections) <= 3:
+        raise ValueError("A análise deve conter entre 1 e 3 seleções.")
     ranked = (
         result.selections
         if preserve_order
@@ -162,7 +168,7 @@ def resolve_clip_selections(
         start, end = _validate_candidate(transcript, selection, policy)
         headline_key = " ".join(selection.headline.casefold().split())
         if headline_key in headlines:
-            raise ValueError("As três headlines devem ser diferentes.")
+            raise ValueError("As headlines devem ser diferentes.")
         if any(
             start < other_end and end > other_start for other_start, other_end in ranges
         ):

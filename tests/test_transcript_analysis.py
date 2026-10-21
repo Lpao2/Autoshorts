@@ -6,6 +6,7 @@ from autoshorts.analysis_cost import estimate_cost_usd
 from autoshorts.gemini_analysis_provider import GeminiAnalysisProvider
 from autoshorts.transcript_analysis import (
     AnalysisResult,
+    CandidateQualityError,
     ClipPolicy,
     ClipSelection,
     analysis_from_dict,
@@ -87,11 +88,33 @@ def test_invalid_duration_or_headline_is_rejected(replacement):
         resolve_clip_selections(transcript(), result)
 
 
-def test_requires_exactly_three_selections():
-    with pytest.raises(ValueError, match="exatamente 3"):
+def test_requires_at_least_one_selection():
+    with pytest.raises(ValueError, match="entre 1 e 3"):
         resolve_clip_selections(
-            transcript(), AnalysisResult(selections()[:2], "test", "model")
+            transcript(), AnalysisResult((), "test", "model")
         )
+
+
+@pytest.mark.parametrize("good_count", [1, 2, 3])
+def test_candidate_pool_accepts_one_to_three_good_candidates(good_count):
+    pool = tuple(
+        candidate
+        if index < good_count
+        else ClipSelection(
+            candidate.start_segment,
+            candidate.end_segment,
+            candidate.title,
+            candidate.headline,
+            candidate.reason,
+            0.74,
+        )
+        for index, candidate in enumerate(candidate_pool())
+    )
+
+    selected = select_top_candidates(transcript(), pool)
+
+    assert len(selected) == good_count
+    assert selected[0].score == max(item.score for item in pool)
 
 
 def test_candidate_pool_selects_three_best_valid_candidates():
@@ -99,10 +122,10 @@ def test_candidate_pool_selects_three_best_valid_candidates():
     assert [item.score for item in selected] == [0.95, 0.8, 0.79]
 
 
-def test_candidate_pool_requires_three_above_threshold():
-    with pytest.raises(ValueError, match="Qualidade insuficiente"):
+def test_candidate_pool_requires_one_above_threshold():
+    with pytest.raises(CandidateQualityError, match="nenhum candidato"):
         select_top_candidates(
-            transcript(), candidate_pool(), ClipPolicy(min_score=0.81)
+            transcript(), candidate_pool(), ClipPolicy(min_score=0.96)
         )
 
 

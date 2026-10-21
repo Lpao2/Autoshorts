@@ -22,6 +22,7 @@ from autoshorts.orchestrator import (
 )
 from autoshorts.production_cli import _resolve_video_theme
 from autoshorts.state_store import MetadataDraftStatus, ReviewPolicy, StateStore
+from autoshorts.transcript_analysis import CandidateQualityError
 
 
 def setup_orchestrator(tmp_path, *, channels=1, producer=None):
@@ -50,6 +51,12 @@ class FakeProducer:
         return ProductionOutcome(
             f"source-{context.channel.channel_id}", 1, "REVIEW_REQUIRED"
         )
+
+
+def test_candidate_quality_failure_is_recoverable():
+    error = CandidateQualityError("no qualified candidates")
+
+    assert Orchestrator._failure_result(error) == "FAILED_RECOVERABLE"
 
 
 @pytest.mark.parametrize(
