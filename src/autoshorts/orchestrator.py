@@ -406,6 +406,74 @@ class Orchestrator:
             raise
         return CycleResult(plans, started, tuple(outcomes), tuple(errors))
 
+    def replenish_channel(
+        self, channel_ref: str, *, count: int = 1, dry_run: bool = False
+    ) -> CycleResult:
+        """Explicitly fill one channel toward its target without changing policy."""
+        if count < 1:
+            raise ValueError("count must be positive.")
+        matches = tuple(
+            context
+            for context in self.active_channels()
+            if channel_ref.casefold()
+            in {context.channel.channel_id.casefold(), context.channel.name.casefold()}
+        )
+        if len(matches) != 1:
+            raise KeyError(f"Expected one active channel matching: {channel_ref}")
+        context = matches[0]
+        inspected = self.inspect_channel(context)
+        requested = min(
+            count,
+            max(0, inspected.policy.target_ready_videos - inspected.inventory.count),
+        )
+        paused = self.state.scheduler_channel_paused(context.channel.channel_id)
+        plan = ChannelPlan(
+            context,
+            inspected.inventory,
+            inspected.policy,
+            requested,
+            "PAUSED" if paused else "REPLENISH" if requested else "NONE",
+            inspected.next_post,
+        )
+        if dry_run or plan.action != "REPLENISH":
+            return CycleResult((plan,), 0, (), ())
+
+        cycle_id = self.state.start_orchestrator_cycle(max_productions=requested)
+        channel_id = context.channel.channel_id
+        if not self.state.acquire_orchestrator_lease(
+            channel_id, self.owner, datetime.now(UTC), self.lease_seconds
+        ):
+            self._record(cycle_id, plan, "LOCKED")
+            self.state.finish_orchestrator_cycle(cycle_id, result="COMPLETED")
+            return CycleResult((plan,), 0, (), ())
+
+        outcomes: list[tuple[str, ProductionOutcome]] = []
+        errors: list[tuple[str, str]] = []
+        started = 0
+        try:
+            for _ in range(requested):
+                started += 1
+                try:
+                    outcome = self.producer.produce(context)
+                    outcomes.append((context.channel.name, outcome))
+                    self._record(cycle_id, plan, outcome.result)
+                except Exception as exc:
+                    LOGGER.exception("Channel replenishment failed: %s", channel_id)
+                    errors.append((context.channel.name, str(exc)))
+                    self._record(cycle_id, plan, self._failure_result(exc), str(exc))
+                    break
+            self.state.finish_orchestrator_cycle(
+                cycle_id, result="COMPLETED_WITH_ERRORS" if errors else "COMPLETED"
+            )
+        except Exception as exc:
+            self.state.finish_orchestrator_cycle(
+                cycle_id, result="FAILED", error=str(exc)
+            )
+            raise
+        finally:
+            self.state.release_orchestrator_lease(channel_id, self.owner)
+        return CycleResult((plan,), started, tuple(outcomes), tuple(errors))
+
     def run(
         self, *, interval_seconds: int = 300, max_productions: int = 1
     ) -> None:

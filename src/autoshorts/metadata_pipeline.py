@@ -241,7 +241,7 @@ def approve_and_enqueue_metadata(
         draft.license,
         draft.embeddable,
         draft.public_stats_viewable,
-    )
+    ).validated()
     publication = publication_service.create_for_review(
         draft.publishing_channel_id, ready.file_path, metadata
     )

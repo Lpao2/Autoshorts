@@ -21,7 +21,12 @@ from autoshorts.orchestrator import (
     get_channel_inventory,
 )
 from autoshorts.production_cli import _resolve_video_theme
-from autoshorts.state_store import MetadataDraftStatus, ReviewPolicy, StateStore
+from autoshorts.state_store import (
+    InventoryPolicy,
+    MetadataDraftStatus,
+    ReviewPolicy,
+    StateStore,
+)
 from autoshorts.transcript_analysis import CandidateQualityError
 
 
@@ -265,6 +270,54 @@ def test_dry_run_has_no_side_effects_and_limit_is_zero(tmp_path):
     assert state.connection.execute(
         "SELECT count(*) FROM orchestrator_cycles"
     ).fetchone()[0] == 0
+    state.close()
+
+
+def test_explicit_replenish_fills_to_target_and_rerun_is_idempotent(
+    tmp_path, monkeypatch
+):
+    state, orchestrator, worker = setup_orchestrator(tmp_path)
+
+    def inventory(_state, channel_id):
+        count = 2 if not worker.calls else 3
+        return ChannelInventory(
+            channel_id,
+            tuple(
+                InventoryItem(str(index), "READY", str(index), Path("/tmp/item"))
+                for index in range(count)
+            ),
+        )
+
+    monkeypatch.setattr(orchestrator_module, "get_channel_inventory", inventory)
+
+    first = orchestrator.replenish_channel("Channel 1", count=1)
+    repeated = orchestrator.replenish_channel("Channel 1", count=1)
+
+    assert first.productions_started == 1
+    assert first.outcomes[0][1].result == "REVIEW_REQUIRED"
+    assert repeated.productions_started == 0
+    assert worker.calls == ["channel-1"]
+    state.close()
+
+
+def test_explicit_replenish_does_not_change_inventory_policy(tmp_path, monkeypatch):
+    state, orchestrator, _worker = setup_orchestrator(tmp_path)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_channel_inventory",
+        lambda _state, channel_id: ChannelInventory(
+            channel_id,
+            tuple(
+                InventoryItem(str(index), "READY", str(index), Path("/tmp/item"))
+                for index in range(2)
+            ),
+        ),
+    )
+
+    result = orchestrator.replenish_channel("channel-1", count=1, dry_run=True)
+
+    assert result.plans[0].action == "REPLENISH"
+    assert state.inventory_policy("channel-1") == InventoryPolicy(2, 3)
     state.close()
 
 

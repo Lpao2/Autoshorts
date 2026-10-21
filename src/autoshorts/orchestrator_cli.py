@@ -31,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run")
     run.add_argument("--interval", type=int, default=300)
     run.add_argument("--max-productions", type=int, default=1)
+    replenish = commands.add_parser("replenish")
+    replenish.add_argument("--channel", required=True)
+    replenish.add_argument("--count", type=int, default=1)
+    replenish.add_argument("--dry-run", action="store_true")
     commands.add_parser("status")
     return parser
 
@@ -59,6 +63,12 @@ def main(argv: list[str] | None = None) -> int:
                     max_productions=args.max_productions,
                 )
                 return 0
+            if args.command == "replenish":
+                result = orchestrator.replenish_channel(
+                    args.channel, count=args.count, dry_run=args.dry_run
+                )
+                _print_result(result)
+                return 2 if result.errors else 0
             result = orchestrator.run_cycle(
                 dry_run=args.command == "status" or args.dry_run,
                 max_productions=(

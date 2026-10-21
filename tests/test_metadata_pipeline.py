@@ -221,6 +221,62 @@ def test_auto_policy_can_approve_and_enqueue_without_human():
     assert approve_calls == [12]
 
 
+def test_auto_policy_rejects_invalid_metadata_before_publication():
+    draft = SimpleNamespace(
+        draft_id=1,
+        youtube_id="video-1",
+        ready_checksum="sha",
+        publishing_channel_id="tiltado",
+        title="",
+        description="Description",
+        tags=("tag",),
+        privacy_status="private",
+        made_for_kids=False,
+        contains_synthetic_media=False,
+        has_paid_product_placement=False,
+        category_id="20",
+        category_name="Gaming",
+        default_language="pt-BR",
+        license="youtube",
+        embeddable=True,
+        public_stats_viewable=True,
+    )
+    state = SimpleNamespace(
+        metadata_draft=lambda _id: draft,
+        get_ready_artifact=lambda _id: SimpleNamespace(
+            checksum="sha", file_path="video.mp4"
+        ),
+    )
+    publication_calls = []
+    service = SimpleNamespace(
+        create_for_review=lambda *args: publication_calls.append(args)
+    )
+    scheduler = SimpleNamespace(enqueue=lambda *args: pytest.fail("must not enqueue"))
+
+    with pytest.raises(ValueError, match="title"):
+        approve_and_enqueue_metadata(
+            1,
+            state=state,
+            publication_service=service,
+            scheduler=scheduler,
+            now=SimpleNamespace(),
+        )
+
+    assert publication_calls == []
+
+
+def test_channel_review_policy_override_does_not_change_other_channels(tmp_path):
+    with StateStore(tmp_path / "state.db") as store:
+        store.set_metadata_review_policy(
+            ReviewPolicy.AUTO_APPROVE, publishing_channel_id="tiltado"
+        )
+
+        assert store.metadata_review_policy("tiltado") is ReviewPolicy.AUTO_APPROVE
+        assert store.metadata_review_policy("sopro") is ReviewPolicy.MANUAL_REVIEW
+        assert store.metadata_review_policy("promptlab") is ReviewPolicy.MANUAL_REVIEW
+        assert store.metadata_review_policy("grana") is ReviewPolicy.MANUAL_REVIEW
+
+
 def test_approved_metadata_revision_is_idempotent(tmp_path):
     store, config, channel = prepared(tmp_path)
     with store:
