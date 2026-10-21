@@ -19,8 +19,10 @@ from autoshorts.brand_identity import HandleAvailability
 from autoshorts.brand_planning import (
     PlannedBrandStatus,
     PlannedChannelBrand,
+    branding_directory,
     stable_brand_plan_id,
 )
+from autoshorts.branding_migration import migrate_branding_directories
 from autoshorts.state_store import StateStore
 
 
@@ -202,7 +204,7 @@ def test_failure_cleans_partial_files(tmp_path):
         service = BrandAssetService(tmp_path, store, provider)
         with pytest.raises(RuntimeError, match="provider failed"):
             service.generate(plan, theme, archetype, BrandAssetType.LOGO)
-        parent = tmp_path / "data" / "branding" / plan.theme_key / plan.brand_plan_id
+        parent = branding_directory(tmp_path, plan)
         assert not tuple(parent.glob("logo/.tmp-*"))
         assert store.brand_assets() == ()
 def test_reconcile_recovers_published_manifest_and_batch_skips_valid(tmp_path):
@@ -286,9 +288,49 @@ def test_rejects_invalid_external_asset_atomically(tmp_path, size, message):
         with pytest.raises(ValueError, match=message):
             importer.import_brand_asset(plan, BrandAssetType.LOGO, source)
         assert store.brand_assets(plan.brand_plan_id) == ()
-        parent = tmp_path / "data" / "branding" / plan.theme_key / plan.brand_plan_id
+        parent = branding_directory(tmp_path, plan)
         assert not tuple(parent.glob("logo/.tmp-*"))
         assert not tuple(parent.glob("logo/v*"))
+
+
+def test_migrates_legacy_brand_folder_paths_and_manifests(tmp_path):
+    with StateStore(tmp_path / "state.db") as store:
+        theme, archetype, plan = setup_brand(store)
+        asset = BrandAssetService(
+            tmp_path, store, FakeBrandImageProvider()
+        ).generate(plan, theme, archetype, BrandAssetType.LOGO)
+        human_root = branding_directory(tmp_path, plan)
+        legacy_root = (
+            tmp_path / "data" / "branding" / plan.theme_key / plan.brand_plan_id
+        )
+        human_root.rename(legacy_root)
+        store.connection.execute(
+            """UPDATE brand_asset_metadata SET
+               file_path=replace(file_path, ?, ?),
+               preview_path=replace(preview_path, ?, ?),
+               delivery_path=replace(delivery_path, ?, ?)""",
+            (str(human_root), str(legacy_root)) * 3,
+        )
+        manifest = legacy_root / "logo" / "v1" / "manifest.json"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                str(human_root), str(legacy_root)
+            ),
+            encoding="utf-8",
+        )
+        store.connection.commit()
+
+        report = migrate_branding_directories(tmp_path, store)
+        migrated = store.brand_asset(plan.brand_plan_id, BrandAssetType.LOGO, 1)
+
+        assert report.folders_migrated == 1
+        assert report.sqlite_paths_updated == 3
+        assert report.manifests_updated == 1
+        assert migrated.brand_plan_id == plan.brand_plan_id
+        assert migrated.file_path == human_root / "logo" / "v1" / "master.png"
+        assert migrated.checksum == asset.checksum
+        assert migrated.file_path.is_file()
+        assert not legacy_root.exists()
 
 
 def test_external_import_creates_v2_without_overwriting_v1(tmp_path):

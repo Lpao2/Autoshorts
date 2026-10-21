@@ -21,7 +21,11 @@ from autoshorts.asset_visual_direction import (
     ResolvedAssetVisualDirection,
     resolve_asset_visual_direction,
 )
-from autoshorts.brand_planning import PlannedBrandStatus, PlannedChannelBrand
+from autoshorts.brand_planning import (
+    PlannedBrandStatus,
+    PlannedChannelBrand,
+    branding_directory,
+)
 from autoshorts.theme_catalog import ChannelArchetype, ThemeTemplate
 
 
@@ -157,8 +161,12 @@ def brand_asset_prompt(
     )
 
 
-def brand_asset_root(project_root: Path, brand: PlannedChannelBrand) -> Path:
-    return project_root / "data" / "branding" / brand.theme_key / brand.brand_plan_id
+def brand_asset_root(
+    project_root: Path,
+    brand: PlannedChannelBrand,
+    plans: tuple[PlannedChannelBrand, ...] = (),
+) -> Path:
+    return branding_directory(project_root, brand, plans)
 
 
 def brand_asset_version_directory(
@@ -166,9 +174,12 @@ def brand_asset_version_directory(
     brand: PlannedChannelBrand,
     asset_type: BrandAssetType,
     version: int,
+    plans: tuple[PlannedChannelBrand, ...] = (),
 ) -> Path:
     return (
-        brand_asset_root(project_root, brand) / asset_type.value.lower() / f"v{version}"
+        brand_asset_root(project_root, brand, plans)
+        / asset_type.value.lower()
+        / f"v{version}"
     )
 
 
@@ -409,11 +420,15 @@ class BrandAssetService:
         if reusable is not None and not regenerate:
             return reusable
         version = self.store.next_brand_asset_version(brand.brand_plan_id, asset_type)
-        parent = brand_asset_root(self.project_root, brand) / asset_type.value.lower()
+        plans = self.store.planned_channel_brands()
+        parent = (
+            brand_asset_root(self.project_root, brand, plans)
+            / asset_type.value.lower()
+        )
         parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".tmp-", dir=parent))
         final = brand_asset_version_directory(
-            self.project_root, brand, asset_type, version
+            self.project_root, brand, asset_type, version, plans
         )
         try:
             master = staging / "master.png"

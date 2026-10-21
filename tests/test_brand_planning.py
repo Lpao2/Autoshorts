@@ -13,6 +13,7 @@ from autoshorts.brand_planning import (
     PlannedBrandStatus,
     PlannedChannelBrand,
     PlannedIdentityAssignment,
+    brand_directory_name,
     branding_directory,
     global_brand_collisions,
     materialize_brand_plan,
@@ -55,7 +56,20 @@ def test_stable_plan_id_materialization_and_asset_path(tmp_path):
     assert kit.source_plan_id == planned.brand_plan_id
     assert branding_directory(tmp_path, planned).parts[-2:] == (
         "theme",
-        planned.brand_plan_id,
+        "Marca",
+    )
+
+
+def test_human_brand_directory_is_sanitized_and_collision_safe(tmp_path):
+    first = plan("theme", 1, "Canal/Nome", "@one")
+    second = plan("theme", 2, "Canal_Nome", "@two")
+
+    assert brand_directory_name(first) == "Canal Nome"
+    assert brand_directory_name(first, (first, second)) == (
+        f"Canal Nome__{first.brand_plan_id[:8]}"
+    )
+    assert branding_directory(tmp_path, second, (first, second)).name == (
+        f"Canal Nome__{second.brand_plan_id[:8]}"
     )
 
 

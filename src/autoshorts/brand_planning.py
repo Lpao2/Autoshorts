@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -137,8 +138,57 @@ def materialize_brand_plan(
     )
 
 
-def branding_directory(project_root: Path, brand: PlannedChannelBrand) -> Path:
-    return project_root / "data" / "branding" / brand.theme_key / brand.brand_plan_id
+def brand_directory_name(
+    brand: PlannedChannelBrand,
+    plans: tuple[PlannedChannelBrand, ...] = (),
+) -> str:
+    """Return a safe human-readable directory name with collision fallback."""
+    normalized = unicodedata.normalize("NFC", brand.public_name)
+    safe = "".join(
+        character
+        if character.isalnum() or character in {" ", "-", "_"}
+        else "_"
+        for character in normalized
+    )
+    safe = re.sub(r"[ _]+", " ", safe).strip(" .-_")[:80].rstrip(" .-_")
+    safe = safe or "Canal"
+    siblings = tuple(
+        item
+        for item in plans
+        if item.theme_key == brand.theme_key
+        and item.brand_plan_id != brand.brand_plan_id
+    )
+    if any(
+        _safe_brand_name(item.public_name).casefold() == safe.casefold()
+        for item in siblings
+    ):
+        return f"{safe}__{brand.brand_plan_id[:8]}"
+    return safe
+
+
+def _safe_brand_name(public_name: str) -> str:
+    normalized = unicodedata.normalize("NFC", public_name)
+    safe = "".join(
+        character
+        if character.isalnum() or character in {" ", "-", "_"}
+        else "_"
+        for character in normalized
+    )
+    return re.sub(r"[ _]+", " ", safe).strip(" .-_")[:80].rstrip(" .-_") or "Canal"
+
+
+def branding_directory(
+    project_root: Path,
+    brand: PlannedChannelBrand,
+    plans: tuple[PlannedChannelBrand, ...] = (),
+) -> Path:
+    return (
+        project_root
+        / "data"
+        / "branding"
+        / brand.theme_key
+        / brand_directory_name(brand, plans)
+    )
 
 
 def global_brand_collisions(
