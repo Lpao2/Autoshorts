@@ -16,6 +16,7 @@ from autoshorts.metadata_pipeline import (
 )
 from autoshorts.state_store import (
     MetadataDraftStatus,
+    PublicationStatus,
     ReviewPolicy,
     StateStore,
     VideoStatus,
@@ -180,10 +181,22 @@ def test_auto_policy_can_approve_and_enqueue_without_human():
             draft_id=draft_id, publication_id=publication_id
         ),
     )
-    publication = SimpleNamespace(publication_id=12)
+    publication = SimpleNamespace(
+        publication_id=12,
+        youtube_channel_id="UC-test",
+        status=PublicationStatus.READY_FOR_REVIEW,
+    )
+    approve_calls = []
+
+    def approve(publication_id):
+        approve_calls.append(publication_id)
+        publication.status = PublicationStatus.APPROVED_FOR_PUBLISH
+        return publication
+
     service = SimpleNamespace(
         create_for_review=lambda *args: publication,
-        approve=lambda _id: publication,
+        preflight=lambda _id: SimpleNamespace(publication=publication),
+        approve=approve,
     )
     job = SimpleNamespace(job_id=7)
     scheduler = SimpleNamespace(enqueue=lambda *args: job)
@@ -196,3 +209,44 @@ def test_auto_policy_can_approve_and_enqueue_without_human():
     )
     assert approved.publication_id == 12
     assert queued.job_id == 7
+    repeated, repeated_job = approve_and_enqueue_metadata(
+        1,
+        state=state,
+        publication_service=service,
+        scheduler=scheduler,
+        now=SimpleNamespace(),
+    )
+    assert repeated.publication_id == 12
+    assert repeated_job.job_id == 7
+    assert approve_calls == [12]
+
+
+def test_approved_metadata_revision_is_idempotent(tmp_path):
+    store, config, channel = prepared(tmp_path)
+    with store:
+        draft = generate_metadata_draft(
+            youtube_id="video-1",
+            publishing_channel_id=channel.channel_id,
+            config=config,
+            state=store,
+            provider=FakeProvider(),
+        )
+        revised = store.revise_metadata_draft(
+            draft.draft_id,
+            title="A cura da Ambessa é ABSURDA!",
+            description="Descrição aprovada",
+            tags=("Ambessa", "LoL"),
+            hashtags=("#Ambessa",),
+        )
+        store.connection.execute(
+            "UPDATE metadata_drafts SET status=? WHERE id=?",
+            (MetadataDraftStatus.APPROVED, draft.draft_id),
+        )
+        repeated = store.revise_metadata_draft(
+            draft.draft_id,
+            title="A cura da Ambessa é ABSURDA!",
+            description="Descrição aprovada",
+            tags=("Ambessa", "LoL"),
+            hashtags=("#Ambessa",),
+        )
+        assert repeated.title == revised.title

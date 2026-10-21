@@ -52,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     approve.add_argument(
         "--config", type=Path, default=Path("config/automation.local.json")
     )
+    approve.add_argument("--title")
+    approve.add_argument("--description")
+    approve.add_argument("--tag", action="append", default=[])
+    approve.add_argument("--hashtag", action="append", default=[])
     return parser
 
 
@@ -166,6 +170,20 @@ def _metadata(args) -> int:
 def _approve_metadata(args) -> int:
     config = load_automation_config(args.config)
     with StateStore(args.state_db) as state:
+        overrides = (args.title, args.description, args.tag, args.hashtag)
+        if any(overrides):
+            if args.title is None or args.description is None or not args.tag:
+                raise SystemExit(
+                    "Metadata revision requires --title, --description "
+                    "and at least one --tag."
+                )
+            state.revise_metadata_draft(
+                args.draft_id,
+                title=args.title,
+                description=args.description,
+                tags=tuple(args.tag),
+                hashtags=tuple(args.hashtag),
+            )
         publication_service = YouTubePublicationService(
             config, state, FilesystemCredentialStore()
         )

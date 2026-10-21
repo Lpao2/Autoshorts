@@ -15,6 +15,7 @@ from autoshorts.scheduler_models import PublicationJob
 from autoshorts.state_store import (
     MetadataDraft,
     MetadataDraftStatus,
+    PublicationStatus,
     StateStore,
 )
 from autoshorts.youtube_publishing import (
@@ -232,7 +233,11 @@ def approve_and_enqueue_metadata(
     publication = publication_service.create_for_review(
         draft.publishing_channel_id, ready.file_path, metadata
     )
-    publication = publication_service.approve(publication.publication_id)
+    preflight = publication_service.preflight(publication.publication_id)
+    if preflight.publication.youtube_channel_id != publication.youtube_channel_id:
+        raise ValueError("Remote OAuth channel does not match the Publication target.")
+    if publication.status is not PublicationStatus.APPROVED_FOR_PUBLISH:
+        publication = publication_service.approve(publication.publication_id)
     job = scheduler.enqueue(publication.publication_id, now)
     approved = state.approve_metadata_draft(draft_id, publication.publication_id)
     return approved, job

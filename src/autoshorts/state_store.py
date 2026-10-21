@@ -1013,6 +1013,58 @@ class StateStore:
         assert draft is not None
         return draft
 
+    def revise_metadata_draft(
+        self,
+        draft_id: int,
+        *,
+        title: str,
+        description: str,
+        tags: tuple[str, ...],
+        hashtags: tuple[str, ...],
+    ) -> MetadataDraft:
+        title = title.strip()
+        description = description.strip()
+        tags = tuple(dict.fromkeys(item.strip() for item in tags if item.strip()))
+        hashtags = tuple(
+            dict.fromkeys(item.strip() for item in hashtags if item.strip())
+        )
+        if not title or not description or not tags:
+            raise ValueError(
+                "Approved metadata title, description and tags are required."
+            )
+        current = self.metadata_draft(draft_id)
+        if current is None:
+            raise ValueError(f"Metadata draft not found: {draft_id}")
+        if current.status == MetadataDraftStatus.APPROVED:
+            if (
+                current.title == title
+                and current.description == description
+                and current.tags == tags
+                and current.hashtags == hashtags
+            ):
+                return current
+            raise ValueError("Approved metadata cannot be revised.")
+        now = _now()
+        with self.connection:
+            cursor = self.connection.execute(
+                """UPDATE metadata_drafts SET title=?, description=?, tags_json=?,
+                hashtags_json=?, updated_at=? WHERE id=? AND status=?""",
+                (
+                    title,
+                    description,
+                    json.dumps(tags, ensure_ascii=False),
+                    json.dumps(hashtags, ensure_ascii=False),
+                    now,
+                    draft_id,
+                    MetadataDraftStatus.REVIEW_REQUIRED,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Only review-required metadata can be revised.")
+        draft = self.metadata_draft(draft_id)
+        assert draft is not None
+        return draft
+
     def record_queued_shorts(
         self, youtube_id: str, shorts: tuple[QueuedShort, ...]
     ) -> tuple[ShortRecord, ...]:
