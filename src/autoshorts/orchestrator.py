@@ -394,12 +394,25 @@ class Orchestrator:
                     plan.action != "PRODUCE",
                     plan.next_post is None,
                     plan.next_post or "",
+                    self._last_attempt(plan.context.channel.channel_id) is not None,
+                    self._last_attempt(plan.context.channel.channel_id) or "",
                     plan.inventory.count,
                     -plan.deficit,
                     plan.context.channel.channel_id,
                 ),
             )
         )
+
+    def _last_attempt(self, channel_id: str) -> str | None:
+        row = self.state.connection.execute(
+            """SELECT finished_at FROM orchestrator_decisions
+            WHERE publishing_channel_id=?
+            AND (result LIKE 'FAILED%'
+                 OR result IN ('REVIEW_REQUIRED', 'APPROVED'))
+            ORDER BY id DESC LIMIT 1""",
+            (channel_id,),
+        ).fetchone()
+        return row["finished_at"] if row else None
 
     def _next_post(self, channel_id: str) -> str | None:
         row = self.state.connection.execute(

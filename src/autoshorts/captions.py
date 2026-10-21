@@ -39,6 +39,7 @@ class CaptionPreset:
     requested_font: str = "Montserrat ExtraBold"
     font_size: int = 84
     minimum_font_size: int = 72
+    emergency_minimum_font_size: int = 48
     primary_color: str = "&H00FFFFFF"
     outline_color: str = "&H00000000"
     outline: int = 7
@@ -196,11 +197,19 @@ def segment_captions(
             groups.append(current)
     _repair_joining_word_boundaries(groups, preset)
 
+    fitted_groups = []
+    for group in groups:
+        fitted_groups.extend(_fit_caption_group(group, preset))
+
     blocks = []
-    for index, group in enumerate(groups):
+    for index, (group, lines, font_size) in enumerate(fitted_groups):
         start = max(0.0, group[0].start)
         natural_end = min(duration, group[-1].end)
-        next_start = groups[index + 1][0].start if index + 1 < len(groups) else duration
+        next_start = (
+            fitted_groups[index + 1][0][0].start
+            if index + 1 < len(fitted_groups)
+            else duration
+        )
         end = min(
             duration,
             max(natural_end, min(start + preset.minimum_duration, next_start)),
@@ -208,7 +217,6 @@ def segment_captions(
         if end <= start:
             continue
         text = _normalize_text(" ".join(word.text for word in group))
-        lines, font_size = wrap_caption(text, preset)
         blocks.append(CaptionBlock(start, end, text, lines, font_size, tuple(group)))
     return tuple(blocks)
 
@@ -218,6 +226,58 @@ def wrap_caption(
 ) -> tuple[tuple[str, ...], int]:
     words = text.split()
     for size in range(preset.font_size, preset.minimum_font_size - 1, -2):
+        if _estimated_width(text, size) <= preset.safe_area.text_width:
+            return (text,), size
+        split = _best_two_line_split(words, size, preset.safe_area.text_width)
+        if split is not None:
+            return split, size
+    raise ValueError(f"Caption cannot fit inside the safe width: {text}")
+
+
+def _fit_caption_group(
+    group: list[TranscriptWord], preset: CaptionPreset
+) -> list[tuple[list[TranscriptWord], tuple[str, ...], int]]:
+    text = _normalize_text(" ".join(word.text for word in group))
+    try:
+        lines, size = wrap_caption(text, preset)
+        return [(group, lines, size)]
+    except ValueError:
+        pass
+
+    if len(group) == 1:
+        lines, size = _wrap_caption_to_size(
+            text, preset, preset.emergency_minimum_font_size
+        )
+        return [(group, lines, size)]
+
+    for index in _semantic_split_order(group):
+        try:
+            return _fit_caption_group(group[:index], preset) + _fit_caption_group(
+                group[index:], preset
+            )
+        except ValueError:
+            continue
+    raise ValueError(f"Caption cannot fit inside the safe width: {text}")
+
+
+def _semantic_split_order(group: list[TranscriptWord]) -> tuple[int, ...]:
+    midpoint = len(group) / 2
+
+    def score(index: int) -> tuple[float, float, int]:
+        previous = group[index - 1].text.casefold().strip(".,!?:;")
+        joining_penalty = 1.0 if previous in _JOINING_WORDS else 0.0
+        timing_midpoint = (group[0].start + group[-1].end) / 2
+        timing_penalty = abs(group[index].start - timing_midpoint)
+        return joining_penalty, abs(index - midpoint) + timing_penalty, index
+
+    return tuple(sorted(range(1, len(group)), key=score))
+
+
+def _wrap_caption_to_size(
+    text: str, preset: CaptionPreset, minimum_size: int
+) -> tuple[tuple[str, ...], int]:
+    words = text.split()
+    for size in range(preset.minimum_font_size - 2, minimum_size - 1, -2):
         if _estimated_width(text, size) <= preset.safe_area.text_width:
             return (text,), size
         split = _best_two_line_split(words, size, preset.safe_area.text_width)

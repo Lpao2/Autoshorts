@@ -6,6 +6,7 @@ import pytest
 from autoshorts.captions import (
     CaptionPreset,
     SafeArea,
+    _estimated_width,
     caption_words,
     render_captioned_short,
     resolve_caption_font,
@@ -82,6 +83,54 @@ def test_wrap_uses_estimated_width_and_safe_margins():
     assert len(lines) == 2
     assert 72 <= size <= 84
     assert preset.safe_area.text_width == 880
+
+
+def _timed_words(text: str, *, step: float = 0.35):
+    return tuple(
+        TranscriptWord(index * step, (index + 1) * step, word)
+        for index, word in enumerate(text.split())
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Oi pessoal",
+        "Antigamente, o presidente do Banco Central",
+        "Esta frase muito longa precisa ser dividida usando os tempos reais",
+        "inconstitucionalissimamente",
+        "Informação econômica não é ficção",
+    ),
+)
+def test_caption_fitting_preserves_words_width_lines_and_timestamps(text):
+    words = _timed_words(text)
+    preset = CaptionPreset()
+    blocks = segment_captions(words, words[-1].end, preset)
+
+    assert " ".join(block.text for block in blocks) == text
+    assert tuple(word for block in blocks for word in block.words) == words
+    assert all(len(block.lines) <= 2 for block in blocks)
+    assert all(block.start < block.end for block in blocks)
+    assert all(
+        previous.end <= following.start
+        for previous, following in zip(blocks, blocks[1:], strict=False)
+    )
+    for block in blocks:
+        for line in block.lines:
+            assert (
+                _estimated_width(line, block.font_size)
+                <= preset.safe_area.text_width
+            )
+
+
+def test_problematic_caption_splits_on_word_timestamps():
+    text = "Antigamente, o presidente do Banco Central"
+    words = _timed_words(text, step=0.4)
+    blocks = segment_captions(words, words[-1].end)
+
+    assert len(blocks) == 2
+    assert blocks[0].end <= blocks[1].start
+    assert blocks[0].words[-1].end <= blocks[1].words[0].start
 
 
 def test_font_fallback_requires_exact_installed_match(monkeypatch, tmp_path):

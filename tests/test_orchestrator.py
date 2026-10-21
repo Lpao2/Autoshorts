@@ -158,6 +158,29 @@ def test_failed_channel_enters_persistent_backoff(tmp_path):
     state.close()
 
 
+def test_never_attempted_channel_precedes_recently_attempted_channel(tmp_path):
+    state, orchestrator, worker = setup_orchestrator(tmp_path, channels=3)
+    first = orchestrator.run_cycle(max_productions=1)
+    second = orchestrator.run_cycle(max_productions=1)
+    third = orchestrator.run_cycle(max_productions=1)
+
+    assert first.productions_started == 1
+    assert second.productions_started == 1
+    assert third.productions_started == 1
+    assert worker.calls == ["channel-1", "channel-2", "channel-3"]
+    state.close()
+
+
+def test_oldest_attempt_wins_after_every_channel_had_an_opportunity(tmp_path):
+    state, orchestrator, worker = setup_orchestrator(tmp_path, channels=2)
+    orchestrator.run_cycle(max_productions=1)
+    orchestrator.run_cycle(max_productions=1)
+    orchestrator.run_cycle(max_productions=1)
+
+    assert worker.calls == ["channel-1", "channel-2", "channel-1"]
+    state.close()
+
+
 def test_dry_run_has_no_side_effects_and_limit_is_zero(tmp_path):
     state, orchestrator, worker = setup_orchestrator(tmp_path)
     before = state.connection.total_changes
