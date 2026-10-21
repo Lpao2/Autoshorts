@@ -8,8 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from autoshorts.collection import (
+    VideoCandidate,
     YouTubeAccess,
+    YouTubeCollectionError,
+    YouTubeErrorCategory,
     candidate_scan_limit,
+    classify_youtube_error,
     discover_creator_videos,
     download_video,
     friendly_youtube_error,
@@ -20,7 +24,11 @@ from autoshorts.collection import (
 
 def test_youtube_options_without_authentication(monkeypatch):
     monkeypatch.setattr("autoshorts.collection.resolve_deno", lambda: None)
-    assert youtube_dl_options(YouTubeAccess()) == {}
+    options = youtube_dl_options(YouTubeAccess())
+    assert "cookiesfrombrowser" not in options
+    assert options["socket_timeout"] == 20
+    assert options["retries"] == 1
+    assert options["sleep_interval_requests"] == 2.0
 
 
 @pytest.mark.parametrize("browser", ["brave", "firefox"])
@@ -102,7 +110,7 @@ def test_flat_discovery_and_failed_candidate_do_not_abort(monkeypatch):
         skip_handler=skipped.append,
     )
     assert [item.title for item in result] == ["Good"]
-    assert skipped[0].reason == "unavailable"
+    assert skipped[0].reason == "VIDEO_UNAVAILABLE"
     assert FakeYoutubeDL.options[0]["extract_flat"] == "in_playlist"
     assert FakeYoutubeDL.options[0]["playlistend"] == 20
 
@@ -220,3 +228,73 @@ def test_flat_duration_filter_avoids_unnecessary_hydration(monkeypatch):
 )
 def test_friendly_errors(raw, friendly):
     assert friendly_youtube_error(raw) == friendly
+
+
+def test_rate_limit_stops_hydration_immediately(monkeypatch):
+    flat = {"entries": [{"id": "one"}, {"id": "two"}]}
+    install_fake_ytdlp(monkeypatch, [flat, RuntimeError("HTTP Error 429")])
+    failures = []
+    with pytest.raises(YouTubeCollectionError) as raised:
+        discover_creator_videos(
+            "Creator",
+            "https://youtube.example/videos",
+            quantity=1,
+            age_days=30,
+            failure_handler=lambda *args: failures.append(args),
+        )
+    assert raised.value.category is YouTubeErrorCategory.RATE_LIMITED
+    assert len(FakeYoutubeDL.options) == 2
+    assert failures[0][0] == "one"
+
+
+@pytest.mark.parametrize(
+    ("error", "category"),
+    (
+        (
+            "Sign in to confirm you're not a bot",
+            YouTubeErrorCategory.ANTI_BOT_CHALLENGE,
+        ),
+        ("login required", YouTubeErrorCategory.AUTH_REQUIRED),
+        ("Video unavailable", YouTubeErrorCategory.VIDEO_UNAVAILABLE),
+        (TimeoutError("timed out"), YouTubeErrorCategory.NETWORK_ERROR),
+        ("other", YouTubeErrorCategory.DOWNLOAD_ERROR),
+    ),
+)
+def test_youtube_error_classification(error, category):
+    assert classify_youtube_error(error) is category
+
+
+def test_cookie_file_requires_private_permissions(tmp_path):
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text("secret-cookie", encoding="utf-8")
+    cookie.chmod(0o644)
+    with pytest.raises(ValueError, match="0600"):
+        YouTubeAccess(cookie_file=cookie)
+    cookie.chmod(0o600)
+    access = YouTubeAccess(cookie_file=cookie)
+    assert youtube_dl_options(access)["cookiefile"] == str(cookie.resolve())
+    assert "secret-cookie" not in repr(access)
+
+
+def test_download_uses_single_extract_request(tmp_path, monkeypatch):
+    target = tmp_path / "video.mp4"
+
+    class OneCallYDL(FakeYoutubeDL):
+        calls = 0
+
+        def extract_info(self, _url, download=False):
+            self.__class__.calls += 1
+            assert download is True
+            target.touch()
+            return {"id": "video"}
+
+        def prepare_filename(self, _info):
+            return str(target)
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=OneCallYDL))
+    monkeypatch.setattr("autoshorts.collection.resolve_deno", lambda: None)
+    candidate = VideoCandidate(
+        "Creator", "https://youtube.com/watch?v=video", "Video", None, 1200, "video"
+    )
+    assert download_video(candidate, tmp_path) == target
+    assert OneCallYDL.calls == 1

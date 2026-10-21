@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -225,3 +225,51 @@ def test_unique_external_video_id_is_global(tmp_path):
         assert store.connection.execute(
             "SELECT COUNT(*) FROM videos WHERE youtube_id='same'"
         ).fetchone()[0] == 1
+
+
+def test_candidate_cooldown_skips_blocked_and_selects_fallback(tmp_path):
+    with StateStore(tmp_path / "state.db") as store:
+        profile = configured_profile(store)
+        store.record_source_failure(
+            profile.profile_id,
+            "blocked",
+            category="RATE_LIMITED",
+            detail="limited",
+            now=datetime.now(UTC),
+        )
+
+        def discover(name, _url, **_kwargs):
+            if name == "Creator 1":
+                return [
+                    candidate(name, "blocked", 1200),
+                    candidate(name, "fallback", 1200),
+                ]
+            return []
+
+        report = discover_next_source_video(profile, store, discover=discover)
+        assert report.selected.external_video_id == "fallback"
+        assert any(item.reason == "cooldown" for item in report.skipped)
+
+
+def test_persistent_rate_limit_backoff_increases(tmp_path):
+    with StateStore(tmp_path / "state.db") as store:
+        profile = configured_profile(store)
+        now = datetime(2026, 10, 21, tzinfo=UTC)
+        first = store.record_source_failure(
+            profile.profile_id,
+            "video",
+            category="RATE_LIMITED",
+            detail="limited",
+            now=now,
+        )
+        assert not store.source_candidate_available(
+            profile.profile_id, "video", now=now
+        )
+        second = store.record_source_failure(
+            profile.profile_id,
+            "video",
+            category="RATE_LIMITED",
+            detail="limited",
+            now=now,
+        )
+        assert datetime.fromisoformat(second) > datetime.fromisoformat(first)

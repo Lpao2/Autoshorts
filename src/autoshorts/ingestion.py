@@ -13,6 +13,8 @@ from autoshorts.collection import (
     CandidateSkip,
     VideoCandidate,
     YouTubeAccess,
+    YouTubeCollectionError,
+    YouTubeErrorCategory,
     candidate_youtube_id,
     discover_creator_videos,
     download_video,
@@ -101,6 +103,19 @@ def discover_next_source_video(
             max_duration_seconds=association.target_duration_max_seconds,
             access=access or YouTubeAccess(),
             skip_handler=remote_skips.append,
+            candidate_allowed=lambda video_id: state.source_candidate_available(
+                profile.profile_id, video_id
+            ),
+            failure_handler=lambda video_id, category, detail: (
+                state.record_source_failure(
+                    profile.profile_id,
+                    video_id,
+                    category=category.value,
+                    detail=detail,
+                )
+            ),
+            metadata_lookup=lambda video_id: _cached_candidate(state, video_id),
+            metadata_save=lambda video: _save_candidate_metadata(state, video),
         )
         examined += len(videos) + len(remote_skips)
         skipped.extend(
@@ -117,7 +132,9 @@ def discover_next_source_video(
         )
         for video in videos:
             external_id = candidate_youtube_id(video)
-            reason = _rejection_reason(video, external_id, association, state)
+            reason = _rejection_reason(
+                video, external_id, association, state, profile.profile_id
+            )
             if reason is not None:
                 skipped.append(
                     IngestionSkip(
@@ -155,8 +172,11 @@ def ingest(
     probe: Probe = probe_media,
 ) -> IngestionResult:
     """Download and validate one selected source video using legacy components."""
-    if state.get_video(candidate.external_video_id) is not None:
+    existing = state.get_video(candidate.external_video_id)
+    if existing is not None and existing.status is not VideoStatus.FAILED:
         raise ValueError("Source video is already registered and cannot be ingested.")
+    if existing is not None:
+        state.prepare_failed_video_retry(candidate.external_video_id)
     published_at = (
         candidate.video.upload_date.isoformat()
         if candidate.video.upload_date is not None
@@ -220,10 +240,15 @@ def _rejection_reason(
     external_id: str | None,
     association: ThemeContentSource,
     state: StateStore,
+    profile_id: int,
 ) -> tuple[str, str] | None:
     if external_id is None:
         return "missing_video_id", "YouTube video ID ausente"
-    if state.get_video(external_id) is not None:
+    if not state.source_candidate_available(profile_id, external_id):
+        failure = state.source_failure(profile_id, external_id)
+        return "cooldown", str(failure["retry_after"] if failure else "blocked")
+    existing = state.get_video(external_id)
+    if existing is not None and existing.status is not VideoStatus.FAILED:
         return "already_processed", "YouTube video ID já registrado"
     duration = video.duration_seconds
     if duration is None:
@@ -237,6 +262,55 @@ def _rejection_reason(
     ):
         return "duration", f"{duration}s"
     return None
+
+
+def record_ingestion_failure(
+    state: StateStore,
+    profile: ThemeMarketProfile,
+    youtube_id: str,
+    error: Exception,
+) -> str | None:
+    category = (
+        error.category
+        if isinstance(error, YouTubeCollectionError)
+        else YouTubeErrorCategory.DOWNLOAD_ERROR
+    )
+    return state.record_source_failure(
+        profile.profile_id,
+        youtube_id,
+        category=category.value,
+        detail=str(error),
+    )
+
+
+def _cached_candidate(state: StateStore, youtube_id: str) -> VideoCandidate | None:
+    row = state.cached_source_metadata(youtube_id)
+    if row is None:
+        return None
+    return VideoCandidate(
+        row["creator"],
+        row["url"],
+        row["title"],
+        date.fromisoformat(row["upload_date"]) if row["upload_date"] else None,
+        row["duration_seconds"],
+        youtube_id,
+    )
+
+
+def _save_candidate_metadata(state: StateStore, candidate: VideoCandidate) -> None:
+    youtube_id = candidate_youtube_id(candidate)
+    if youtube_id is None:
+        return
+    state.save_source_metadata(
+        youtube_id,
+        creator=candidate.creator,
+        url=candidate.url,
+        title=candidate.title,
+        upload_date=(
+            candidate.upload_date.isoformat() if candidate.upload_date else None
+        ),
+        duration_seconds=candidate.duration_seconds,
+    )
 
 
 def _candidate_sort_key(candidate: SourceCandidate) -> tuple[int, int, str]:

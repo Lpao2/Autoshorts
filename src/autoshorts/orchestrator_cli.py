@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from autoshorts.automation_config import load_automation_config
+from autoshorts.collection import YouTubeAccess
 from autoshorts.config import PROJECT_ROOT, load_settings
 from autoshorts.orchestrator import Orchestrator, PipelineChannelProducer
 from autoshorts.state_store import StateStore, default_state_db_path
@@ -21,6 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workspace", type=Path, default=PROJECT_ROOT / "data/automation"
     )
+    parser.add_argument("--youtube-browser", choices=("brave", "firefox"))
+    parser.add_argument("--youtube-cookie-file", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     once = commands.add_parser("run-once")
     once.add_argument("--dry-run", action="store_true")
@@ -37,8 +40,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_automation_config(args.config)
         with StateStore(args.state_db) as state:
+            environmental = YouTubeAccess.from_environment()
+            access = YouTubeAccess(
+                browser=args.youtube_browser or environmental.browser,
+                cookie_file=args.youtube_cookie_file or environmental.cookie_file,
+                timeout_seconds=environmental.timeout_seconds,
+                retries=environmental.retries,
+                fragment_retries=environmental.fragment_retries,
+                pacing_seconds=environmental.pacing_seconds,
+            )
             producer = PipelineChannelProducer(
-                config, state, load_settings(), args.workspace.resolve()
+                config, state, load_settings(), args.workspace.resolve(), access
             )
             orchestrator = Orchestrator(config, state, producer)
             if args.command == "run":

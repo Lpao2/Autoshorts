@@ -286,6 +286,22 @@ The default inventory policy is a minimum of 2 future videos and a target of
 the cycle auditable and safe to rerun. Continuous mode is intended for a later
 service-installation step; it is not installed automatically.
 
+YouTube access is conservative and configurable. Browser cookies are referenced
+directly and are never copied into SQLite or logs:
+
+```bash
+autoshorts-orchestrator --youtube-browser brave run-once --max-productions 1
+# or configure AUTOSHORTS_YOUTUBE_BROWSER=brave
+```
+
+Firefox is also supported. A Netscape cookie file may be supplied with
+`--youtube-cookie-file` or `AUTOSHORTS_YOUTUBE_COOKIE_FILE`, but it must already
+exist with mode `0600`. Timeout, bounded retries, fragment retries and pacing can
+be configured with `AUTOSHORTS_YOUTUBE_TIMEOUT`, `AUTOSHORTS_YOUTUBE_RETRIES`,
+`AUTOSHORTS_YOUTUBE_FRAGMENT_RETRIES` and
+`AUTOSHORTS_YOUTUBE_PACING_SECONDS`. Rate limits and challenges stop discovery
+immediately and create a persistent, increasing candidate cooldown.
+
 ---
 
 Developed by **[Lucas Patrocínio](https://github.com/Lpao2)**.

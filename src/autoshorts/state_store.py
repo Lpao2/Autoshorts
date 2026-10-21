@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -64,7 +65,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 
 class ReviewPolicy(StrEnum):
@@ -472,6 +473,16 @@ class StateStore:
                 ),
             )
         return not existed
+
+    def prepare_failed_video_retry(self, youtube_id: str) -> None:
+        with self.connection:
+            cursor = self.connection.execute(
+                """UPDATE videos SET status=?, error=NULL, updated_at=?
+                WHERE youtube_id=? AND status=?""",
+                (VideoStatus.DISCOVERED, _now(), youtube_id, VideoStatus.FAILED),
+            )
+        if cursor.rowcount != 1:
+            raise ValueError("Only a failed source video can be retried.")
 
     def record_downloaded_video(
         self,
@@ -1703,6 +1714,122 @@ class StateStore:
                     result,
                     error,
                     _now(),
+                    _now(),
+                ),
+            )
+
+    def source_candidate_available(
+        self,
+        profile_id: int,
+        youtube_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        row = self.connection.execute(
+            """SELECT category, retry_after FROM youtube_source_failures
+            WHERE profile_id=? AND youtube_id=?""",
+            (profile_id, youtube_id),
+        ).fetchone()
+        if row is None:
+            return True
+        if row["retry_after"] is None:
+            return False
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        return datetime.fromisoformat(row["retry_after"]) <= current
+
+    def record_source_failure(
+        self,
+        profile_id: int,
+        youtube_id: str,
+        *,
+        category: str,
+        detail: str,
+        now: datetime | None = None,
+    ) -> str | None:
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        row = self.connection.execute(
+            """SELECT attempt_count FROM youtube_source_failures
+            WHERE profile_id=? AND youtube_id=?""",
+            (profile_id, youtube_id),
+        ).fetchone()
+        attempt = (int(row["attempt_count"]) if row else 0) + 1
+        retry_after = _source_retry_after(youtube_id, category, attempt, current)
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO youtube_source_failures
+                (profile_id, youtube_id, category, attempt_count, retry_after,
+                 detail, first_failed_at, last_failed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(profile_id, youtube_id) DO UPDATE SET
+                    category=excluded.category,
+                    attempt_count=excluded.attempt_count,
+                    retry_after=excluded.retry_after, detail=excluded.detail,
+                    last_failed_at=excluded.last_failed_at""",
+                (
+                    profile_id,
+                    youtube_id,
+                    category,
+                    attempt,
+                    retry_after,
+                    detail[:500],
+                    current.isoformat(),
+                    current.isoformat(),
+                ),
+            )
+        return retry_after
+
+    def source_failure(self, profile_id: int, youtube_id: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            """SELECT * FROM youtube_source_failures
+            WHERE profile_id=? AND youtube_id=?""",
+            (profile_id, youtube_id),
+        ).fetchone()
+
+    def clear_source_failure(self, profile_id: int, youtube_id: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                """DELETE FROM youtube_source_failures
+                WHERE profile_id=? AND youtube_id=?""",
+                (profile_id, youtube_id),
+            )
+
+    def cached_source_metadata(
+        self, youtube_id: str, *, max_age_hours: int = 24
+    ) -> sqlite3.Row | None:
+        cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+        return self.connection.execute(
+            """SELECT * FROM youtube_source_metadata
+            WHERE youtube_id=? AND hydrated_at>=?""",
+            (youtube_id, cutoff.isoformat()),
+        ).fetchone()
+
+    def save_source_metadata(
+        self,
+        youtube_id: str,
+        *,
+        creator: str,
+        url: str,
+        title: str,
+        upload_date: str | None,
+        duration_seconds: int | None,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO youtube_source_metadata
+                (youtube_id, creator, url, title, upload_date, duration_seconds,
+                 hydrated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(youtube_id) DO UPDATE SET creator=excluded.creator,
+                    url=excluded.url, title=excluded.title,
+                    upload_date=excluded.upload_date,
+                    duration_seconds=excluded.duration_seconds,
+                    hydrated_at=excluded.hydrated_at""",
+                (
+                    youtube_id,
+                    creator,
+                    url,
+                    title,
+                    upload_date,
+                    duration_seconds,
                     _now(),
                 ),
             )
@@ -3728,6 +3855,22 @@ class StateStore:
                     FOREIGN KEY(cycle_id) REFERENCES orchestrator_cycles(id)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS youtube_source_failures (
+                    profile_id INTEGER NOT NULL, youtube_id TEXT NOT NULL,
+                    category TEXT NOT NULL, attempt_count INTEGER NOT NULL,
+                    retry_after TEXT, detail TEXT NOT NULL,
+                    first_failed_at TEXT NOT NULL, last_failed_at TEXT NOT NULL,
+                    PRIMARY KEY(profile_id, youtube_id),
+                    FOREIGN KEY(profile_id) REFERENCES theme_market_profiles(id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_youtube_source_retry
+                    ON youtube_source_failures(profile_id, retry_after);
+                CREATE TABLE IF NOT EXISTS youtube_source_metadata (
+                    youtube_id TEXT PRIMARY KEY, creator TEXT NOT NULL,
+                    url TEXT NOT NULL, title TEXT NOT NULL, upload_date TEXT,
+                    duration_seconds INTEGER, hydrated_at TEXT NOT NULL
+                );
                 """
                 )
                 self.connection.execute(
@@ -3829,6 +3972,9 @@ class StateStore:
             version = 27
         if version == 27:
             self._migrate_v27_to_v28()
+            version = 28
+        if version == 28:
+            self._migrate_v28_to_v29()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -4617,9 +4763,52 @@ class StateStore:
                 (_now(),),
             )
 
+    def _migrate_v28_to_v29(self) -> None:
+        """Persist YouTube candidate cooldowns and hydrated metadata cache."""
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS youtube_source_failures (
+                    profile_id INTEGER NOT NULL, youtube_id TEXT NOT NULL,
+                    category TEXT NOT NULL, attempt_count INTEGER NOT NULL,
+                    retry_after TEXT, detail TEXT NOT NULL,
+                    first_failed_at TEXT NOT NULL, last_failed_at TEXT NOT NULL,
+                    PRIMARY KEY(profile_id, youtube_id),
+                    FOREIGN KEY(profile_id) REFERENCES theme_market_profiles(id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_youtube_source_retry
+                    ON youtube_source_failures(profile_id, retry_after);
+                CREATE TABLE IF NOT EXISTS youtube_source_metadata (
+                    youtube_id TEXT PRIMARY KEY, creator TEXT NOT NULL,
+                    url TEXT NOT NULL, title TEXT NOT NULL, upload_date TEXT,
+                    duration_seconds INTEGER, hydrated_at TEXT NOT NULL
+                );
+                PRAGMA user_version = 29;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _source_retry_after(
+    youtube_id: str, category: str, attempt: int, now: datetime
+) -> str | None:
+    if category == "VIDEO_UNAVAILABLE":
+        return None
+    if category in {"RATE_LIMITED", "ANTI_BOT_CHALLENGE"}:
+        base = (1800, 3600, 14400)[min(attempt - 1, 2)]
+    elif category == "AUTH_REQUIRED":
+        base = 3600
+    elif category == "NETWORK_ERROR":
+        base = min(600 * (2 ** (attempt - 1)), 3600)
+    else:
+        base = min(900 * (2 ** (attempt - 1)), 7200)
+    digest = hashlib.sha256(f"{youtube_id}:{attempt}".encode()).digest()[0]
+    jitter = 0.9 + (digest / 255) * 0.2
+    return (now + timedelta(seconds=round(base * jitter))).isoformat()
 
 
 def _theme_market_profile(row: sqlite3.Row) -> ThemeMarketProfile:
