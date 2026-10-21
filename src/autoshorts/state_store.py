@@ -7,7 +7,7 @@ import os
 import sqlite3
 from dataclasses import asdict, dataclass
 from dataclasses import replace as dataclass_replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 
@@ -64,7 +64,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 
 class ReviewPolicy(StrEnum):
@@ -366,6 +366,18 @@ class PublicationAttempt:
     remote_video_id: str | None
     error_category: str | None
     error_message: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryPolicy:
+    min_ready_videos: int = 2
+    target_ready_videos: int = 3
+
+    def __post_init__(self) -> None:
+        if self.min_ready_videos < 0:
+            raise ValueError("min_ready_videos cannot be negative.")
+        if self.target_ready_videos < self.min_ready_videos:
+            raise ValueError("target_ready_videos must be at least the minimum.")
 
 
 def default_state_db_path(project_root: Path | None = None) -> Path:
@@ -1539,6 +1551,161 @@ class StateStore:
             (publishing_channel_id,),
         ).fetchone()
         return bool(row["paused"]) if row else False
+
+    def inventory_policy(self, publishing_channel_id: str) -> InventoryPolicy:
+        row = self.connection.execute(
+            """SELECT min_ready_videos, target_ready_videos
+            FROM orchestrator_channel_settings WHERE publishing_channel_id=?""",
+            (publishing_channel_id,),
+        ).fetchone()
+        if row is None:
+            row = self.connection.execute(
+                """SELECT min_ready_videos, target_ready_videos
+                FROM orchestrator_settings WHERE singleton=1"""
+            ).fetchone()
+        if row is None:
+            return InventoryPolicy()
+        return InventoryPolicy(row["min_ready_videos"], row["target_ready_videos"])
+
+    def update_inventory_policy(
+        self,
+        *,
+        min_ready_videos: int,
+        target_ready_videos: int,
+        publishing_channel_id: str | None = None,
+    ) -> InventoryPolicy:
+        policy = InventoryPolicy(min_ready_videos, target_ready_videos)
+        now = _now()
+        with self.connection:
+            if publishing_channel_id is None:
+                self.connection.execute(
+                    """UPDATE orchestrator_settings SET min_ready_videos=?,
+                    target_ready_videos=?, updated_at=? WHERE singleton=1""",
+                    (policy.min_ready_videos, policy.target_ready_videos, now),
+                )
+            else:
+                self.connection.execute(
+                    """INSERT INTO orchestrator_channel_settings
+                    (publishing_channel_id, min_ready_videos,
+                     target_ready_videos, updated_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(publishing_channel_id) DO UPDATE SET
+                    min_ready_videos=excluded.min_ready_videos,
+                    target_ready_videos=excluded.target_ready_videos,
+                    updated_at=excluded.updated_at""",
+                    (
+                        publishing_channel_id,
+                        policy.min_ready_videos,
+                        policy.target_ready_videos,
+                        now,
+                    ),
+                )
+        return policy
+
+    def assign_source_to_channel(
+        self, youtube_id: str, publishing_channel_id: str
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO orchestrator_artifact_assignments
+                (youtube_id, publishing_channel_id, created_at) VALUES (?, ?, ?)
+                ON CONFLICT(youtube_id) DO NOTHING""",
+                (youtube_id, publishing_channel_id, _now()),
+            )
+            row = self.connection.execute(
+                """SELECT publishing_channel_id
+                FROM orchestrator_artifact_assignments WHERE youtube_id=?""",
+                (youtube_id,),
+            ).fetchone()
+            if row["publishing_channel_id"] != publishing_channel_id:
+                raise ValueError("Source video is already assigned to another channel.")
+
+    def acquire_orchestrator_lease(
+        self,
+        publishing_channel_id: str,
+        owner: str,
+        now: datetime,
+        lease_seconds: int = 1800,
+    ) -> bool:
+        if lease_seconds < 1:
+            raise ValueError("lease_seconds must be positive.")
+        acquired_at = now.astimezone(UTC).isoformat()
+        expires_at = (
+            now.astimezone(UTC) + timedelta(seconds=lease_seconds)
+        ).isoformat()
+        with self.connection:
+            cursor = self.connection.execute(
+                """INSERT INTO orchestrator_leases
+                (publishing_channel_id, owner, acquired_at, expires_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(publishing_channel_id) DO UPDATE SET
+                    owner=excluded.owner, acquired_at=excluded.acquired_at,
+                    expires_at=excluded.expires_at
+                WHERE orchestrator_leases.expires_at <= excluded.acquired_at
+                   OR orchestrator_leases.owner = excluded.owner""",
+                (publishing_channel_id, owner, acquired_at, expires_at),
+            )
+        return cursor.rowcount == 1
+
+    def release_orchestrator_lease(
+        self, publishing_channel_id: str, owner: str
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """DELETE FROM orchestrator_leases
+                WHERE publishing_channel_id=? AND owner=?""",
+                (publishing_channel_id, owner),
+            )
+
+    def start_orchestrator_cycle(self, *, max_productions: int) -> int:
+        with self.connection:
+            cursor = self.connection.execute(
+                """INSERT INTO orchestrator_cycles
+                (started_at, max_productions, result) VALUES (?, ?, 'RUNNING')""",
+                (_now(), max_productions),
+            )
+        return int(cursor.lastrowid)
+
+    def finish_orchestrator_cycle(
+        self, cycle_id: int, *, result: str, error: str | None = None
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """UPDATE orchestrator_cycles SET finished_at=?, result=?, error=?
+                WHERE id=?""",
+                (_now(), result, error, cycle_id),
+            )
+
+    def record_orchestrator_decision(
+        self,
+        cycle_id: int,
+        publishing_channel_id: str,
+        *,
+        inventory_before: int,
+        minimum: int,
+        target: int,
+        planned_count: int,
+        result: str,
+        error: str | None = None,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO orchestrator_decisions
+                (cycle_id, publishing_channel_id, inventory_before, minimum,
+                 target, planned_count, result, error, started_at, finished_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    cycle_id,
+                    publishing_channel_id,
+                    inventory_before,
+                    minimum,
+                    target,
+                    planned_count,
+                    result,
+                    error,
+                    _now(),
+                    _now(),
+                ),
+            )
 
     def enqueue_publication_job(
         self,
@@ -3523,6 +3690,44 @@ class StateStore:
                     FOREIGN KEY(job_id) REFERENCES publication_jobs(id)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS orchestrator_settings (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    min_ready_videos INTEGER NOT NULL DEFAULT 2,
+                    target_ready_videos INTEGER NOT NULL DEFAULT 3,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_channel_settings (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    min_ready_videos INTEGER NOT NULL,
+                    target_ready_videos INTEGER NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_artifact_assignments (
+                    youtube_id TEXT PRIMARY KEY, publishing_channel_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_orchestrator_assignments_channel
+                    ON orchestrator_artifact_assignments(publishing_channel_id);
+                CREATE TABLE IF NOT EXISTS orchestrator_leases (
+                    publishing_channel_id TEXT PRIMARY KEY, owner TEXT NOT NULL,
+                    acquired_at TEXT NOT NULL, expires_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_cycles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL,
+                    finished_at TEXT, max_productions INTEGER NOT NULL,
+                    result TEXT NOT NULL, error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, cycle_id INTEGER NOT NULL,
+                    publishing_channel_id TEXT NOT NULL,
+                    inventory_before INTEGER NOT NULL, minimum INTEGER NOT NULL,
+                    target INTEGER NOT NULL, planned_count INTEGER NOT NULL,
+                    result TEXT NOT NULL, error TEXT, started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL,
+                    FOREIGN KEY(cycle_id) REFERENCES orchestrator_cycles(id)
+                        ON DELETE CASCADE
+                );
                 """
                 )
                 self.connection.execute(
@@ -3535,6 +3740,12 @@ class StateStore:
                     (singleton, default_review_policy, updated_at)
                     VALUES (1, ?, ?)""",
                     (ReviewPolicy.MANUAL_REVIEW, _now()),
+                )
+                self.connection.execute(
+                    """INSERT OR IGNORE INTO orchestrator_settings
+                    (singleton, min_ready_videos, target_ready_videos, updated_at)
+                    VALUES (1, 2, 3, ?)""",
+                    (_now(),),
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
@@ -3615,6 +3826,9 @@ class StateStore:
             version = 26
         if version == 26:
             self._migrate_v26_to_v27()
+            version = 27
+        if version == 27:
+            self._migrate_v27_to_v28()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -4348,6 +4562,59 @@ class StateStore:
                 """INSERT OR IGNORE INTO metadata_settings
                 (singleton, default_review_policy, updated_at) VALUES (1, ?, ?)""",
                 (ReviewPolicy.MANUAL_REVIEW, _now()),
+            )
+
+    def _migrate_v27_to_v28(self) -> None:
+        """Add durable inventory policy, decisions, assignments and leases."""
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS orchestrator_settings (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    min_ready_videos INTEGER NOT NULL DEFAULT 2,
+                    target_ready_videos INTEGER NOT NULL DEFAULT 3,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_channel_settings (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    min_ready_videos INTEGER NOT NULL,
+                    target_ready_videos INTEGER NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_artifact_assignments (
+                    youtube_id TEXT PRIMARY KEY, publishing_channel_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_orchestrator_assignments_channel
+                    ON orchestrator_artifact_assignments(publishing_channel_id);
+                CREATE TABLE IF NOT EXISTS orchestrator_leases (
+                    publishing_channel_id TEXT PRIMARY KEY, owner TEXT NOT NULL,
+                    acquired_at TEXT NOT NULL, expires_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_cycles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL,
+                    finished_at TEXT, max_productions INTEGER NOT NULL,
+                    result TEXT NOT NULL, error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, cycle_id INTEGER NOT NULL,
+                    publishing_channel_id TEXT NOT NULL,
+                    inventory_before INTEGER NOT NULL, minimum INTEGER NOT NULL,
+                    target INTEGER NOT NULL, planned_count INTEGER NOT NULL,
+                    result TEXT NOT NULL, error TEXT, started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL,
+                    FOREIGN KEY(cycle_id) REFERENCES orchestrator_cycles(id)
+                        ON DELETE CASCADE
+                );
+                PRAGMA user_version = 28;
+                """
+            )
+            self.connection.execute(
+                """INSERT OR IGNORE INTO orchestrator_settings
+                (singleton, min_ready_videos, target_ready_videos, updated_at)
+                VALUES (1, 2, 3, ?)""",
+                (_now(),),
             )
 
 

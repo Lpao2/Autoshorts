@@ -268,6 +268,24 @@ Possible future improvements:
 See [the manual end-to-end test](docs/manual-test.md) to validate the current
 pipeline with a real local video.
 
+## Operational orchestrator
+
+The inventory orchestrator coordinates the existing ingestion, production,
+caption, metadata, review and scheduling APIs. It does not upload videos or run
+the scheduler itself.
+
+```bash
+autoshorts-orchestrator status
+autoshorts-orchestrator run-once --dry-run
+autoshorts-orchestrator run-once --max-productions 1
+autoshorts-orchestrator run --interval 300 --max-productions 1
+```
+
+The default inventory policy is a minimum of 2 future videos and a target of
+3. Persistent per-channel overrides, decisions, backoff and SQLite leases make
+the cycle auditable and safe to rerun. Continuous mode is intended for a later
+service-installation step; it is not installed automatically.
+
 ---
 
 Developed by **[Lucas Patrocínio](https://github.com/Lpao2)**.
