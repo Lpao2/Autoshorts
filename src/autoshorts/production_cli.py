@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from autoshorts.automation_config import load_automation_config
 from autoshorts.captions import render_captioned_short
 from autoshorts.config import load_settings
+from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.faster_whisper_provider import FasterWhisperProvider
 from autoshorts.gemini_analysis_provider import GeminiAnalysisProvider
+from autoshorts.metadata_pipeline import (
+    GeminiMetadataProvider,
+    approve_and_enqueue_metadata,
+    generate_metadata_draft,
+)
 from autoshorts.production import SegmentSelection, produce_source_video
+from autoshorts.scheduler import SchedulerService
 from autoshorts.state_store import StateStore, default_state_db_path
 from autoshorts.transcription import load_transcript
+from autoshorts.youtube_publishing import YouTubePublicationService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +39,19 @@ def build_parser() -> argparse.ArgumentParser:
     caption = sub.add_parser("caption")
     caption.add_argument("--source-video-id", required=True)
     caption.add_argument("--state-db", type=Path, default=default_state_db_path())
+    metadata = sub.add_parser("metadata")
+    metadata.add_argument("--source-video-id", required=True)
+    metadata.add_argument("--channel", required=True)
+    metadata.add_argument("--state-db", type=Path, default=default_state_db_path())
+    metadata.add_argument(
+        "--config", type=Path, default=Path("config/automation.local.json")
+    )
+    approve = sub.add_parser("approve-metadata")
+    approve.add_argument("draft_id", type=int)
+    approve.add_argument("--state-db", type=Path, default=default_state_db_path())
+    approve.add_argument(
+        "--config", type=Path, default=Path("config/automation.local.json")
+    )
     return parser
 
 
@@ -37,6 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "caption":
         return _caption(args)
+    if args.command == "metadata":
+        return _metadata(args)
+    if args.command == "approve-metadata":
+        return _approve_metadata(args)
     config = load_automation_config(args.config)
     with StateStore(args.state_db) as state:
         video = state.get_video(args.source_video_id)
@@ -115,6 +141,64 @@ def _caption(args) -> int:
     print(f"SHA-256: {result.checksum}")
     print(f"Result: {'REUSED' if result.reused else 'RENDERED'}")
     return 0
+
+
+def _metadata(args) -> int:
+    config = load_automation_config(args.config)
+    channel = _find_channel(config, args.channel)
+    with StateStore(args.state_db) as state:
+        draft = generate_metadata_draft(
+            youtube_id=args.source_video_id,
+            publishing_channel_id=channel.channel_id,
+            config=config,
+            state=state,
+            provider=GeminiMetadataProvider(),
+        )
+    print(f"Draft ID: {draft.draft_id}")
+    print(f"Status: {draft.status}")
+    print(f"Review policy: {draft.review_policy}")
+    print(f"Title: {draft.title}")
+    print(f"Description: {draft.description}")
+    print(f"Tags: {', '.join(draft.tags)}")
+    return 0
+
+
+def _approve_metadata(args) -> int:
+    config = load_automation_config(args.config)
+    with StateStore(args.state_db) as state:
+        publication_service = YouTubePublicationService(
+            config, state, FilesystemCredentialStore()
+        )
+        scheduler = SchedulerService(config, state, _NoUploadExecutor())
+        draft, job = approve_and_enqueue_metadata(
+            args.draft_id,
+            state=state,
+            publication_service=publication_service,
+            scheduler=scheduler,
+            now=datetime.now(UTC),
+        )
+    print(f"Draft ID: {draft.draft_id} status={draft.status}")
+    print(f"Publication ID: {draft.publication_id}")
+    print(f"Scheduler Job ID: {job.job_id} state={job.state}")
+    print(f"Scheduled for: {job.resolved_publish_at}")
+    return 0
+
+
+class _NoUploadExecutor:
+    def execute(self, publication_id):
+        raise RuntimeError("The metadata CLI never executes scheduler uploads.")
+
+
+def _find_channel(config, value):
+    matches = [
+        channel
+        for theme in config.themes
+        for channel in theme.channels
+        if channel.channel_id == value or channel.name.casefold() == value.casefold()
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"Publishing channel is ambiguous or missing: {value}")
+    return matches[0]
 
 
 if __name__ == "__main__":

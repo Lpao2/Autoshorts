@@ -64,7 +64,19 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
+
+
+class ReviewPolicy(StrEnum):
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+    AUTO_APPROVE = "AUTO_APPROVE"
+
+
+class MetadataDraftStatus(StrEnum):
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    APPROVED = "APPROVED"
+    FAILED_RECOVERABLE = "FAILED_RECOVERABLE"
+    FAILED_CONFIGURATION = "FAILED_CONFIGURATION"
 
 
 class VideoStatus(StrEnum):
@@ -255,6 +267,43 @@ class ReadyArtifact:
     created_at: str
     updated_at: str
     validated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataDraft:
+    draft_id: int
+    youtube_id: str
+    ready_checksum: str
+    publishing_channel_id: str
+    brand_plan_id: str
+    fingerprint: str
+    status: MetadataDraftStatus
+    review_policy: ReviewPolicy
+    title: str
+    description: str
+    tags: tuple[str, ...]
+    hashtags: tuple[str, ...]
+    category_id: str
+    category_name: str
+    default_language: str
+    privacy_status: str
+    made_for_kids: bool
+    contains_synthetic_media: bool
+    has_paid_product_placement: bool
+    license: str
+    embeddable: bool
+    public_stats_viewable: bool
+    provider: str
+    model: str
+    prompt_hash: str
+    generation_version: str
+    title_candidates: tuple[str, ...]
+    selection_reason: str
+    error: str | None
+    publication_id: int | None
+    created_at: str
+    updated_at: str
+    approved_at: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -839,6 +888,130 @@ class StateStore:
         artifact = self.get_ready_artifact(youtube_id)
         assert artifact is not None
         return artifact
+
+    def metadata_review_policy(self, publishing_channel_id: str) -> ReviewPolicy:
+        row = self.connection.execute(
+            "SELECT review_policy FROM metadata_channel_settings "
+            "WHERE publishing_channel_id = ?",
+            (publishing_channel_id,),
+        ).fetchone()
+        if row:
+            return ReviewPolicy(row[0])
+        row = self.connection.execute(
+            "SELECT default_review_policy FROM metadata_settings WHERE singleton=1"
+        ).fetchone()
+        return ReviewPolicy(row[0])
+
+    def set_metadata_review_policy(
+        self, policy: ReviewPolicy, *, publishing_channel_id: str | None = None
+    ) -> None:
+        with self.connection:
+            if publishing_channel_id is None:
+                self.connection.execute(
+                    "UPDATE metadata_settings SET default_review_policy=?, "
+                    "updated_at=? WHERE singleton=1",
+                    (policy, _now()),
+                )
+            else:
+                self.connection.execute(
+                    """INSERT INTO metadata_channel_settings
+                    (publishing_channel_id, review_policy, updated_at)
+                    VALUES (?, ?, ?) ON CONFLICT(publishing_channel_id) DO UPDATE SET
+                    review_policy=excluded.review_policy,
+                    updated_at=excluded.updated_at""",
+                    (publishing_channel_id, policy, _now()),
+                )
+
+    def metadata_draft_by_fingerprint(self, fingerprint: str) -> MetadataDraft | None:
+        row = self.connection.execute(
+            "SELECT * FROM metadata_drafts WHERE fingerprint = ?", (fingerprint,)
+        ).fetchone()
+        return _metadata_draft(row) if row else None
+
+    def metadata_draft(self, draft_id: int) -> MetadataDraft | None:
+        row = self.connection.execute(
+            "SELECT * FROM metadata_drafts WHERE id = ?", (draft_id,)
+        ).fetchone()
+        return _metadata_draft(row) if row else None
+
+    def save_metadata_draft(self, **values) -> MetadataDraft:
+        existing = self.metadata_draft_by_fingerprint(values["fingerprint"])
+        if existing and existing.status not in {
+            MetadataDraftStatus.FAILED_RECOVERABLE,
+            MetadataDraftStatus.FAILED_CONFIGURATION,
+        }:
+            return existing
+        now = _now()
+        status = values["status"]
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO metadata_drafts (
+                    youtube_id, ready_checksum, publishing_channel_id, brand_plan_id,
+                    fingerprint, status, review_policy, title, description, tags_json,
+                    hashtags_json, category_id, category_name, default_language,
+                    privacy_status, made_for_kids, contains_synthetic_media,
+                    has_paid_product_placement, license, embeddable,
+                    public_stats_viewable, provider, model, prompt_hash,
+                    generation_version, title_candidates_json, selection_reason,
+                    error, created_at, updated_at
+                ) VALUES (
+                    :youtube_id, :ready_checksum, :publishing_channel_id,
+                    :brand_plan_id, :fingerprint, :status, :review_policy, :title,
+                    :description, :tags_json, :hashtags_json, :category_id,
+                    :category_name, :default_language, :privacy_status,
+                    :made_for_kids, :contains_synthetic_media,
+                    :has_paid_product_placement, :license, :embeddable,
+                    :public_stats_viewable, :provider, :model, :prompt_hash,
+                    :generation_version, :title_candidates_json,
+                    :selection_reason, :error, :created_at, :updated_at
+                ) ON CONFLICT(fingerprint) DO UPDATE SET
+                    status=excluded.status, title=excluded.title,
+                    description=excluded.description, tags_json=excluded.tags_json,
+                    hashtags_json=excluded.hashtags_json, error=excluded.error,
+                    updated_at=excluded.updated_at""",
+                {
+                    **values,
+                    "status": status.value,
+                    "review_policy": values["review_policy"].value,
+                    "tags_json": json.dumps(values.get("tags", ()), ensure_ascii=False),
+                    "hashtags_json": json.dumps(
+                        values.get("hashtags", ()), ensure_ascii=False
+                    ),
+                    "title_candidates_json": json.dumps(
+                        values.get("title_candidates", ()), ensure_ascii=False
+                    ),
+                    "created_at": existing.created_at if existing else now,
+                    "updated_at": now,
+                },
+            )
+        draft = self.metadata_draft_by_fingerprint(values["fingerprint"])
+        assert draft is not None
+        return draft
+
+    def approve_metadata_draft(
+        self, draft_id: int, publication_id: int
+    ) -> MetadataDraft:
+        now = _now()
+        with self.connection:
+            cursor = self.connection.execute(
+                """UPDATE metadata_drafts SET status=?, publication_id=?,
+                approved_at=COALESCE(approved_at, ?), updated_at=?
+                WHERE id=? AND status IN (?, ?)""",
+                (
+                    MetadataDraftStatus.APPROVED,
+                    publication_id,
+                    now,
+                    now,
+                    draft_id,
+                    MetadataDraftStatus.REVIEW_REQUIRED,
+                    MetadataDraftStatus.APPROVED,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Metadata draft is not reviewable.")
+        draft = self.metadata_draft(draft_id)
+        assert draft is not None
+        return draft
 
     def record_queued_shorts(
         self, youtube_id: str, shorts: tuple[QueuedShort, ...]
@@ -2924,6 +3097,38 @@ class StateStore:
                     FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS metadata_settings (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    default_review_policy TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS metadata_channel_settings (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    review_policy TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS metadata_drafts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    youtube_id TEXT NOT NULL, ready_checksum TEXT NOT NULL,
+                    publishing_channel_id TEXT NOT NULL, brand_plan_id TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL UNIQUE, status TEXT NOT NULL,
+                    review_policy TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL,
+                    hashtags_json TEXT NOT NULL, category_id TEXT NOT NULL,
+                    category_name TEXT NOT NULL, default_language TEXT NOT NULL,
+                    privacy_status TEXT NOT NULL, made_for_kids INTEGER NOT NULL,
+                    contains_synthetic_media INTEGER NOT NULL,
+                    has_paid_product_placement INTEGER NOT NULL,
+                    license TEXT NOT NULL, embeddable INTEGER NOT NULL,
+                    public_stats_viewable INTEGER NOT NULL, provider TEXT NOT NULL,
+                    model TEXT NOT NULL, prompt_hash TEXT NOT NULL,
+                    generation_version TEXT NOT NULL,
+                    title_candidates_json TEXT NOT NULL,
+                    selection_reason TEXT NOT NULL DEFAULT '', error TEXT,
+                    publication_id INTEGER, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, approved_at TEXT,
+                    FOREIGN KEY(youtube_id) REFERENCES videos(youtube_id),
+                    FOREIGN KEY(publication_id) REFERENCES publications(id)
+                );
                 CREATE TABLE IF NOT EXISTS ai_usage (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, youtube_id TEXT NOT NULL,
                     provider TEXT NOT NULL, model TEXT NOT NULL,
@@ -3273,6 +3478,12 @@ class StateStore:
                     (singleton, updated_at) VALUES (1, ?)""",
                     (_now(),),
                 )
+                self.connection.execute(
+                    """INSERT OR IGNORE INTO metadata_settings
+                    (singleton, default_review_policy, updated_at)
+                    VALUES (1, ?, ?)""",
+                    (ReviewPolicy.MANUAL_REVIEW, _now()),
+                )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         if version == 1:
@@ -3349,6 +3560,9 @@ class StateStore:
             version = 25
         if version == 25:
             self._migrate_v25_to_v26()
+            version = 26
+        if version == 26:
+            self._migrate_v26_to_v27()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -4038,6 +4252,52 @@ class StateStore:
                 """
             )
 
+    def _migrate_v26_to_v27(self) -> None:
+        """Add durable AI metadata drafts and configurable review policy."""
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS metadata_settings (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    default_review_policy TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS metadata_channel_settings (
+                    publishing_channel_id TEXT PRIMARY KEY,
+                    review_policy TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS metadata_drafts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    youtube_id TEXT NOT NULL, ready_checksum TEXT NOT NULL,
+                    publishing_channel_id TEXT NOT NULL, brand_plan_id TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL UNIQUE, status TEXT NOT NULL,
+                    review_policy TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL,
+                    hashtags_json TEXT NOT NULL, category_id TEXT NOT NULL,
+                    category_name TEXT NOT NULL, default_language TEXT NOT NULL,
+                    privacy_status TEXT NOT NULL, made_for_kids INTEGER NOT NULL,
+                    contains_synthetic_media INTEGER NOT NULL,
+                    has_paid_product_placement INTEGER NOT NULL,
+                    license TEXT NOT NULL, embeddable INTEGER NOT NULL,
+                    public_stats_viewable INTEGER NOT NULL, provider TEXT NOT NULL,
+                    model TEXT NOT NULL, prompt_hash TEXT NOT NULL,
+                    generation_version TEXT NOT NULL,
+                    title_candidates_json TEXT NOT NULL,
+                    selection_reason TEXT NOT NULL DEFAULT '', error TEXT,
+                    publication_id INTEGER, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, approved_at TEXT,
+                    FOREIGN KEY(youtube_id) REFERENCES videos(youtube_id),
+                    FOREIGN KEY(publication_id) REFERENCES publications(id)
+                );
+                PRAGMA user_version = 27;
+                """
+            )
+            self.connection.execute(
+                """INSERT OR IGNORE INTO metadata_settings
+                (singleton, default_review_policy, updated_at) VALUES (1, ?, ?)""",
+                (ReviewPolicy.MANUAL_REVIEW, _now()),
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -4279,6 +4539,44 @@ def _ready_artifact(row: sqlite3.Row) -> ReadyArtifact:
         row["created_at"],
         row["updated_at"],
         row["validated_at"],
+    )
+
+
+def _metadata_draft(row: sqlite3.Row) -> MetadataDraft:
+    return MetadataDraft(
+        row["id"],
+        row["youtube_id"],
+        row["ready_checksum"],
+        row["publishing_channel_id"],
+        row["brand_plan_id"],
+        row["fingerprint"],
+        MetadataDraftStatus(row["status"]),
+        ReviewPolicy(row["review_policy"]),
+        row["title"],
+        row["description"],
+        tuple(json.loads(row["tags_json"])),
+        tuple(json.loads(row["hashtags_json"])),
+        row["category_id"],
+        row["category_name"],
+        row["default_language"],
+        row["privacy_status"],
+        bool(row["made_for_kids"]),
+        bool(row["contains_synthetic_media"]),
+        bool(row["has_paid_product_placement"]),
+        row["license"],
+        bool(row["embeddable"]),
+        bool(row["public_stats_viewable"]),
+        row["provider"],
+        row["model"],
+        row["prompt_hash"],
+        row["generation_version"],
+        tuple(json.loads(row["title_candidates_json"])),
+        row["selection_reason"],
+        row["error"],
+        row["publication_id"],
+        row["created_at"],
+        row["updated_at"],
+        row["approved_at"],
     )
 
 
