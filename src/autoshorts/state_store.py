@@ -75,6 +75,7 @@ class VideoStatus(StrEnum):
     TRANSCRIBED = "TRANSCRIBED"
     ANALYZING = "ANALYZING"
     ANALYZED = "ANALYZED"
+    SEGMENT_SELECTED = "SEGMENT_SELECTED"
     RENDERING = "RENDERING"
     RENDERED = "RENDERED"
     QUEUED = "QUEUED"
@@ -113,7 +114,12 @@ VIDEO_TRANSITIONS: dict[VideoStatus, frozenset[VideoStatus]] = {
     VideoStatus.TRANSCRIBING: frozenset({VideoStatus.TRANSCRIBED, VideoStatus.FAILED}),
     VideoStatus.TRANSCRIBED: frozenset({VideoStatus.ANALYZING, VideoStatus.FAILED}),
     VideoStatus.ANALYZING: frozenset({VideoStatus.ANALYZED, VideoStatus.FAILED}),
-    VideoStatus.ANALYZED: frozenset({VideoStatus.RENDERING, VideoStatus.FAILED}),
+    VideoStatus.ANALYZED: frozenset(
+        {VideoStatus.SEGMENT_SELECTED, VideoStatus.RENDERING, VideoStatus.FAILED}
+    ),
+    VideoStatus.SEGMENT_SELECTED: frozenset(
+        {VideoStatus.RENDERING, VideoStatus.FAILED}
+    ),
     VideoStatus.RENDERING: frozenset({VideoStatus.RENDERED, VideoStatus.FAILED}),
     VideoStatus.RENDERED: frozenset(
         {VideoStatus.QUEUED, VideoStatus.COMPLETED, VideoStatus.FAILED}
@@ -692,6 +698,47 @@ class StateStore:
                 )
             self._transition_video(youtube_id, VideoStatus.RENDERED)
         return self.shorts_for_video(youtube_id)
+
+    def record_single_rendered_short(
+        self, youtube_id: str, short: RenderedShort
+    ) -> ShortRecord:
+        """Atomically persist the controlled single-winner production path."""
+        if short.clip_index != 1:
+            raise ValueError("The single rendered short must use clip_index 1.")
+        if not short.file_path.is_file():
+            raise ValueError(f"Rendered short does not exist: {short.file_path}")
+        now = _now()
+        with self.connection:
+            current = self.get_video(youtube_id)
+            if current is None or current.status != VideoStatus.RENDERING:
+                raise ValueError("Video must be RENDERING before persistence.")
+            self.connection.execute(
+                """
+                INSERT INTO shorts (
+                    youtube_id, clip_index, status, file_path, title, headline,
+                    generator_score, editorial_score, candidate_id,
+                    duration_seconds, created_at, updated_at
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    youtube_id,
+                    ShortStatus.RENDERED,
+                    str(short.file_path),
+                    short.title,
+                    short.headline,
+                    short.generator_score,
+                    short.editorial_score,
+                    short.candidate_id,
+                    short.duration_seconds,
+                    now,
+                    now,
+                ),
+            )
+            self._transition_video(youtube_id, VideoStatus.RENDERED)
+        rows = self.shorts_for_video(youtube_id)
+        if len(rows) != 1:
+            raise RuntimeError("Single-short persistence invariant failed.")
+        return rows[0]
 
     def record_queued_shorts(
         self, youtube_id: str, shorts: tuple[QueuedShort, ...]
