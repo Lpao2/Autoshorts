@@ -11,7 +11,7 @@ from autoshorts.captions import render_captioned_short
 from autoshorts.config import load_settings
 from autoshorts.faster_whisper_provider import FasterWhisperProvider
 from autoshorts.gemini_analysis_provider import GeminiAnalysisProvider
-from autoshorts.production import SegmentSelection, run_single_production
+from autoshorts.production import SegmentSelection, produce_source_video
 from autoshorts.state_store import StateStore, default_state_db_path
 from autoshorts.transcription import load_transcript
 
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if theme is None:
                 raise SystemExit(f"Theme not found: {video.theme_name}") from None
-        result = run_single_production(
+        result = produce_source_video(
             youtube_id=args.source_video_id,
             state=state,
             theme=theme,
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace=args.workspace.resolve(),
             dry_run=args.dry_run,
         )
-    item = result.selection
+    item = result.base.selection
     print(f"Source: {item.source_video_id}")
     print(
         f"Selected: {item.start_seconds:.3f}s - {item.end_seconds:.3f}s "
@@ -73,8 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"Reason: {item.reason}")
     print(f"Context: {item.context}")
-    print(f"Output: {result.output_path}")
-    outcome = "DRY-RUN" if args.dry_run else "REUSED" if result.reused else "RENDERED"
+    print(f"Base output: {result.base.output_path}")
+    if result.ready_artifact is not None:
+        print(f"Final artifact: {result.ready_artifact.file_path}")
+        print("State: READY")
+    outcome = "DRY-RUN" if args.dry_run else "REUSED" if result.reused else "READY"
     print(f"Result: {outcome}")
     return 0
 

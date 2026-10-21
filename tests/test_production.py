@@ -1,6 +1,14 @@
+import json
+from types import SimpleNamespace
+
 from autoshorts.automation_config import ThemeProfile
 from autoshorts.config import Settings
-from autoshorts.production import run_single_production
+from autoshorts.production import (
+    ProductionResult,
+    SegmentSelection,
+    produce_source_video,
+    run_single_production,
+)
 from autoshorts.state_store import RenderedShort, StateStore, VideoStatus
 from autoshorts.transcript_analysis import AnalysisResult, ClipSelection
 from autoshorts.transcription import Transcript, TranscriptSegment
@@ -124,3 +132,85 @@ def test_records_exactly_one_short_atomically(tmp_path):
         assert row.clip_index == 1
         assert len(store.shorts_for_video("source-1")) == 1
         assert store.get_video("source-1").status == VideoStatus.RENDERED
+
+
+def test_consolidated_pipeline_persists_and_reuses_ready_artifact(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "base.mp4"
+    source.touch()
+    transcript_path = tmp_path / "transcript.json"
+    transcript_path.write_text("{}", encoding="utf-8")
+    final = tmp_path / "captioned.mp4"
+    subtitle = tmp_path / "captioned.ass"
+    manifest = tmp_path / "caption.json"
+    for path in (final, subtitle):
+        path.touch()
+    manifest.write_text(json.dumps({"fingerprint": "caption-v1"}), encoding="utf-8")
+    selected = SegmentSelection(
+        "source-1",
+        10,
+        40,
+        30,
+        "title",
+        "headline",
+        "reason",
+        0.9,
+        "now",
+        "test",
+        "v1",
+        "context",
+    )
+    base_result = ProductionResult(
+        selected, source, tmp_path / "production.json", None, "base", False, True
+    )
+    caption_result = SimpleNamespace(
+        video_path=final,
+        subtitle_path=subtitle,
+        manifest_path=manifest,
+        checksum="final-checksum",
+        reused=True,
+    )
+    monkeypatch.setattr(
+        "autoshorts.production.run_single_production",
+        lambda **kwargs: base_result,
+    )
+    monkeypatch.setattr(
+        "autoshorts.captions.render_captioned_short",
+        lambda **kwargs: caption_result,
+    )
+    monkeypatch.setattr(
+        "autoshorts.production.load_transcript", lambda *args, **kwargs: object()
+    )
+    with StateStore(tmp_path / "state.db") as store:
+        downloaded_video(store, tmp_path)
+        store.connection.execute(
+            "INSERT INTO transcripts VALUES (?, ?, ?, ?, ?, ?)",
+            ("source-1", str(transcript_path), "fake", "v1", "pt", "now"),
+        )
+        store.connection.execute(
+            "UPDATE videos SET status = ? WHERE youtube_id = ?",
+            (VideoStatus.RENDERED, "source-1"),
+        )
+        first = produce_source_video(
+            youtube_id="source-1",
+            state=store,
+            theme=ThemeProfile("lol", "", (), "lol"),
+            settings=settings(tmp_path),
+            transcription_provider=FakeTranscriber(),
+            analysis_provider=FakeAnalyzer(),
+            workspace=tmp_path,
+        )
+        second = produce_source_video(
+            youtube_id="source-1",
+            state=store,
+            theme=ThemeProfile("lol", "", (), "lol"),
+            settings=settings(tmp_path),
+            transcription_provider=FakeTranscriber(),
+            analysis_provider=FakeAnalyzer(),
+            workspace=tmp_path,
+        )
+        assert not first.reused
+        assert second.reused
+        assert store.get_video("source-1").status == VideoStatus.READY
+        assert store.get_ready_artifact("source-1").file_path == final

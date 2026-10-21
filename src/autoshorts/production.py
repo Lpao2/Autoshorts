@@ -9,6 +9,7 @@ import subprocess
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from autoshorts.analysis_service import analyze_transcript
@@ -16,7 +17,12 @@ from autoshorts.automation_config import ThemeProfile
 from autoshorts.config import Settings
 from autoshorts.media_probe import MediaInfo, probe_media
 from autoshorts.render_plan import build_render_plan
-from autoshorts.state_store import RenderedShort, StateStore, VideoStatus
+from autoshorts.state_store import (
+    ReadyArtifact,
+    RenderedShort,
+    StateStore,
+    VideoStatus,
+)
 from autoshorts.transcript_analysis import (
     ResolvedAnalysis,
     TranscriptAnalysisProvider,
@@ -25,6 +31,9 @@ from autoshorts.transcript_analysis import (
 from autoshorts.transcription import Transcript, TranscriptionProvider, load_transcript
 from autoshorts.transcription_service import transcript_video
 from autoshorts.video_processor import render_planned_clip
+
+if TYPE_CHECKING:
+    from autoshorts.captions import CaptionResult
 
 PRODUCTION_VERSION = "single-winner-v1"
 
@@ -53,6 +62,14 @@ class ProductionResult:
     media: MediaInfo | None
     checksum: str | None
     rendered: bool
+    reused: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ReadyProductionResult:
+    base: ProductionResult
+    final: CaptionResult | None
+    ready_artifact: ReadyArtifact | None
     reused: bool
 
 
@@ -105,7 +122,11 @@ def run_single_production(
     current = state.get_video(youtube_id)
     assert current is not None
     shorts = state.shorts_for_video(youtube_id)
-    if current.status == VideoStatus.RENDERED:
+    if current.status in {
+        VideoStatus.RENDERED,
+        VideoStatus.CAPTIONED,
+        VideoStatus.READY,
+    }:
         if (
             len(shorts) != 1
             or shorts[0].file_path != output_path
@@ -170,6 +191,74 @@ def run_single_production(
     )
     return ProductionResult(
         selection, result.output_path, manifest_path, media, checksum, True, False
+    )
+
+
+def produce_source_video(
+    *,
+    youtube_id: str,
+    state: StateStore,
+    theme: ThemeProfile,
+    settings: Settings,
+    transcription_provider: TranscriptionProvider,
+    analysis_provider: TranscriptAnalysisProvider,
+    workspace: Path,
+    dry_run: bool = False,
+) -> ReadyProductionResult:
+    """Take one downloaded source through the reusable pipeline to READY."""
+    base = run_single_production(
+        youtube_id=youtube_id,
+        state=state,
+        theme=theme,
+        settings=settings,
+        transcription_provider=transcription_provider,
+        analysis_provider=analysis_provider,
+        workspace=workspace,
+        dry_run=dry_run,
+    )
+    if dry_run:
+        return ReadyProductionResult(base, None, None, base.reused)
+
+    from autoshorts.captions import render_captioned_short
+
+    transcript_record = state.get_transcript(youtube_id)
+    if transcript_record is None:
+        raise RuntimeError("READY production requires a persisted transcript.")
+    transcript = load_transcript(transcript_record.file_path, youtube_id=youtube_id)
+    captioned = render_captioned_short(
+        base_video=base.output_path,
+        transcript=transcript,
+        selection=base.selection,
+        transcript_path=transcript_record.file_path,
+        ffmpeg_path=settings.ffmpeg_path,
+        ffprobe_path=settings.ffprobe_path,
+    )
+    manifest = json.loads(captioned.manifest_path.read_text(encoding="utf-8"))
+    fingerprint = str(manifest["fingerprint"])
+    previous = state.get_ready_artifact(youtube_id)
+    same_ready = bool(
+        previous
+        and previous.file_path == captioned.video_path
+        and previous.checksum == captioned.checksum
+        and previous.caption_fingerprint == fingerprint
+    )
+    if same_ready:
+        assert previous is not None
+        ready = previous
+    else:
+        ready = state.record_ready_artifact(
+            youtube_id,
+            file_path=captioned.video_path,
+            checksum=captioned.checksum,
+            manifest_path=captioned.manifest_path,
+            subtitle_path=captioned.subtitle_path,
+            caption_fingerprint=fingerprint,
+        )
+    return ReadyProductionResult(
+        base,
+        captioned,
+        ready,
+        base.reused and captioned.reused and same_ready,
     )
 
 

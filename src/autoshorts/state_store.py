@@ -64,7 +64,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 
 class VideoStatus(StrEnum):
@@ -78,6 +78,8 @@ class VideoStatus(StrEnum):
     SEGMENT_SELECTED = "SEGMENT_SELECTED"
     RENDERING = "RENDERING"
     RENDERED = "RENDERED"
+    CAPTIONED = "CAPTIONED"
+    READY = "READY"
     QUEUED = "QUEUED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
@@ -122,6 +124,15 @@ VIDEO_TRANSITIONS: dict[VideoStatus, frozenset[VideoStatus]] = {
     ),
     VideoStatus.RENDERING: frozenset({VideoStatus.RENDERED, VideoStatus.FAILED}),
     VideoStatus.RENDERED: frozenset(
+        {
+            VideoStatus.CAPTIONED,
+            VideoStatus.QUEUED,
+            VideoStatus.COMPLETED,
+            VideoStatus.FAILED,
+        }
+    ),
+    VideoStatus.CAPTIONED: frozenset({VideoStatus.READY, VideoStatus.FAILED}),
+    VideoStatus.READY: frozenset(
         {VideoStatus.QUEUED, VideoStatus.COMPLETED, VideoStatus.FAILED}
     ),
     VideoStatus.QUEUED: frozenset({VideoStatus.COMPLETED, VideoStatus.FAILED}),
@@ -231,6 +242,19 @@ class AnalysisRecord:
     model: str
     prompt_hash: str
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReadyArtifact:
+    youtube_id: str
+    file_path: Path
+    checksum: str
+    manifest_path: Path
+    subtitle_path: Path
+    caption_fingerprint: str
+    created_at: str
+    updated_at: str
+    validated_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,7 +464,13 @@ class StateStore:
         return bool(
             record
             and record.status
-            in {VideoStatus.RENDERED, VideoStatus.QUEUED, VideoStatus.COMPLETED}
+            in {
+                VideoStatus.RENDERED,
+                VideoStatus.CAPTIONED,
+                VideoStatus.READY,
+                VideoStatus.QUEUED,
+                VideoStatus.COMPLETED,
+            }
         )
 
     def transition_video(
@@ -460,9 +490,16 @@ class StateStore:
         return self.transition_video(youtube_id, VideoStatus.FAILED, error=error)
 
     def interrupted_videos(self) -> tuple[VideoRecord, ...]:
-        terminal = (VideoStatus.QUEUED, VideoStatus.COMPLETED, VideoStatus.FAILED)
+        terminal = (
+            VideoStatus.READY,
+            VideoStatus.QUEUED,
+            VideoStatus.COMPLETED,
+            VideoStatus.FAILED,
+        )
+        placeholders = ", ".join("?" for _ in terminal)
         rows = self.connection.execute(
-            "SELECT * FROM videos WHERE status NOT IN (?, ?, ?) ORDER BY updated_at",
+            f"SELECT * FROM videos WHERE status NOT IN ({placeholders}) "
+            "ORDER BY updated_at",
             terminal,
         ).fetchall()
         return tuple(_video_record(row) for row in rows)
@@ -471,7 +508,7 @@ class StateStore:
         self, *, include_failed: bool = False
     ) -> tuple[VideoRecord, ...]:
         """List production jobs that may require recovery or manual retry."""
-        excluded = [VideoStatus.QUEUED, VideoStatus.COMPLETED]
+        excluded = [VideoStatus.READY, VideoStatus.QUEUED, VideoStatus.COMPLETED]
         if not include_failed:
             excluded.append(VideoStatus.FAILED)
         placeholders = ", ".join("?" for _ in excluded)
@@ -739,6 +776,69 @@ class StateStore:
         if len(rows) != 1:
             raise RuntimeError("Single-short persistence invariant failed.")
         return rows[0]
+
+    def get_ready_artifact(self, youtube_id: str) -> ReadyArtifact | None:
+        row = self.connection.execute(
+            "SELECT * FROM ready_artifacts WHERE youtube_id = ?", (youtube_id,)
+        ).fetchone()
+        return _ready_artifact(row) if row else None
+
+    def record_ready_artifact(
+        self,
+        youtube_id: str,
+        *,
+        file_path: Path,
+        checksum: str,
+        manifest_path: Path,
+        subtitle_path: Path,
+        caption_fingerprint: str,
+    ) -> ReadyArtifact:
+        """Persist the validated final derivative and promote the source to READY."""
+        for path in (file_path, manifest_path, subtitle_path):
+            if not path.is_file():
+                raise ValueError(f"READY artifact does not exist: {path}")
+        current = self.get_video(youtube_id)
+        allowed = {VideoStatus.RENDERED, VideoStatus.CAPTIONED, VideoStatus.READY}
+        if current is None or current.status not in allowed:
+            raise ValueError("Video must be RENDERED or CAPTIONED before READY.")
+        now = _now()
+        existing = self.get_ready_artifact(youtube_id)
+        created_at = existing.created_at if existing else now
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO ready_artifacts (
+                    youtube_id, file_path, checksum, manifest_path, subtitle_path,
+                    caption_fingerprint, created_at, updated_at, validated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(youtube_id) DO UPDATE SET
+                    file_path=excluded.file_path, checksum=excluded.checksum,
+                    manifest_path=excluded.manifest_path,
+                    subtitle_path=excluded.subtitle_path,
+                    caption_fingerprint=excluded.caption_fingerprint,
+                    updated_at=excluded.updated_at,
+                    validated_at=excluded.validated_at
+                """,
+                (
+                    youtube_id,
+                    str(file_path),
+                    checksum,
+                    str(manifest_path),
+                    str(subtitle_path),
+                    caption_fingerprint,
+                    created_at,
+                    now,
+                    now,
+                ),
+            )
+            if current.status == VideoStatus.RENDERED:
+                self._transition_video(youtube_id, VideoStatus.CAPTIONED)
+                self._transition_video(youtube_id, VideoStatus.READY)
+            elif current.status == VideoStatus.CAPTIONED:
+                self._transition_video(youtube_id, VideoStatus.READY)
+        artifact = self.get_ready_artifact(youtube_id)
+        assert artifact is not None
+        return artifact
 
     def record_queued_shorts(
         self, youtube_id: str, shorts: tuple[QueuedShort, ...]
@@ -2811,6 +2911,19 @@ class StateStore:
                     FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS ready_artifacts (
+                    youtube_id TEXT PRIMARY KEY,
+                    file_path TEXT NOT NULL,
+                    checksum TEXT NOT NULL,
+                    manifest_path TEXT NOT NULL,
+                    subtitle_path TEXT NOT NULL,
+                    caption_fingerprint TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    validated_at TEXT NOT NULL,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS ai_usage (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, youtube_id TEXT NOT NULL,
                     provider TEXT NOT NULL, model TEXT NOT NULL,
@@ -3233,6 +3346,9 @@ class StateStore:
             version = 24
         if version == 24:
             self._migrate_v24_to_v25()
+            version = 25
+        if version == 25:
+            self._migrate_v25_to_v26()
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -3900,6 +4016,28 @@ class StateStore:
                 )
             self.connection.execute("PRAGMA user_version = 25")
 
+    def _migrate_v25_to_v26(self) -> None:
+        """Persist the validated final artifact independently from publication."""
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS ready_artifacts (
+                    youtube_id TEXT PRIMARY KEY,
+                    file_path TEXT NOT NULL,
+                    checksum TEXT NOT NULL,
+                    manifest_path TEXT NOT NULL,
+                    subtitle_path TEXT NOT NULL,
+                    caption_fingerprint TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    validated_at TEXT NOT NULL,
+                    FOREIGN KEY (youtube_id) REFERENCES videos(youtube_id)
+                        ON DELETE CASCADE
+                );
+                PRAGMA user_version = 26;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -4127,6 +4265,20 @@ def _analysis_record(row: sqlite3.Row) -> AnalysisRecord:
         model=row["model"],
         prompt_hash=row["prompt_hash"],
         created_at=row["created_at"],
+    )
+
+
+def _ready_artifact(row: sqlite3.Row) -> ReadyArtifact:
+    return ReadyArtifact(
+        row["youtube_id"],
+        Path(row["file_path"]),
+        row["checksum"],
+        Path(row["manifest_path"]),
+        Path(row["subtitle_path"]),
+        row["caption_fingerprint"],
+        row["created_at"],
+        row["updated_at"],
+        row["validated_at"],
     )
 
 
