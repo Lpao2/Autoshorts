@@ -6,6 +6,7 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
 from autoshorts.browser_runtime import persistent_context_browser_options
 
@@ -88,6 +89,11 @@ class PlaywrightOAuthBrowser:
         account_selected = False
         channel_selected = False
         while time.monotonic() < deadline:
+            if self._callback_started():
+                if not channel_selected:
+                    self._fail("OAUTH_TARGET_CHANNEL_NOT_FOUND")
+                self.status = "CALLBACK_STARTED"
+                return
             self._raise_for_security_challenge()
             if not account_selected and self._select_expected_account():
                 account_selected = True
@@ -103,9 +109,13 @@ class PlaywrightOAuthBrowser:
             if self._click_autoshorts_link():
                 deadline = time.monotonic() + timeout
                 continue
-            if self._click_final_consent():
-                self.status = "CONSENT_CONTINUED"
-                return
+            consent = self._click_consent_action(channel_selected=channel_selected)
+            if consent:
+                deadline = time.monotonic() + timeout
+                if channel_selected:
+                    self.status = "CONSENT_CONTINUED"
+                    return
+                continue
             self.page.wait_for_timeout(300)
         self._fail("OAUTH_UI_TIMEOUT")
 
@@ -185,12 +195,16 @@ class PlaywrightOAuthBrowser:
         self.status = "UNVERIFIED_APP_ACCEPTED"
         return True
 
-    def _click_final_consent(self) -> bool:
+    def _click_consent_action(self, *, channel_selected: bool) -> str | None:
         match = self._unique_action("button", ALLOW)
+        action = "ALLOW"
         if match is None:
             match = self._unique_action("button", CONTINUE)
+            action = "CONTINUE"
         if match is None:
-            return False
+            return None
+        if action == "ALLOW" and not channel_selected:
+            self._fail("OAUTH_TARGET_CHANNEL_NOT_FOUND")
         label = self._label(match)
         assert self.page is not None
         self._checkpoint(
@@ -206,7 +220,17 @@ class PlaywrightOAuthBrowser:
             f'Pressione ENTER para clicar em "{label}"...'
         )
         match.click()
-        return True
+        self.page.wait_for_timeout(750)
+        return action
+
+    def _click_final_consent(self) -> bool:
+        """Compatibility helper for focused consent selector tests."""
+        return bool(self._click_consent_action(channel_selected=True))
+
+    def _callback_started(self) -> bool:
+        assert self.page is not None
+        host = (urlparse(self.page.url).hostname or "").casefold()
+        return host in {"127.0.0.1", "localhost"}
 
     def _raise_for_security_challenge(self) -> None:
         assert self.page is not None

@@ -184,6 +184,22 @@ def test_final_consent_portuguese_and_english(tmp_path, label):
     assert page.roles[("button", label)].clicked
 
 
+def test_continue_can_advance_to_channel_chooser_before_target_selected(tmp_path):
+    page = Page(roles=(("button", "Continuar"),))
+    assert (
+        browser(tmp_path, page)._click_consent_action(channel_selected=False)
+        == "CONTINUE"
+    )
+    assert page.roles[("button", "Continuar")].clicked
+
+
+def test_allow_never_clicks_before_target_channel_is_selected(tmp_path):
+    page = Page(roles=(("button", "Permitir"),))
+    with pytest.raises(OAuthUIError, match="OAUTH_TARGET_CHANNEL_NOT_FOUND"):
+        browser(tmp_path, page)._click_consent_action(channel_selected=False)
+    assert not page.roles[("button", "Permitir")].clicked
+
+
 @pytest.mark.parametrize(
     "body",
     (
