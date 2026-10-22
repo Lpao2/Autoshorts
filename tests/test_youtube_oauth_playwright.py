@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -11,11 +12,13 @@ from autoshorts.automation_config import (
     ThemeProfile,
 )
 from autoshorts.oauth_onboarding import authorize_provisioned_channel
-from autoshorts.youtube_oauth_playwright import PlaywrightOAuthBrowser
+from autoshorts.youtube_oauth import OAuthCredentialError
+from autoshorts.youtube_oauth_playwright import OAuthUIError, PlaywrightOAuthBrowser
 
 
 class Element:
-    def __init__(self, *, visible=True):
+    def __init__(self, label="", *, visible=True):
+        self.label = label
         self.visible = visible
         self.clicked = False
 
@@ -24,6 +27,12 @@ class Element:
 
     def click(self):
         self.clicked = True
+
+    def inner_text(self):
+        return self.label
+
+    def get_attribute(self, name):
+        return self.label if name == "aria-label" else None
 
 
 class Locator:
@@ -40,57 +49,166 @@ class Locator:
     def inner_text(self):
         return self.text
 
+    def all_inner_texts(self):
+        return [item.label for item in self.elements]
+
 
 class Page:
-    def __init__(self, *, body="", matches=0, buttons=0):
+    url = "https://accounts.google.com/oauth"
+
+    def __init__(self, *, body="", texts=(), roles=(), identifiers=()):
         self.body = body
-        self.matches = Locator(Element() for _ in range(matches))
-        self.buttons = Locator(Element() for _ in range(buttons))
+        self.texts = {text: Element(text) for text in texts}
+        self.roles = {
+            (role, label): Element(label) for role, label in roles
+        }
+        self.identifiers = {
+            email: Element(email) for email in identifiers
+        }
         self.waits = []
 
+    @staticmethod
+    def _matches(value, pattern, exact=False):
+        if isinstance(pattern, re.Pattern):
+            return bool(pattern.search(value))
+        return value == pattern if exact else pattern in value
+
     def locator(self, selector):
-        assert selector == "body"
-        return Locator(text=self.body)
+        if selector == "body":
+            return Locator(text=self.body)
+        match = re.fullmatch(r'\[data-identifier="(.+)"\]', selector)
+        if match and match.group(1) in self.identifiers:
+            return Locator((self.identifiers[match.group(1)],))
+        return Locator()
 
     def get_by_text(self, pattern, exact=False):
-        assert exact
-        return self.matches
+        return Locator(
+            element
+            for text, element in self.texts.items()
+            if self._matches(text, pattern, exact)
+        )
 
-    def get_by_role(self, role, name):
-        assert role == "button"
-        return self.buttons
+    def get_by_role(self, role, name=None):
+        return Locator(
+            element
+            for (item_role, label), element in self.roles.items()
+            if item_role == role
+            and (name is None or self._matches(label, name))
+        )
 
     def wait_for_timeout(self, milliseconds):
         self.waits.append(milliseconds)
 
+    def title(self):
+        return "Google OAuth"
+
+
+def browser(tmp_path, page, **kwargs):
+    value = PlaywrightOAuthBrowser(
+        tmp_path / "profile",
+        kwargs.pop("channel", "Força Constante"),
+        account_key="google-b",
+        expected_email="clicmarcelo@gmail.com",
+        expected_channel_id="UC-EXPECTED",
+        protected_channel_names=("Marcelo Clic", "Lucas Lp"),
+        **kwargs,
+    )
+    value.page = page
+    return value
+
+
+def test_expected_google_account_is_selected(tmp_path):
+    page = Page(identifiers=("clicmarcelo@gmail.com",))
+    target = browser(tmp_path, page)
+    assert target._select_expected_account()
+    assert page.identifiers["clicmarcelo@gmail.com"].clicked
+
+
+def test_missing_google_account_is_not_selected(tmp_path):
+    page = Page(identifiers=("other@example.test",))
+    assert not browser(tmp_path, page)._select_expected_account()
+    assert not page.identifiers["other@example.test"].clicked
+
+
+def test_expected_channel_is_selected(tmp_path):
+    page = Page(texts=("Força Constante", "Marcelo Clic"))
+    assert browser(tmp_path, page)._select_expected_channel()
+    assert page.texts["Força Constante"].clicked
+    assert not page.texts["Marcelo Clic"].clicked
+
+
+def test_wrong_channel_present_but_target_absent_is_not_selected(tmp_path):
+    page = Page(texts=("Marcelo Clic",))
+    assert not browser(tmp_path, page)._select_expected_channel()
+    assert not page.texts["Marcelo Clic"].clicked
+
+
+def test_protected_channel_can_never_be_the_target(tmp_path):
+    page = Page(texts=("Marcelo Clic",))
+    with pytest.raises(OAuthUIError, match="OAUTH_PROTECTED_CHANNEL"):
+        browser(tmp_path, page, channel="Marcelo Clic")._select_expected_channel()
+    assert not page.texts["Marcelo Clic"].clicked
+
+
+@pytest.mark.parametrize("label", ("Avançado", "Advanced"))
+def test_advanced_portuguese_and_english(tmp_path, label):
+    page = Page(roles=(("button", label),))
+    assert browser(tmp_path, page)._click_advanced()
+    assert page.roles[("button", label)].clicked
+
+
+@pytest.mark.parametrize(
+    "label", ("Ir para AutoShorts (não seguro)", "Go to AutoShorts (unsafe)")
+)
+def test_autoshorts_link_portuguese_and_english(tmp_path, label):
+    page = Page(roles=(("link", label),))
+    assert browser(tmp_path, page)._click_autoshorts_link()
+    assert page.roles[("link", label)].clicked
+
+
+@pytest.mark.parametrize("label", ("Permitir", "Allow"))
+def test_final_consent_portuguese_and_english(tmp_path, label):
+    page = Page(roles=(("button", label),))
+    assert browser(tmp_path, page)._click_final_consent()
+    assert page.roles[("button", label)].clicked
+
 
 @pytest.mark.parametrize(
     "body",
-    ("Enter your password", "2-Step Verification", "CAPTCHA"),
+    (
+        "Enter your password",
+        "2-Step Verification",
+        "CAPTCHA",
+        "Recovery email",
+    ),
 )
 def test_oauth_challenges_require_human(tmp_path, body):
-    browser = PlaywrightOAuthBrowser(tmp_path / "profile", "Expected")
-    browser.page = Page(body=body, matches=1)
-    browser._assist()
-    assert browser.status == "NEEDS_HUMAN"
-    assert not browser.page.matches.nth(0).clicked
+    target = browser(tmp_path, Page(body=body))
+    with pytest.raises(OAuthUIError, match="NEEDS_HUMAN"):
+        target._raise_for_security_challenge()
+    assert target.status == "NEEDS_HUMAN"
 
 
-@pytest.mark.parametrize("matches", (0, 2))
-def test_zero_or_ambiguous_channel_matches_require_human(tmp_path, matches):
-    browser = PlaywrightOAuthBrowser(tmp_path / "profile", "Expected")
-    browser.page = Page(matches=matches)
-    browser._assist()
-    assert browser.status == "NEEDS_HUMAN"
+def test_checkpoints_are_injectable_and_can_be_disabled(tmp_path):
+    messages = []
+    page = Page(identifiers=("clicmarcelo@gmail.com",))
+    enabled = browser(
+        tmp_path,
+        page,
+        require_confirmations=True,
+        confirm_callback=messages.append,
+    )
+    assert enabled._select_expected_account()
+    assert "clicmarcelo@gmail.com" in messages[0]
 
-
-def test_unique_channel_match_is_selected_and_consent_continues(tmp_path):
-    browser = PlaywrightOAuthBrowser(tmp_path / "profile", "Expected")
-    browser.page = Page(matches=1, buttons=1)
-    browser._assist()
-    assert browser.page.matches.nth(0).clicked
-    assert browser.page.buttons.nth(0).clicked
-    assert browser.status == "CONSENT_CONTINUED"
+    disabled_messages = []
+    disabled = browser(
+        tmp_path,
+        Page(identifiers=("clicmarcelo@gmail.com",)),
+        confirm_callback=disabled_messages.append,
+    )
+    assert disabled._select_expected_account()
+    assert disabled_messages == []
 
 
 def _config():
@@ -108,13 +226,12 @@ def _config():
     )
 
 
-def test_provisioned_oauth_uses_identity_profile_and_expected_channel(tmp_path):
+def test_provisioned_oauth_passes_expected_identity_to_browser(tmp_path):
     captured = {}
 
     class Browser:
-        def __init__(self, profile, name):
-            captured["profile"] = profile
-            captured["name"] = name
+        def __init__(self, profile, name, **kwargs):
+            captured.update(profile=profile, name=name, **kwargs)
 
     class Connection:
         def verify_binding(self, channel_id):
@@ -140,10 +257,13 @@ def test_provisioned_oauth_uses_identity_profile_and_expected_channel(tmp_path):
         tmp_path / "data/playwright/youtube-profiles/google-c"
     )
     assert captured["name"] == "Expected"
+    assert captured["account_key"] == "google-c"
+    assert captured["expected_email"] == "c@example.test"
+    assert captured["expected_channel_id"] == "UC-EXPECTED"
     assert result.status == "READY"
 
 
-def test_ready_oauth_is_not_repeated(tmp_path):
+def test_ready_oauth_is_not_repeated_without_force(tmp_path):
     class Connection:
         def verify_binding(self, channel_id):
             return SimpleNamespace(youtube_channel_id="UC-EXPECTED")
@@ -158,3 +278,29 @@ def test_ready_oauth_is_not_repeated(tmp_path):
         brand_plan_id="plan",
     )
     assert result.status == "READY"
+
+
+def test_channel_id_mismatch_is_not_persisted(tmp_path):
+    class Browser:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class Connection:
+        def verify_binding(self, channel_id):
+            return SimpleNamespace(youtube_channel_id="UC-EXPECTED")
+
+        def begin_connection(self, *args, **kwargs):
+            return "pending"
+
+        def confirm_expected_connection(self, pending, expected):
+            raise OAuthCredentialError("OAUTH_CHANNEL_MISMATCH")
+
+    with pytest.raises(OAuthCredentialError, match="OAUTH_CHANNEL_MISMATCH"):
+        authorize_provisioned_channel(
+            project_root=tmp_path,
+            config=_config(),
+            connection_service=Connection(),
+            brand_plan_id="plan",
+            browser_factory=Browser,
+            force_reauthorize=True,
+        )

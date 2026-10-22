@@ -104,14 +104,29 @@ def test_oauth_context_receives_resolved_executable(tmp_path, monkeypatch):
     captured = {}
 
     class Page:
+        closed = False
+
         def goto(self, *args, **kwargs):
             pass
 
         def wait_for_timeout(self, value):
             pass
 
+        def close(self):
+            self.closed = True
+
     class Context:
-        pages = [Page()]
+        def __init__(self):
+            self._pages = [Page()]
+
+        @property
+        def pages(self):
+            return [page for page in self._pages if not page.closed]
+
+        def new_page(self):
+            page = Page()
+            self._pages.append(page)
+            return page
 
     class Chromium:
         def launch_persistent_context(self, **kwargs):

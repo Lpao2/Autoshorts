@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=1)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--connect-oauth", action="store_true")
+    parser.add_argument(
+        "--oauth-confirm-steps",
+        action="store_true",
+        help="Reauthorize OAuth with ENTER checkpoints before UI consent actions.",
+    )
     return parser.parse_args()
 
 
@@ -88,6 +93,9 @@ def run() -> int:
                     config=config,
                     connection_service=connection,
                     brand_plan_id=args.brand_plan_id,
+                    require_confirmations=args.oauth_confirm_steps,
+                    confirm_callback=input if args.oauth_confirm_steps else None,
+                    force_reauthorize=args.oauth_confirm_steps,
                 )
                 print(oauth)
     else:

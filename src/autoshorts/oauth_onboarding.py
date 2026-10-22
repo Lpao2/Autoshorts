@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
@@ -219,6 +220,9 @@ def authorize_provisioned_channel(
     connection_service: YouTubeConnectionService,
     brand_plan_id: str,
     browser_factory=None,
+    require_confirmations: bool = False,
+    confirm_callback: Callable[[str], object] | None = None,
+    force_reauthorize: bool = False,
 ) -> ProvisioningOAuthResult:
     """Join provisioning to OAuth without duplicating either implementation."""
     channel = next(
@@ -238,7 +242,11 @@ def authorize_provisioned_channel(
         verified = connection_service.verify_binding(channel.channel_id)
     except (KeyError, RuntimeError, ValueError):
         verified = None
-    if verified and verified.youtube_channel_id == channel.youtube_channel_id:
+    if (
+        not force_reauthorize
+        and verified
+        and verified.youtube_channel_id == channel.youtube_channel_id
+    ):
         return ProvisioningOAuthResult(
             channel.channel_id, channel.youtube_channel_id, "READY"
         )
@@ -249,6 +257,16 @@ def authorize_provisioned_channel(
     browser = browser_factory(
         persistent_profile_path(project_root, channel.google_identity_id),
         channel.name,
+        account_key=channel.google_identity_id,
+        expected_email=next(
+            item.email
+            for item in config.google_identities
+            if item.identity_id == channel.google_identity_id
+        ),
+        expected_channel_id=channel.youtube_channel_id,
+        protected_channel_names=tuple(PROTECTED_NAMES),
+        require_confirmations=require_confirmations,
+        confirm_callback=confirm_callback,
     )
     pending = connection_service.begin_connection(
         channel.channel_id, authorization_browser=browser

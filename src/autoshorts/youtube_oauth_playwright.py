@@ -1,19 +1,58 @@
-"""Playwright browser controller for the existing localhost OAuth flow."""
+"""Playwright controller for the existing localhost YouTube OAuth flow."""
 
 from __future__ import annotations
 
 import re
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from autoshorts.browser_runtime import persistent_context_browser_options
 
+ADVANCED = re.compile(r"^(Avançado|Advanced)$", re.I)
+AUTOSHORTS_LINK = re.compile(r"^(Ir para|Go to).*AutoShorts", re.I)
+ALLOW = re.compile(r"^(Permitir|Allow)$", re.I)
+CONTINUE = re.compile(r"^(Continuar|Continue)$", re.I)
+SECURITY_CHALLENGES = (
+    "enter your password",
+    "digite sua senha",
+    "2-step verification",
+    "verificação em duas etapas",
+    "captcha",
+    "recovery email",
+    "e-mail de recuperação",
+    "verify it's you",
+    "confirme que é você",
+)
+
+
+class OAuthUIError(RuntimeError):
+    """Safe UI automation failure without OAuth secrets."""
+
 
 class PlaywrightOAuthBrowser:
-    """Open OAuth in a GoogleIdentity profile and assist only unambiguous UI."""
+    """Automate only explicit, semantically matched OAuth consent actions."""
 
-    def __init__(self, profile_path: Path, expected_channel_name: str) -> None:
+    def __init__(
+        self,
+        profile_path: Path,
+        expected_channel_name: str,
+        *,
+        account_key: str | None = None,
+        expected_email: str | None = None,
+        expected_channel_id: str | None = None,
+        protected_channel_names: tuple[str, ...] = (),
+        require_confirmations: bool = False,
+        confirm_callback: Callable[[str], object] | None = None,
+    ) -> None:
         self.profile_path = profile_path
         self.expected_channel_name = expected_channel_name
+        self.account_key = account_key
+        self.expected_email = expected_email
+        self.expected_channel_id = expected_channel_id
+        self.protected_channel_names = protected_channel_names
+        self.require_confirmations = require_confirmations
+        self.confirm_callback = confirm_callback or input
         self.status = "PENDING"
         self._playwright = None
         self.context = None
@@ -32,60 +71,186 @@ class PlaywrightOAuthBrowser:
             args=["--start-maximized"],
             **persistent_context_browser_options(),
         )
-        self.page = (
-            self.context.pages[0] if self.context.pages else self.context.new_page()
-        )
+        restored = list(self.context.pages)
+        self.page = self.context.new_page()
+        for page in restored:
+            if page != self.page:
+                page.close()
         self.page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-        self.page.wait_for_timeout(1_000)
         self._assist()
         return True
 
-    def _assist(self) -> None:
+    def _assist(self, *, timeout: int = 90) -> None:
         assert self.page is not None
-        body = self.page.locator("body").inner_text().casefold()
-        challenges = (
-            "enter your password",
-            "digite sua senha",
-            "2-step verification",
-            "verificação em duas etapas",
-            "captcha",
-            "verify it's you",
-            "confirme que é você",
+        deadline = time.monotonic() + timeout
+        account_selected = False
+        channel_selected = False
+        while time.monotonic() < deadline:
+            self._raise_for_security_challenge()
+            if not account_selected and self._select_expected_account():
+                account_selected = True
+                continue
+            if not channel_selected and self._select_expected_channel():
+                channel_selected = True
+                continue
+            if self._click_advanced():
+                continue
+            if self._click_autoshorts_link():
+                continue
+            if self._click_final_consent():
+                self.status = "CONSENT_CONTINUED"
+                return
+            self.page.wait_for_timeout(300)
+        self._fail("OAUTH_UI_TIMEOUT")
+
+    def _select_expected_account(self) -> bool:
+        if not self.expected_email:
+            return False
+        assert self.page is not None
+        escaped = self.expected_email.replace('"', r'\"')
+        locator = self.page.locator(f'[data-identifier="{escaped}"]')
+        match = self._unique_visible(locator)
+        if match is None:
+            locator = self.page.get_by_text(self.expected_email, exact=False)
+            match = self._unique_visible(locator)
+        if match is None:
+            return False
+        self._checkpoint(
+            "[OAUTH] Conta Google encontrada:\n"
+            f"{self.expected_email}\n\n"
+            "A automação vai selecionar esta conta.\n"
+            "Confira o navegador e pressione ENTER para continuar..."
         )
-        if any(text in body for text in challenges):
-            self.status = "NEEDS_HUMAN"
-            return
-        matches = self.page.get_by_text(
+        match.click()
+        self.page.wait_for_timeout(750)
+        self.status = "ACCOUNT_SELECTED"
+        return True
+
+    def _select_expected_channel(self) -> bool:
+        assert self.page is not None
+        if self.expected_channel_name.casefold() in {
+            item.casefold() for item in self.protected_channel_names
+        }:
+            self._fail("OAUTH_PROTECTED_CHANNEL")
+        locator = self.page.get_by_text(
             re.compile(rf"^{re.escape(self.expected_channel_name)}$", re.I),
             exact=True,
         )
-        visible = [
-            matches.nth(index)
-            for index in range(matches.count())
-            if matches.nth(index).is_visible()
-        ]
-        if len(visible) != 1:
-            self.status = "NEEDS_HUMAN"
-            return
-        visible[0].click()
+        match = self._unique_visible(locator)
+        if match is None:
+            return False
+        self._checkpoint(
+            "[OAUTH] Canal/Brand Account alvo encontrado:\n"
+            f"{self.expected_channel_name}\n"
+            f"Expected Channel ID: {self.expected_channel_id or 'indisponível'}\n\n"
+            "Confira visualmente se este é o canal correto.\n"
+            "Pressione ENTER para selecionar..."
+        )
+        match.click()
         self.page.wait_for_timeout(750)
         self.status = "CHANNEL_SELECTED"
-        self._continue_when_unambiguous()
+        return True
 
-    def _continue_when_unambiguous(self) -> None:
-        assert self.page is not None
-        button = self.page.get_by_role(
-            "button",
-            name=re.compile(r"^(Continue|Continuar|Allow|Permitir)$", re.I),
+    def _click_advanced(self) -> bool:
+        match = self._unique_role("button", ADVANCED)
+        if match is None:
+            return False
+        self._checkpoint(
+            "[OAUTH] Tela de aplicativo não verificado detectada.\n"
+            'Próxima ação: clicar em "Avançado".\n\n'
+            "Pressione ENTER para continuar..."
         )
+        match.click()
+        self.page.wait_for_timeout(500)
+        self.status = "ADVANCED_OPENED"
+        return True
+
+    def _click_autoshorts_link(self) -> bool:
+        match = self._unique_role("link", AUTOSHORTS_LINK)
+        if match is None:
+            return False
+        label = self._label(match)
+        self._checkpoint(
+            f'[OAUTH] Link detectado:\n"{label}"\n\n'
+            "Pressione ENTER para continuar..."
+        )
+        match.click()
+        self.page.wait_for_timeout(750)
+        self.status = "UNVERIFIED_APP_ACCEPTED"
+        return True
+
+    def _click_final_consent(self) -> bool:
+        match = self._unique_role("button", ALLOW)
+        if match is None:
+            match = self._unique_role("button", CONTINUE)
+        if match is None:
+            return False
+        label = self._label(match)
+        assert self.page is not None
+        self._checkpoint(
+            "[OAUTH] Tela de consentimento encontrada.\n"
+            "Aplicativo: AutoShorts\n"
+            f"Account key: {self.account_key or 'indisponível'}\n"
+            f"Google: {self.expected_email or 'indisponível'}\n"
+            f"Canal alvo: {self.expected_channel_name}\n"
+            f"Expected Channel ID: {self.expected_channel_id or 'indisponível'}\n"
+            f"URL atual: {self.page.url}\n"
+            f"Título: {self.page.title()}\n"
+            f"Botão: {label}\n\n"
+            f'Pressione ENTER para clicar em "{label}"...'
+        )
+        match.click()
+        return True
+
+    def _raise_for_security_challenge(self) -> None:
+        assert self.page is not None
+        body = self.page.locator("body").inner_text().casefold()
+        if any(text in body for text in SECURITY_CHALLENGES):
+            self._fail("NEEDS_HUMAN")
+
+    def _unique_role(self, role: str, name: re.Pattern[str]):
+        assert self.page is not None
+        return self._unique_visible(self.page.get_by_role(role, name=name))
+
+    @staticmethod
+    def _unique_visible(locator):
         visible = [
-            button.nth(index)
-            for index in range(button.count())
-            if button.nth(index).is_visible()
+            locator.nth(index)
+            for index in range(locator.count())
+            if locator.nth(index).is_visible()
         ]
-        if len(visible) == 1:
-            visible[0].click()
-            self.status = "CONSENT_CONTINUED"
+        return visible[0] if len(visible) == 1 else None
+
+    @staticmethod
+    def _label(element) -> str:
+        try:
+            return element.inner_text().strip()
+        except Exception:
+            return element.get_attribute("aria-label") or "action"
+
+    def _checkpoint(self, message: str) -> None:
+        if self.require_confirmations:
+            self.confirm_callback(message)
+
+    def _fail(self, reason: str) -> None:
+        self.status = reason
+        raise OAuthUIError(self._diagnostic(reason))
+
+    def _diagnostic(self, reason: str) -> str:
+        assert self.page is not None
+        try:
+            title = self.page.title()
+        except Exception:
+            title = "<unavailable>"
+        try:
+            headings = " | ".join(
+                self.page.get_by_role("heading").all_inner_texts()[:5]
+            )
+        except Exception:
+            headings = "<unavailable>"
+        return (
+            f"{reason}; url={self.page.url}; title={title}; headings={headings}"
+        )
 
     def close(self) -> None:
         if self.context is not None:
