@@ -241,27 +241,32 @@ class PlaywrightYouTubeAdapter:
             raise TimeoutError("'Selecione uma imagem' não está disponível.")
         opener.click()
 
-        self._frame_text(
-            re.compile(r"^(Escolha a sua imagem|Choose your image)$", re.I),
+        computer = self._find_in_frames(
+            (
+                re.compile(r"^Do computador$", re.I),
+                re.compile(r"^Computador$", re.I),
+                re.compile(r"^From computer$", re.I),
+                re.compile(r"^Computer$", re.I),
+            ),
             timeout=20,
+            roles=("tab", "button"),
+            allow_text=True,
         )
-        print('→ Popup "Escolha a sua imagem" aberto')
-
-        computer = self._frame_text(
-            re.compile(r"^(Do computador|From computer)$", re.I),
-            timeout=20,
-            role="tab",
-        )
-        print('→ Abrindo aba "Do computador"')
+        print("→ Popup de imagem aberto")
+        print('→ Abrindo "Do computador"')
         computer.click()
         self.page.wait_for_timeout(1_200)
 
-        upload = self._frame_text(
-            re.compile(
-                r"^(Carregar a partir do computador|Upload from computer)$", re.I
+        upload = self._find_in_frames(
+            (
+                re.compile(r"^Carregar a partir do computador$", re.I),
+                re.compile(r"carregar.*computador", re.I),
+                re.compile(r"^Upload from computer$", re.I),
+                re.compile(r"upload.*computer", re.I),
             ),
             timeout=15,
-            role="button",
+            roles=("button",),
+            allow_text=True,
         )
         print('→ Botão "Carregar a partir do computador" encontrado')
 
@@ -277,43 +282,66 @@ class PlaywrightYouTubeAdapter:
         print("→ Aguardando processamento da imagem")
         self.page.wait_for_timeout(4_500)
 
-        done = self._frame_text(
-            re.compile(r"^(Concluído|Done)$", re.I),
-            timeout=15,
-            role="button",
-            enabled=True,
-        )
-        print('→ Confirmando "Concluído"')
-        done.click()
+        try:
+            done = self._find_in_frames(
+                (
+                    re.compile(r"^Concluído$", re.I),
+                    re.compile(r"^Concluir$", re.I),
+                    re.compile(r"^Salvar$", re.I),
+                    re.compile(r"^Definir como foto do perfil$", re.I),
+                    re.compile(r"^Done$", re.I),
+                    re.compile(r"^Save$", re.I),
+                ),
+                timeout=15,
+                roles=("button",),
+                allow_text=True,
+                enabled=True,
+            )
+        except TimeoutError:
+            done = None
+        if done is not None:
+            print('→ Confirmando "Concluído"')
+            done.click()
 
         self._wait_for_logo_applied(before_images)
         print("→ Logo aplicada ao formulário")
 
-    def _frame_text(
+    def _find_in_frames(
         self,
-        pattern,
+        patterns,
         *,
         timeout: int,
-        role: str | None = None,
+        roles: tuple[str, ...] = (),
+        allow_text: bool = True,
         enabled: bool = False,
     ):
         assert self.page is not None
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             for frame in self.page.frames:
-                locator = (
-                    frame.get_by_role(role, name=pattern)
-                    if role
-                    else frame.get_by_text(pattern)
-                )
-                if (
-                    locator.count()
-                    and locator.first.is_visible()
-                    and (not enabled or locator.first.is_enabled())
-                ):
-                    return locator.first
+                for pattern in patterns:
+                    for role in roles:
+                        locator = frame.get_by_role(role, name=pattern)
+                        if self._usable(locator, enabled=enabled):
+                            return locator.first
+                    if allow_text:
+                        locator = frame.get_by_text(pattern)
+                        if self._usable(locator, enabled=enabled):
+                            return locator.first
             self.page.wait_for_timeout(300)
-        raise TimeoutError(f"Element not found in frames: {pattern.pattern}")
+        expected = " | ".join(pattern.pattern for pattern in patterns)
+        raise TimeoutError(f"Element not found in frames: {expected}")
+
+    @staticmethod
+    def _usable(locator, *, enabled: bool) -> bool:
+        try:
+            return bool(
+                locator.count()
+                and locator.first.is_visible()
+                and (not enabled or locator.first.is_enabled())
+            )
+        except Exception:
+            return False
 
     def _wait_for_logo_applied(self, before_images: set[str]) -> None:
         assert self.page is not None

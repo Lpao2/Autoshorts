@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -214,6 +215,15 @@ class LogoLocator:
     def click(self):
         self.clicked = True
 
+    @property
+    def first(self):
+        return self
+
+
+class MissingLocator(LogoLocator):
+    def count(self):
+        return 0
+
 
 class LogoChooser:
     def __init__(self):
@@ -237,12 +247,38 @@ class LogoChooserContext:
         return False
 
 
+class LogoFrame:
+    def __init__(self, *, roles=(), texts=()):
+        self.roles = {(role, text): LogoLocator(text) for role, text in roles}
+        self.texts = {text: LogoLocator(text) for text in texts}
+
+    @staticmethod
+    def _matching(items, pattern):
+        return next((locator for text, locator in items if pattern.search(text)), None)
+
+    def get_by_role(self, role, *, name):
+        locator = self._matching(
+            (
+                (text, value)
+                for (item_role, text), value in self.roles.items()
+                if item_role == role
+            ),
+            name,
+        )
+        return locator or MissingLocator("missing")
+
+    def get_by_text(self, pattern):
+        locator = self._matching(self.texts.items(), pattern)
+        return locator or MissingLocator("missing")
+
+
 class LogoPage:
-    def __init__(self, *, chooser_fails=False):
+    def __init__(self, *, frame, chooser_fails=False):
         self.opener = LogoLocator("opener")
         self.chooser = LogoChooser()
         self.chooser_fails = chooser_fails
         self.waits = []
+        self.frames = [frame]
 
     def get_by_text(self, _pattern):
         return type("First", (), {"first": self.opener})()
@@ -255,38 +291,44 @@ class LogoPage:
 
 
 class LogoFlowAdapter(PlaywrightYouTubeAdapter):
-    def __init__(self, *, missing=None, chooser_fails=False, apply_fails=False):
+    def __init__(
+        self,
+        *,
+        computer_role="tab",
+        computer_as_text=False,
+        upload_as_text=False,
+        missing_upload=False,
+        chooser_fails=False,
+        apply_fails=False,
+    ):
         super().__init__(headless=True)
-        self.page = LogoPage(chooser_fails=chooser_fails)
-        self.missing = missing
+        roles = [("button", "Done")]
+        texts = []
+        if computer_as_text:
+            texts.append("Do computador")
+        else:
+            roles.append((computer_role, "Do computador"))
+        if not missing_upload:
+            if upload_as_text:
+                texts.append("Carregar a partir do computador")
+            else:
+                roles.append(("button", "Carregar a partir do computador"))
+        frame = LogoFrame(roles=roles, texts=texts)
+        self.page = LogoPage(frame=frame, chooser_fails=chooser_fails)
         self.apply_fails = apply_fails
-        self.steps = []
-        self.locators = {}
 
     def _visible_image_sources(self):
         return {"before.png"}
 
-    def _frame_text(self, pattern, **_kwargs):
-        raw = pattern.pattern
-        if "Escolha" in raw:
-            step = "popup"
-        elif "Do computador" in raw:
-            step = "computer"
-        elif "Carregar" in raw:
-            step = "upload"
-        else:
-            step = "done"
-        self.steps.append(step)
-        if self.missing == step:
-            raise TimeoutError(f"missing {step}")
-        locator = LogoLocator(step)
-        self.locators[step] = locator
-        return locator
-
     def _wait_for_logo_applied(self, _before_images):
-        self.steps.append("applied")
         if self.apply_fails:
             raise TimeoutError("logo not applied")
+
+    def role_locator(self, role, text):
+        return self.page.frames[0].roles[(role, text)]
+
+    def text_locator(self, text):
+        return self.page.frames[0].texts[text]
 
 
 def logo_file(tmp_path):
@@ -299,29 +341,29 @@ def test_logo_upload_opens_popup_and_computer_tab(tmp_path, capsys):
     adapter = LogoFlowAdapter()
     adapter._upload_logo(logo_file(tmp_path))
     assert adapter.page.opener.clicked
-    assert adapter.steps[:2] == ["popup", "computer"]
+    assert adapter.role_locator("tab", "Do computador").clicked
     output = capsys.readouterr().out
-    assert 'Popup "Escolha a sua imagem" aberto' in output
-    assert 'Abrindo aba "Do computador"' in output
+    assert "Popup de imagem aberto" in output
+    assert 'Abrindo "Do computador"' in output
 
 
 def test_logo_upload_opens_file_chooser(tmp_path):
     adapter = LogoFlowAdapter()
     logo = logo_file(tmp_path)
     adapter._upload_logo(logo)
-    assert adapter.locators["upload"].clicked
+    assert adapter.role_locator("button", "Carregar a partir do computador").clicked
     assert adapter.page.chooser.path == str(logo)
 
 
 def test_logo_upload_clicks_done(tmp_path):
     adapter = LogoFlowAdapter()
     adapter._upload_logo(logo_file(tmp_path))
-    assert adapter.locators["done"].clicked
+    assert adapter.role_locator("button", "Done").clicked
 
 
 def test_logo_upload_fails_when_upload_button_is_missing(tmp_path):
-    adapter = LogoFlowAdapter(missing="upload")
-    with pytest.raises(TimeoutError, match="missing upload"):
+    adapter = LogoFlowAdapter(missing_upload=True)
+    with pytest.raises(TimeoutError, match="Element not found in frames"):
         adapter._upload_logo(logo_file(tmp_path))
 
 
@@ -340,9 +382,31 @@ def test_logo_upload_fails_when_image_is_not_confirmed(tmp_path):
 def test_logo_upload_complete_success(tmp_path, capsys):
     adapter = LogoFlowAdapter()
     adapter._upload_logo(logo_file(tmp_path))
-    assert adapter.steps == ["popup", "computer", "upload", "done", "applied"]
     output = capsys.readouterr().out
     assert "→ File chooser aberto" in output
     assert "→ master.png enviado" in output
     assert '→ Confirmando "Concluído"' in output
     assert "→ Logo aplicada ao formulário" in output
+
+
+def test_logo_upload_does_not_require_popup_title(tmp_path):
+    adapter = LogoFlowAdapter()
+    assert (
+        not adapter.page.frames[0]
+        .get_by_text(re.compile(r"Escolha a sua imagem", re.I))
+        .count()
+    )
+    adapter._upload_logo(logo_file(tmp_path))
+    assert adapter.page.chooser.path == str(tmp_path / "master.png")
+
+
+def test_computer_tab_falls_back_to_text(tmp_path):
+    adapter = LogoFlowAdapter(computer_as_text=True)
+    adapter._upload_logo(logo_file(tmp_path))
+    assert adapter.text_locator("Do computador").clicked
+
+
+def test_upload_button_falls_back_to_text(tmp_path):
+    adapter = LogoFlowAdapter(upload_as_text=True)
+    adapter._upload_logo(logo_file(tmp_path))
+    assert adapter.text_locator("Carregar a partir do computador").clicked
