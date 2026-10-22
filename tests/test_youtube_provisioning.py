@@ -150,6 +150,88 @@ def test_page_closed_by_timeout_is_replaced_for_retry():
     assert adapter.page is replacement
 
 
+def test_spa_account_entry_reaches_creation_form_without_url_change():
+    class Locator:
+        def __init__(self, page, visible=False, transition=None):
+            self.page = page
+            self.visible = visible
+            self.transition = transition
+
+        @property
+        def first(self):
+            return self
+
+        def count(self):
+            return int(self.visible)
+
+        def is_visible(self):
+            return self.visible
+
+        def click(self):
+            if self.transition:
+                self.page.state = self.transition
+
+        def evaluate(self, script):
+            self.click()
+
+    class SpaPage:
+        url = "https://www.youtube.com/account"
+
+        def __init__(self):
+            self.state = "account"
+
+        def is_closed(self):
+            return False
+
+        def goto(self, url, **kwargs):
+            self.url = "https://www.youtube.com/account"
+
+        def wait_for_timeout(self, value):
+            pass
+
+        def locator(self, selector):
+            if selector == "ytd-account-item-renderer":
+                return Locator(self)
+            if selector == 'a[href*="/create_channel"]':
+                return Locator(
+                    self,
+                    visible=self.state == "management",
+                    transition="form",
+                )
+            raise AssertionError(selector)
+
+        def get_by_text(self, pattern):
+            add_manage = bool(pattern.search("Adicionar ou gerenciar canais"))
+            create = bool(pattern.search("Crie um canal"))
+            return Locator(
+                self,
+                visible=(add_manage and self.state == "account")
+                or (create and self.state == "management"),
+                transition="management" if add_manage else "form",
+            )
+
+        def get_by_label(self, pattern):
+            return Locator(self, visible=self.state == "form")
+
+        def get_by_role(self, role, name):
+            return Locator(
+                self, visible=role == "button" and self.state == "form"
+            )
+
+    page = SpaPage()
+    adapter = PlaywrightYouTubeAdapter(headless=True)
+    adapter.page = page
+    adapter._open_channel_management()
+    assert page.state == "management"
+    assert page.url == "https://www.youtube.com/account"
+
+    create_link = page.locator('a[href*="/create_channel"]').first
+    create_link.evaluate("element => element.click()")
+    adapter._wait_for_creation_form()
+    assert page.state == "form"
+    assert page.url == "https://www.youtube.com/account"
+
+
 def test_open_uses_dedicated_page_and_closes_seven_restored_tabs(monkeypatch, tmp_path):
     class Page:
         def __init__(self):

@@ -25,6 +25,11 @@ from autoshorts.youtube_provisioning import (
 CHANNEL_SWITCHER = (
     "https://www.youtube.com/channel_switcher?next=%2Faccount&feature=settings"
 )
+ADD_OR_MANAGE = re.compile(
+    r"^(Adicionar ou gerenciar canais|Add or manage (?:your )?channels)$", re.I
+)
+CREATE_CHANNEL = re.compile(r"^(Crie um canal|Criar um canal|Create a channel)$", re.I)
+CREATE_CHANNEL_BUTTON = re.compile(r"^(Criar canal|Create channel)$", re.I)
 
 
 class PlaywrightYouTubeAdapter:
@@ -160,14 +165,7 @@ class PlaywrightYouTubeAdapter:
 
     def inspect_channels(self) -> tuple[ExistingYouTubeChannel, ...]:
         assert self.page is not None
-        self.navigate_youtube(
-            CHANNEL_SWITCHER,
-            usable=lambda: (
-                self.page.locator("ytd-account-item-renderer").count() > 0
-                or "criar um canal" in self._body().casefold()
-                or "create a channel" in self._body().casefold()
-            ),
-        )
+        self._open_channel_management()
         cards = self.page.locator("ytd-account-item-renderer")
         found: dict[tuple[str | None, str, str | None], ExistingYouTubeChannel] = {}
         for index in range(cards.count()):
@@ -195,23 +193,15 @@ class PlaywrightYouTubeAdapter:
 
     def create_channel(self, request: ProvisioningRequest) -> ExistingYouTubeChannel:
         assert self.page is not None
-        self.navigate_youtube(
-            CHANNEL_SWITCHER,
-            usable=lambda: (
-                "criar um canal" in self._body().casefold()
-                or "create a channel" in self._body().casefold()
-            ),
-        )
+        self._open_channel_management()
         self._raise_human()
         create_link = self.page.locator('a[href*="/create_channel"]').first
         if not create_link.count():
-            create_link = self.page.get_by_text(
-                re.compile(r"^(Criar um canal|Create a channel)$", re.I)
-            ).first
+            create_link = self.page.get_by_text(CREATE_CHANNEL).first
         if not create_link.count():
             raise RuntimeError("Create-channel action not found.")
         create_link.evaluate("element => element.click()")
-        self.page.wait_for_timeout(1_500)
+        self._wait_for_creation_form()
         name_input = self._input("Nome", "Name")
         handle_input = self._input("Identificador", "Handle")
         selected = None
@@ -273,6 +263,68 @@ class PlaywrightYouTubeAdapter:
                 return matches[0]
             self.page.wait_for_timeout(2_000)
         raise NavigationTimeout("Channel submitted but not confirmed in switcher.")
+
+    def _open_channel_management(self) -> None:
+        """Enter channel management by DOM state; YouTube may keep /account."""
+        assert self.page is not None
+        self.navigate_youtube(CHANNEL_SWITCHER, usable=self._account_page_usable)
+        if self._channel_management_usable():
+            return
+        action = self.page.get_by_text(ADD_OR_MANAGE).first
+        if not action.count() or not action.is_visible():
+            raise NavigationTimeout(
+                "YouTube account loaded without an Add/manage channels action."
+            )
+        action.click()
+        self._wait_for_dom(
+            self._channel_management_usable,
+            "Channel management did not become usable after Add/manage channels.",
+        )
+
+    def _account_page_usable(self) -> bool:
+        assert self.page is not None
+        action = self.page.get_by_text(ADD_OR_MANAGE).first
+        return self._channel_management_usable() or bool(
+            action.count() and action.is_visible()
+        )
+
+    def _channel_management_usable(self) -> bool:
+        assert self.page is not None
+        if self.page.locator("ytd-account-item-renderer").count() > 0:
+            return True
+        create_link = self.page.locator('a[href*="/create_channel"]').first
+        if create_link.count() and create_link.is_visible():
+            return True
+        create_text = self.page.get_by_text(CREATE_CHANNEL).first
+        return bool(create_text.count() and create_text.is_visible())
+
+    def _wait_for_creation_form(self) -> None:
+        self._wait_for_dom(
+            self._creation_form_usable,
+            "Channel creation form did not become usable.",
+        )
+
+    def _creation_form_usable(self) -> bool:
+        assert self.page is not None
+        name = self.page.get_by_label(re.compile(r"^(Nome|Name)$", re.I)).first
+        handle = self.page.get_by_label(
+            re.compile(r"^(Identificador|Handle)$", re.I)
+        ).first
+        create = self.page.get_by_role("button", name=CREATE_CHANNEL_BUTTON).first
+        return all(
+            item.count() and item.is_visible() for item in (name, handle, create)
+        )
+
+    def _wait_for_dom(
+        self, predicate: Callable[[], bool], error: str, *, timeout: int = 30
+    ) -> None:
+        assert self.page is not None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self._page_closed() and predicate():
+                return
+            self.page.wait_for_timeout(300)
+        raise NavigationTimeout(error)
 
     def _input(self, *labels: str):
         assert self.page is not None
