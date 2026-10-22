@@ -71,6 +71,8 @@ from autoshorts.state_store import (
 from autoshorts.theme_catalog import CatalogProvenance, CatalogStatus
 from autoshorts.youtube_branding import YouTubeBrandingService
 from autoshorts.youtube_oauth import YouTubeConnectionService
+from autoshorts.youtube_playwright import PlaywrightYouTubeAdapter
+from autoshorts.youtube_provisioning import YouTubeProvisioningService
 from autoshorts.youtube_publishing import (
     PublicationMetadata,
     YouTubePublicationService,
@@ -512,10 +514,12 @@ class AutoShortsWindow:
         automatic = ttk.Frame(notebook, padding=16)
         catalog = ttk.Frame(notebook, padding=16)
         publication = ttk.Frame(notebook, padding=16)
+        provisioning = ttk.Frame(notebook, padding=16)
         notebook.add(frame, text="Manual")
         notebook.add(automatic, text="Automático")
         notebook.add(catalog, text="Biblioteca de temas")
         notebook.add(publication, text="Publicação YouTube")
+        notebook.add(provisioning, text="Provisionamento YouTube")
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(9, weight=1)
         frame.rowconfigure(10, weight=1)
@@ -665,7 +669,178 @@ class AutoShortsWindow:
         self._build_automatic_tab(automatic, settings)
         self._build_catalog_tab(catalog)
         self._build_publication_tab(publication)
+        self._build_provisioning_tab(provisioning)
         self.poll_id = self.root.after(75, self.poll)
+
+    def _provisioning_service(self) -> YouTubeProvisioningService:
+        config = (
+            self.automation_config
+            or AutomationStore(default_automation_config_path()).load()
+        )
+        return YouTubeProvisioningService(
+            project_root=Path(__file__).resolve().parents[2],
+            state_db_path=self.state_db_path,
+            config=config,
+            adapter_factory=PlaywrightYouTubeAdapter,
+            protected_channels={
+                "google-a": ("Lucas Lp",),
+                "google-b": ("Marcelo Clic",),
+            },
+        )
+
+    def _build_provisioning_tab(self, frame: ttk.Frame) -> None:
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(3, weight=1)
+        ttk.Label(frame, text="Provisionamento YouTube", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            frame,
+            text="Operação administrativa via navegador visível; não usa OAuth da API.",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 8))
+        controls = ttk.Frame(frame)
+        controls.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        self.provisioning_identity = ttk.Combobox(controls, state="readonly", width=20)
+        self.provisioning_identity.pack(side="left")
+        for label, command in (
+            ("Atualizar existentes", self.inspect_provisioning),
+            ("Provisionar selecionado", self.provision_selected),
+            ("Provisionar pendentes", self.provision_pending),
+            ("Abrir sessão", self.open_provisioning_session),
+            ("Refazer login", self.open_provisioning_session),
+            ("Verificar sessão", self.verify_provisioning_session),
+            ("Pausar", lambda: self._cancel_provisioning(True)),
+            ("Cancelar após atual", lambda: self._cancel_provisioning(True)),
+            ("Retomar", self.provision_pending),
+        ):
+            ttk.Button(controls, text=label, command=command).pack(side="left", padx=2)
+        columns = (
+            "identity",
+            "session",
+            "theme",
+            "channel",
+            "expected_handle",
+            "actual_handle",
+            "logo",
+            "status",
+            "channel_id",
+            "error",
+        )
+        self.provisioning_tree = ttk.Treeview(frame, columns=columns, show="headings")
+        for column, label, width in (
+            ("identity", "Google Identity", 100),
+            ("session", "Sessão web", 100),
+            ("theme", "Tema", 110),
+            ("channel", "Canal", 150),
+            ("expected_handle", "Handle desejado", 160),
+            ("actual_handle", "Handle real", 150),
+            ("logo", "Logo", 220),
+            ("status", "Status", 130),
+            ("channel_id", "Channel ID", 170),
+            ("error", "Último erro", 220),
+        ):
+            self.provisioning_tree.heading(column, text=label)
+            self.provisioning_tree.column(
+                column, width=width, stretch=column in {"logo", "error"}
+            )
+        self.provisioning_tree.grid(row=3, column=0, sticky="nsew")
+        self.provisioning_status = tk.StringVar(master=self.root, value="Pronto.")
+        ttk.Label(frame, textvariable=self.provisioning_status).grid(
+            row=4, column=0, sticky="w", pady=(6, 0)
+        )
+        self.provisioning_service = self._provisioning_service()
+        self.provisioning_thread: Thread | None = None
+        identities = self.provisioning_service.list_accounts()
+        self.provisioning_identity["values"] = [item.identity_id for item in identities]
+        if identities:
+            self.provisioning_identity.set(identities[0].identity_id)
+        self.refresh_provisioning()
+
+    def refresh_provisioning(self) -> None:
+        for iid in self.provisioning_tree.get_children():
+            self.provisioning_tree.delete(iid)
+        with StateStore(self.state_db_path) as store:
+            sessions = store.youtube_web_session_statuses()
+        for item in self.provisioning_service.list_planned_channels():
+            request = item.request
+            session = sessions.get(request.google_identity_id, ("NEEDS_LOGIN", None))[0]
+            self.provisioning_tree.insert(
+                "",
+                "end",
+                iid=request.brand_plan_id,
+                values=(
+                    request.google_identity_id,
+                    session,
+                    item.theme_key,
+                    request.expected_name,
+                    request.handle_candidates[0],
+                    item.actual_handle or "",
+                    str(request.logo_path),
+                    item.status,
+                    item.youtube_channel_id or "",
+                    item.last_error or "",
+                ),
+            )
+
+    def _run_provisioning(self, operation, message: str) -> None:
+        if self.provisioning_thread and self.provisioning_thread.is_alive():
+            return
+        self.provisioning_status.set(message)
+
+        def worker() -> None:
+            try:
+                operation()
+                error = None
+            except Exception as exc:
+                error = str(exc)
+            self.root.after(0, lambda: self._finish_provisioning(error))
+
+        self.provisioning_thread = Thread(
+            target=worker, name="youtube-provisioning", daemon=False
+        )
+        self.provisioning_thread.start()
+
+    def _finish_provisioning(self, error: str | None) -> None:
+        self.refresh_provisioning()
+        self.provisioning_status.set(error or "Operação concluída.")
+
+    def inspect_provisioning(self) -> None:
+        identity = self.provisioning_identity.get()
+        self._run_provisioning(
+            lambda: self.provisioning_service.inspect_account(identity),
+            f"Inspecionando {identity}...",
+        )
+
+    def verify_provisioning_session(self) -> None:
+        identity = self.provisioning_identity.get()
+        self._run_provisioning(
+            lambda: self.provisioning_service.verify_session(identity),
+            f"Verificando sessão {identity}...",
+        )
+
+    def open_provisioning_session(self) -> None:
+        self.verify_provisioning_session()
+
+    def provision_selected(self) -> None:
+        selected = self.provisioning_tree.selection()
+        if selected:
+            self._run_provisioning(
+                lambda: self.provisioning_service.provision_channel(selected[0]),
+                "Provisionando canal selecionado...",
+            )
+
+    def provision_pending(self) -> None:
+        identity = self.provisioning_identity.get()
+        self._run_provisioning(
+            lambda: self.provisioning_service.resume(identity),
+            f"Retomando pendentes de {identity}...",
+        )
+
+    def _cancel_provisioning(self, after_current: bool) -> None:
+        self.provisioning_service.cancel(after_current=after_current)
+        self.provisioning_status.set(
+            "Cancelamento solicitado; concluirá o canal atual."
+        )
 
     def _build_catalog_tab(self, frame: ttk.Frame) -> None:
         frame.columnconfigure(0, weight=1)

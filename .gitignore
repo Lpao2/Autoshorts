@@ -54,6 +54,10 @@ last_video_index.json
 *.log
 logs/
 
+# Local development snapshots (the active provisioning CLI is tracked)
+tools/*.bak
+tools/*.before-*
+
 # Build
 build/
 dist/

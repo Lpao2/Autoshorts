@@ -65,7 +65,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 
 class ReviewPolicy(StrEnum):
@@ -318,6 +318,21 @@ class ChannelCredentialBinding:
     connected_at: str
     last_verified_at: str
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class YouTubeProvisioningRecord:
+    brand_plan_id: str
+    google_identity_id: str
+    expected_name: str
+    expected_handle: str
+    actual_handle: str | None
+    youtube_channel_id: str | None
+    status: str
+    logo_path: Path | None
+    last_error: str | None
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -2798,6 +2813,115 @@ class StateStore:
             for row in rows
         )
 
+    def planned_identity_assignments(self) -> dict[str, str]:
+        rows = self.connection.execute(
+            """SELECT brand_plan_id, planned_identity_id
+            FROM planned_identity_assignments"""
+        ).fetchall()
+        return {row["brand_plan_id"]: row["planned_identity_id"] for row in rows}
+
+    def assign_planned_identity(
+        self, brand_plan_id: str, google_identity_id: str
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO planned_identity_assignments
+                (brand_plan_id, planned_identity_id, created_at) VALUES (?, ?, ?)
+                ON CONFLICT(brand_plan_id) DO UPDATE SET
+                  planned_identity_id=excluded.planned_identity_id""",
+                (brand_plan_id, google_identity_id, _now()),
+            )
+
+    def youtube_provisioning_records(
+        self, google_identity_id: str | None = None
+    ) -> tuple[YouTubeProvisioningRecord, ...]:
+        sql = "SELECT * FROM youtube_channel_provisioning"
+        params: tuple[object, ...] = ()
+        if google_identity_id is not None:
+            sql += " WHERE google_identity_id=?"
+            params = (google_identity_id,)
+        sql += " ORDER BY expected_name"
+        return tuple(
+            _youtube_provisioning_record(row)
+            for row in self.connection.execute(sql, params).fetchall()
+        )
+
+    def save_youtube_provisioning_record(
+        self,
+        *,
+        brand_plan_id: str,
+        google_identity_id: str,
+        expected_name: str,
+        expected_handle: str,
+        status: str,
+        actual_handle: str | None = None,
+        youtube_channel_id: str | None = None,
+        logo_path: Path | None = None,
+        last_error: str | None = None,
+    ) -> YouTubeProvisioningRecord:
+        now = _now()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO youtube_channel_provisioning
+                (brand_plan_id, google_identity_id, expected_name, expected_handle,
+                 actual_handle, youtube_channel_id, status, logo_path, last_error,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(brand_plan_id) DO UPDATE SET
+                  google_identity_id=excluded.google_identity_id,
+                  expected_name=excluded.expected_name,
+                  expected_handle=excluded.expected_handle,
+                  actual_handle=COALESCE(excluded.actual_handle, actual_handle),
+                  youtube_channel_id=COALESCE(
+                    excluded.youtube_channel_id, youtube_channel_id
+                  ), status=excluded.status,
+                  logo_path=COALESCE(excluded.logo_path, logo_path),
+                  last_error=excluded.last_error, updated_at=excluded.updated_at""",
+                (
+                    brand_plan_id,
+                    google_identity_id,
+                    expected_name,
+                    expected_handle,
+                    actual_handle,
+                    youtube_channel_id,
+                    status,
+                    str(logo_path) if logo_path else None,
+                    last_error,
+                    now,
+                    now,
+                ),
+            )
+        row = self.connection.execute(
+            "SELECT * FROM youtube_channel_provisioning WHERE brand_plan_id=?",
+            (brand_plan_id,),
+        ).fetchone()
+        assert row is not None
+        return _youtube_provisioning_record(row)
+
+    def set_youtube_web_session_status(
+        self, google_identity_id: str, status: str, error: str | None = None
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO youtube_web_sessions
+                (google_identity_id, status, last_checked_at, last_error)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(google_identity_id) DO UPDATE SET
+                  status=excluded.status,
+                  last_checked_at=excluded.last_checked_at,
+                  last_error=excluded.last_error""",
+                (google_identity_id, status, _now(), error),
+            )
+
+    def youtube_web_session_statuses(self) -> dict[str, tuple[str, str | None]]:
+        rows = self.connection.execute(
+            "SELECT google_identity_id, status, last_error FROM youtube_web_sessions"
+        ).fetchall()
+        return {
+            row["google_identity_id"]: (row["status"], row["last_error"])
+            for row in rows
+        }
+
     def approve_planned_channel_brands(
         self,
         plans: tuple[PlannedChannelBrand, ...],
@@ -3871,6 +3995,30 @@ class StateStore:
                     url TEXT NOT NULL, title TEXT NOT NULL, upload_date TEXT,
                     duration_seconds INTEGER, hydrated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS youtube_channel_provisioning (
+                    brand_plan_id TEXT PRIMARY KEY,
+                    google_identity_id TEXT NOT NULL,
+                    expected_name TEXT NOT NULL,
+                    expected_handle TEXT NOT NULL,
+                    actual_handle TEXT,
+                    youtube_channel_id TEXT,
+                    status TEXT NOT NULL,
+                    logo_path TEXT,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_youtube_provisioning_identity
+                    ON youtube_channel_provisioning(google_identity_id, status);
+                CREATE TABLE IF NOT EXISTS youtube_web_sessions (
+                    google_identity_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    last_checked_at TEXT,
+                    last_error TEXT
+                );
                 """
                 )
                 self.connection.execute(
@@ -3975,6 +4123,10 @@ class StateStore:
             version = 28
         if version == 28:
             self._migrate_v28_to_v29()
+            version = 29
+        if version == 29:
+            self._migrate_v29_to_v30()
+            version = 30
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""
@@ -4788,6 +4940,39 @@ class StateStore:
                 """
             )
 
+    def _migrate_v29_to_v30(self) -> None:
+        """Persist administrative YouTube provisioning and web-session state."""
+        with self.connection:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS youtube_channel_provisioning (
+                    brand_plan_id TEXT PRIMARY KEY,
+                    google_identity_id TEXT NOT NULL,
+                    expected_name TEXT NOT NULL,
+                    expected_handle TEXT NOT NULL,
+                    actual_handle TEXT,
+                    youtube_channel_id TEXT,
+                    status TEXT NOT NULL,
+                    logo_path TEXT,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(brand_plan_id)
+                        REFERENCES planned_channel_brands(brand_plan_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_youtube_provisioning_identity
+                    ON youtube_channel_provisioning(google_identity_id, status);
+                CREATE TABLE IF NOT EXISTS youtube_web_sessions (
+                    google_identity_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    last_checked_at TEXT,
+                    last_error TEXT
+                );
+                PRAGMA user_version = 30;
+                """
+            )
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -5141,6 +5326,22 @@ def _publication_record(row: sqlite3.Row) -> PublicationRecord:
 
 def _optional_bool(value: int | None) -> bool | None:
     return None if value is None else bool(value)
+
+
+def _youtube_provisioning_record(row: sqlite3.Row) -> YouTubeProvisioningRecord:
+    return YouTubeProvisioningRecord(
+        row["brand_plan_id"],
+        row["google_identity_id"],
+        row["expected_name"],
+        row["expected_handle"],
+        row["actual_handle"],
+        row["youtube_channel_id"],
+        row["status"],
+        Path(row["logo_path"]) if row["logo_path"] else None,
+        row["last_error"],
+        row["created_at"],
+        row["updated_at"],
+    )
 
 
 def _publication_attempt(row: sqlite3.Row) -> PublicationAttempt:
