@@ -12,6 +12,11 @@ from autoshorts.automation_store import (
 )
 from autoshorts.channel_setup import link_approved_brand_plan
 from autoshorts.credential_store import FilesystemCredentialStore
+from autoshorts.oauth_onboarding import (
+    oauth_queue,
+    reconcile_publishing_channels,
+    run_guided_oauth,
+)
 from autoshorts.state_store import StateStore, default_state_db_path
 from autoshorts.youtube_branding import CAPABILITIES, YouTubeBrandingService
 from autoshorts.youtube_oauth import YouTubeConnectionService
@@ -35,6 +40,14 @@ def create_parser() -> argparse.ArgumentParser:
     oauth_connect = commands.add_parser("oauth-connect")
     oauth_connect.add_argument("--channel", required=True)
     oauth_connect.add_argument("--expected-youtube-channel-id", required=True)
+    oauth_prepare = commands.add_parser("oauth-prepare")
+    oauth_prepare.add_argument(
+        "--identity", action="append", choices=("google-a", "google-c"), required=True
+    )
+    oauth_missing = commands.add_parser("oauth-connect-missing")
+    oauth_missing.add_argument(
+        "--identity", action="append", choices=("google-a", "google-c"), required=True
+    )
     branding_dry_run = commands.add_parser("branding-dry-run")
     branding_dry_run.add_argument("--channel", required=True)
     branding_apply = commands.add_parser("branding-apply")
@@ -156,6 +169,34 @@ def _run(arguments, config, state: StateStore) -> int:
             "OAUTH_READY "
             f"channel={binding.youtube_channel_title} "
             f"channel_id={binding.youtube_channel_id}"
+        )
+        return 0
+    if command == "oauth-prepare":
+        identities = frozenset(arguments.identity)
+        result = reconcile_publishing_channels(config, state, identities)
+        AutomationStore(arguments.config).save(result.config)
+        print(
+            f"planned={result.planned} mapped={result.planned} "
+            f"created={result.created} reused={result.reused}"
+        )
+        print(
+            "missing_channel_id="
+            + (", ".join(result.missing_channel_id) or "NONE")
+        )
+        return 0
+    if command == "oauth-connect-missing":
+        identities = frozenset(arguments.identity)
+        items = oauth_queue(config, state, identities)
+        service = YouTubeConnectionService(
+            config, state, FilesystemCredentialStore()
+        )
+        ready, skipped, mismatches = run_guided_oauth(service, items)
+        current = oauth_queue(config, state, identities)
+        missing = sum(item.status != "READY" for item in current)
+        print(
+            "OAuth onboarding encerrado. "
+            f"READY={ready}/{len(items)} MISSING={missing} "
+            f"MISMATCH={mismatches} SKIPPED={skipped}"
         )
         return 0
     if command == "list-publications":

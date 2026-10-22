@@ -87,6 +87,7 @@ class PublishingChannel:
     editorial_profile: EditorialProfile = field(default_factory=EditorialProfile)
     visual_profile: VisualProfile = field(default_factory=VisualProfile)
     posting_policy: PostingPolicy = field(default_factory=PostingPolicy)
+    brand_plan_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.channel_id.strip() or not self.name.strip():
@@ -392,6 +393,7 @@ def _channel_to_dict(channel: PublishingChannel) -> dict[str, object]:
         "google_identity_id": channel.google_identity_id,
         "youtube_channel_id": channel.youtube_channel_id,
         "youtube_channel_title": channel.youtube_channel_title,
+        "brand_plan_id": channel.brand_plan_id,
         "editorial_profile": {
             "prompt_append": channel.editorial_profile.prompt_append,
             "headline_style": channel.editorial_profile.headline_style,
@@ -568,6 +570,7 @@ def _load_channel(data: object, theme_name: str) -> PublishingChannel:
             str(posting.get("timezone", "America/Sao_Paulo")),
             tuple(windows),
         ),
+        brand_plan_id=_optional_text(data.get("brand_plan_id")),
     )
 
 
