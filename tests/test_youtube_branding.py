@@ -11,6 +11,7 @@ from autoshorts.youtube_branding import (
     GoogleYouTubeBrandingBackend,
     YouTubeBrandingService,
     _conservative_branding,
+    _immutable_channel_identity,
     _language_matches,
     _youtube_banner_asset,
 )
@@ -154,6 +155,57 @@ def test_watermark_only_does_not_reapply_other_branding(tmp_path):
     store.close()
 
 
+def test_banner_only_preserves_channel_settings_and_skips_watermark(tmp_path):
+    backend = Backend()
+    backend.remote["brandingSettings"]["image"] = {}
+    target, store, channel = _service(tmp_path, backend=backend)
+    result = target.apply_banner_only(channel.channel_id)
+    assert result.banner_active
+    assert result.youtube_channel_id == "UC-A"
+    assert backend.uploads == 1
+    assert backend.watermarks == []
+    assert backend.updates[0]["channel"] == {
+        "description": "old",
+        "keywords": "old-keyword",
+        "country": "BR",
+        "trackingAnalyticsAccountId": "UA-preserve",
+        "title": "YouTube A",
+    }
+    assert backend.updates[0]["image"]["bannerExternalUrl"].endswith(
+        "new-banner"
+    )
+    store.close()
+
+
+def test_banner_only_accepts_insert_that_is_immediately_active(tmp_path):
+    class ImmediateBackend(Backend):
+        def upload_banner(self, credentials, path):
+            url = super().upload_banner(credentials, path)
+            self.remote["brandingSettings"]["image"] = {
+                "bannerImageUrl": "https://cdn.example/active-banner"
+            }
+            return url
+
+    backend = ImmediateBackend()
+    backend.remote["brandingSettings"]["image"] = {}
+    target, store, channel = _service(tmp_path, backend=backend)
+    result = target.apply_banner_only(channel.channel_id)
+    assert result.banner_active
+    assert backend.uploads == 1
+    assert backend.updates == []
+    store.close()
+
+
+def test_banner_only_wrong_remote_channel_stops_before_upload(tmp_path):
+    backend = Backend("UC-WRONG")
+    target, store, channel = _service(tmp_path, backend=backend)
+    with pytest.raises(ValueError, match="channel ID"):
+        target.apply_banner_only(channel.channel_id)
+    assert backend.uploads == 0
+    assert backend.updates == []
+    store.close()
+
+
 def test_wrong_remote_channel_stops_before_banner_upload(tmp_path):
     backend = Backend("UC-WRONG")
     target, store, channel = _service(tmp_path, backend=backend)
@@ -180,6 +232,32 @@ def test_language_validation_accepts_youtube_region_normalization():
     assert _language_matches("pt-BR", "pt-BR")
     assert not _language_matches("pt-BR", "en")
     assert not _language_matches("pt-BR", None)
+
+
+def test_remote_identity_ignores_only_thumbnail_query_strings():
+    before = {
+        "snippet": {
+            "title": "A",
+            "customUrl": "@a",
+            "thumbnails": {"default": {"url": "https://cdn/x.jpg?a=1"}},
+        }
+    }
+    after = {
+        "snippet": {
+            "title": "A",
+            "customUrl": "@a",
+            "thumbnails": {"default": {"url": "https://cdn/x.jpg?a=2"}},
+        }
+    }
+    changed = {
+        "snippet": {
+            "title": "A",
+            "customUrl": "@a",
+            "thumbnails": {"default": {"url": "https://cdn/other.jpg"}},
+        }
+    }
+    assert _immutable_channel_identity(before) == _immutable_channel_identity(after)
+    assert _immutable_channel_identity(before) != _immutable_channel_identity(changed)
 
 
 def test_watermark_disables_gzip_for_empty_204_response(tmp_path, monkeypatch):

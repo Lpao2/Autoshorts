@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 from autoshorts.automation_config import AutomationConfig, PublishingChannel
 from autoshorts.brand_assets import (
@@ -95,6 +96,15 @@ class BrandingApplyResult:
 class WatermarkApplyResult:
     plan: ChannelBrandingPlan
     http_result: str
+
+
+@dataclass(frozen=True, slots=True)
+class BannerApplyResult:
+    publishing_channel_id: str
+    youtube_channel_id: str
+    banner: GeneratedBrandAsset
+    remote: dict[str, Any]
+    banner_active: bool
 
 
 class YouTubeBrandingBackend(Protocol):
@@ -303,6 +313,72 @@ class YouTubeBrandingService:
         # watermarks.set has no response resource and succeeds with HTTP 204.
         return WatermarkApplyResult(plan, "HTTP 204 No Content")
 
+    def apply_banner_only(self, publishing_channel_id: str) -> BannerApplyResult:
+        """Apply only the latest valid banner and preserve all other settings."""
+        channel = self._channel(publishing_channel_id)
+        kit = self.state_store.get_approved_brand_kit(channel.channel_id)
+        brand_plan_id = channel.brand_plan_id or (
+            kit.source_plan_id if kit is not None else None
+        )
+        if not brand_plan_id:
+            raise ValueError("Publishing channel has no Brand Plan.")
+        banner = self.state_store.latest_valid_brand_asset(
+            brand_plan_id, BrandAssetType.BANNER
+        )
+        if banner is None:
+            raise ValueError("Publishing channel has no valid banner asset.")
+        banner = _youtube_banner_asset(banner)
+        _validate_asset(banner, 2560, 1440, 6 * 1024 * 1024)
+        credentials = self.connection_service.load_verified_credentials(
+            publishing_channel_id
+        )
+        binding = self.state_store.get_channel_binding(publishing_channel_id)
+        if binding is None or binding.status != "CONNECTED":
+            raise ValueError("Publishing channel has no connected OAuth binding.")
+        target_id = channel.youtube_channel_id or binding.youtube_channel_id
+        if binding.youtube_channel_id != target_id:
+            raise ValueError("OAuth binding Channel ID does not match target.")
+        before = self.backend.get_channel(credentials)
+        if before.get("id") != target_id:
+            raise ValueError("Authenticated channel ID does not match target.")
+        immutable_before = _immutable_channel_identity(before)
+        banner_url = self.backend.upload_banner(credentials, banner.file_path)
+        after_upload = self.backend.get_channel(credentials)
+        if after_upload.get("id") != target_id:
+            raise RuntimeError("Remote validation returned the wrong channel.")
+        if _active_banner(after_upload):
+            return BannerApplyResult(
+                publishing_channel_id,
+                target_id,
+                banner,
+                after_upload,
+                True,
+            )
+        branding = _conservative_branding(before.get("brandingSettings", {}))
+        remote_title = before.get("snippet", {}).get("title")
+        if not isinstance(remote_title, str) or not remote_title:
+            raise RuntimeError("Remote channel title is unavailable.")
+        # YouTube requires channel.title in channels.update even when the title is
+        # unchanged. Echo the exact remote value; this flow never renames channels.
+        branding.setdefault("channel", {})["title"] = remote_title
+        branding["image"] = {"bannerExternalUrl": banner_url}
+        self.backend.update_branding(credentials, target_id, branding)
+        after = self.backend.get_channel(credentials)
+        if after.get("id") != target_id:
+            raise RuntimeError("Remote validation returned the wrong channel.")
+        if _immutable_channel_identity(after) != immutable_before:
+            raise RuntimeError("Remote validation found changed channel identity.")
+        active = _active_banner(after)
+        if not active:
+            raise RuntimeError("Remote validation did not confirm an active banner.")
+        return BannerApplyResult(
+            publishing_channel_id,
+            target_id,
+            banner,
+            after,
+            True,
+        )
+
     def _channel(self, channel_id: str) -> PublishingChannel:
         channel = next(
             (
@@ -393,6 +469,15 @@ def _conservative_branding(remote: dict[str, Any]) -> dict[str, Any]:
     return {"channel": channel}
 
 
+def _active_banner(remote: dict[str, Any]) -> bool:
+    image = remote.get("brandingSettings", {}).get("image", {})
+    return bool(
+        image.get("bannerExternalUrl")
+        or image.get("bannerImageUrl")
+        or image.get("bannerTvHighImageUrl")
+    )
+
+
 def _language_matches(requested: str, returned: object) -> bool:
     """YouTube may normalize a regional language such as pt-BR to pt."""
     if not isinstance(returned, str):
@@ -415,5 +500,18 @@ def _immutable_channel_identity(remote: dict[str, Any]) -> tuple[object, ...]:
     return (
         snippet.get("title"),
         snippet.get("customUrl"),
-        deepcopy(snippet.get("thumbnails")),
+        _stable_thumbnail_identity(snippet.get("thumbnails")),
     )
+
+
+def _stable_thumbnail_identity(value: object) -> object:
+    """Ignore expiring CDN query strings without ignoring a changed logo path."""
+    if not isinstance(value, dict):
+        return deepcopy(value)
+    result = deepcopy(value)
+    for thumbnail in result.values():
+        if not isinstance(thumbnail, dict) or not isinstance(thumbnail.get("url"), str):
+            continue
+        parts = urlsplit(thumbnail["url"])
+        thumbnail["url"] = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    return result

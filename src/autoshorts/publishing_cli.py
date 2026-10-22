@@ -56,6 +56,9 @@ def create_parser() -> argparse.ArgumentParser:
     watermark_apply = commands.add_parser("branding-watermark")
     watermark_apply.add_argument("--channel", required=True)
     watermark_apply.add_argument("--confirm-watermark", action="store_true")
+    banner_apply = commands.add_parser("branding-banner")
+    banner_apply.add_argument("--channel", required=True)
+    banner_apply.add_argument("--confirm-banner", action="store_true")
     link = commands.add_parser("link-brand")
     link.add_argument("--channel", required=True)
     create = commands.add_parser("create")
@@ -235,10 +238,19 @@ def _run(arguments, config, state: StateStore) -> int:
         "branding-dry-run",
         "branding-apply",
         "branding-watermark",
+        "branding-banner",
     }:
         service = YouTubeBrandingService(
             config, state, FilesystemCredentialStore()
         )
+        if command == "branding-banner":
+            if not arguments.confirm_banner:
+                raise ValueError("Remote banner requires --confirm-banner.")
+            result = service.apply_banner_only(arguments.channel)
+            print(f"BANNER_VERSION={result.banner.version}")
+            print(f"BANNER_REMOTE={'PASS' if result.banner_active else 'FAIL'}")
+            print("REMOTE_VALIDATION=PASS")
+            return 0
         plan = service.dry_run(arguments.channel)
         _print_branding_plan(plan)
         if command == "branding-dry-run":
