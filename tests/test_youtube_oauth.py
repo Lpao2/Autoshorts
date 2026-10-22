@@ -19,6 +19,7 @@ from autoshorts.youtube_oauth import (
     PendingChannelConnection,
     YouTubeChannelIdentity,
     YouTubeConnectionService,
+    _raise_identity_error,
 )
 
 
@@ -36,7 +37,7 @@ class Backend:
         self.authorize_scopes = None
         self.load_scopes = None
 
-    def authorize(self, client_secret_path, scopes):
+    def authorize(self, client_secret_path, scopes, browser=None):
         self.authorize_calls += 1
         self.authorize_scopes = scopes
         return Credentials("secret-access-token")
@@ -279,3 +280,10 @@ def test_outdated_scope_requires_reauth_without_destroying_binding(
     assert state.get_channel_binding("lol-a") == binding
     assert state.get_channel_binding("lol-a").status == "CONNECTED"
     state.close()
+
+
+def test_youtube_signup_required_is_safe_non_persistable_error():
+    with pytest.raises(
+        OAuthCredentialError, match="OAUTH_IDENTITY_WITHOUT_CHANNEL"
+    ):
+        _raise_identity_error(RuntimeError("youtubeSignupRequired"))

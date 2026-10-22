@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 from autoshorts.automation_config import AutomationConfig, PublishingChannel
@@ -10,6 +11,7 @@ from autoshorts.brand_planning import PlannedChannelBrand
 from autoshorts.state_store import StateStore
 from autoshorts.theme_catalog import instantiate_theme
 from autoshorts.youtube_oauth import YouTubeConnectionService
+from autoshorts.youtube_provisioning import persistent_profile_path
 
 ALLOWED_IDENTITIES = frozenset({"google-a", "google-c"})
 PROTECTED_NAMES = frozenset({"lucas lp", "marcelo clic"})
@@ -30,6 +32,13 @@ class OAuthQueueItem:
     channel_name: str
     google_identity_id: str
     expected_youtube_channel_id: str
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisioningOAuthResult:
+    publishing_channel_id: str
+    youtube_channel_id: str
     status: str
 
 
@@ -201,6 +210,55 @@ def run_guided_oauth(
         )
         ready += 1
     return ready, skipped, mismatches
+
+
+def authorize_provisioned_channel(
+    *,
+    project_root: Path,
+    config: AutomationConfig,
+    connection_service: YouTubeConnectionService,
+    brand_plan_id: str,
+    browser_factory=None,
+) -> ProvisioningOAuthResult:
+    """Join provisioning to OAuth without duplicating either implementation."""
+    channel = next(
+        (
+            item
+            for theme in config.themes
+            for item in theme.channels
+            if item.brand_plan_id == brand_plan_id
+        ),
+        None,
+    )
+    if channel is None:
+        raise ValueError("Brand Plan has no local PublishingChannel mapping.")
+    if not channel.google_identity_id or not channel.youtube_channel_id:
+        raise ValueError("PublishingChannel is not ready for OAuth.")
+    try:
+        verified = connection_service.verify_binding(channel.channel_id)
+    except (KeyError, RuntimeError, ValueError):
+        verified = None
+    if verified and verified.youtube_channel_id == channel.youtube_channel_id:
+        return ProvisioningOAuthResult(
+            channel.channel_id, channel.youtube_channel_id, "READY"
+        )
+    if browser_factory is None:
+        from autoshorts.youtube_oauth_playwright import PlaywrightOAuthBrowser
+
+        browser_factory = PlaywrightOAuthBrowser
+    browser = browser_factory(
+        persistent_profile_path(project_root, channel.google_identity_id),
+        channel.name,
+    )
+    pending = connection_service.begin_connection(
+        channel.channel_id, authorization_browser=browser
+    )
+    binding = connection_service.confirm_expected_connection(
+        pending, channel.youtube_channel_id
+    )
+    return ProvisioningOAuthResult(
+        channel.channel_id, binding.youtube_channel_id, "READY"
+    )
 
 
 def _linked_channel(

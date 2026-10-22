@@ -7,7 +7,13 @@ import argparse
 from pathlib import Path
 
 from autoshorts.automation_store import AutomationStore, default_automation_config_path
-from autoshorts.state_store import default_state_db_path
+from autoshorts.credential_store import FilesystemCredentialStore
+from autoshorts.oauth_onboarding import (
+    authorize_provisioned_channel,
+    reconcile_publishing_channels,
+)
+from autoshorts.state_store import StateStore, default_state_db_path
+from autoshorts.youtube_oauth import YouTubeConnectionService
 from autoshorts.youtube_playwright import PlaywrightYouTubeAdapter
 from autoshorts.youtube_provisioning import YouTubeProvisioningService
 
@@ -33,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--brand-plan-id")
     parser.add_argument("--limit", type=int, default=1)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--connect-oauth", action="store_true")
     return parser.parse_args()
 
 
@@ -56,8 +63,30 @@ def run() -> int:
         for item in app.inspect_account(args.account):
             print(item)
     elif args.brand_plan_id:
-        print(app.provision_channel(args.brand_plan_id))
+        result = app.provision_channel(args.brand_plan_id)
+        print(result)
+        if args.connect_oauth and result.youtube_channel_id:
+            config_path = default_automation_config_path(ROOT)
+            config_store = AutomationStore(config_path)
+            with StateStore(default_state_db_path(ROOT)) as state:
+                mapping = reconcile_publishing_channels(
+                    config_store.load(), state, frozenset({args.account})
+                )
+                config = config_store.save(mapping.config)
+                connection = YouTubeConnectionService(
+                    config, state, FilesystemCredentialStore()
+                )
+                oauth = authorize_provisioned_channel(
+                    project_root=ROOT,
+                    config=config,
+                    connection_service=connection,
+                    brand_plan_id=args.brand_plan_id,
+                )
+                print(oauth)
     else:
+        if args.connect_oauth:
+            parser_error = "--connect-oauth requires --brand-plan-id"
+            raise ValueError(parser_error)
         for result in app.resume(args.account, limit=args.limit):
             print(result)
     return 0

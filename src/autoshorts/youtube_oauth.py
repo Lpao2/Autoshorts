@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import webbrowser
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,7 +43,10 @@ class OAuthCredentialError(RuntimeError):
 
 class OAuthBackend(Protocol):
     def authorize(
-        self, client_secret_path: Path, scopes: tuple[str, ...]
+        self,
+        client_secret_path: Path,
+        scopes: tuple[str, ...],
+        browser: object | None = None,
     ) -> object: ...
     def load(self, payload: str, scopes: tuple[str, ...]) -> object: ...
     def serialize(self, credentials: object) -> str: ...
@@ -52,7 +56,12 @@ class OAuthBackend(Protocol):
 class GoogleYouTubeOAuthBackend:
     """Lazy imports keep non-OAuth installations usable."""
 
-    def authorize(self, client_secret_path: Path, scopes: tuple[str, ...]) -> object:
+    def authorize(
+        self,
+        client_secret_path: Path,
+        scopes: tuple[str, ...],
+        browser: object | None = None,
+    ) -> object:
         try:
             from google_auth_oauthlib.flow import InstalledAppFlow
         except ImportError as exc:
@@ -62,13 +71,23 @@ class GoogleYouTubeOAuthBackend:
         flow = InstalledAppFlow.from_client_secrets_file(
             str(client_secret_path), scopes=list(scopes)
         )
-        return flow.run_local_server(
-            host="127.0.0.1",
-            port=0,
-            access_type="offline",
-            prompt="consent",
-            open_browser=True,
-        )
+        browser_name = None
+        if browser is not None:
+            browser_name = f"autoshorts-oauth-{id(browser)}"
+            webbrowser.register(browser_name, None, browser)  # type: ignore[arg-type]
+        try:
+            return flow.run_local_server(
+                host="127.0.0.1",
+                port=0,
+                access_type="offline",
+                prompt="consent",
+                open_browser=True,
+                browser=browser_name,
+            )
+        finally:
+            close = getattr(browser, "close", None)
+            if close is not None:
+                close()
 
     def load(self, payload: str, scopes: tuple[str, ...]) -> object:
         from google.oauth2.credentials import Credentials
@@ -90,12 +109,16 @@ class GoogleYouTubeOAuthBackend:
             if not getattr(credentials, "refresh_token", None):
                 raise RuntimeError("Credencial expirada sem refresh token.")
             credentials.refresh(Request())  # type: ignore[attr-defined]
-        response = (
-            build("youtube", "v3", credentials=credentials, cache_discovery=False)
-            .channels()
-            .list(part="snippet", mine=True)
-            .execute()
-        )
+        try:
+            response = (
+                build("youtube", "v3", credentials=credentials, cache_discovery=False)
+                .channels()
+                .list(part="snippet", mine=True)
+                .execute()
+            )
+        except Exception as exc:
+            _raise_identity_error(exc)
+            raise
         items = response.get("items", [])
         if len(items) != 1:
             raise RuntimeError(
@@ -118,7 +141,12 @@ class YouTubeConnectionService:
         self.credential_store = credential_store
         self.backend = backend or GoogleYouTubeOAuthBackend()
 
-    def begin_connection(self, publishing_channel_id: str) -> PendingChannelConnection:
+    def begin_connection(
+        self,
+        publishing_channel_id: str,
+        *,
+        authorization_browser: object | None = None,
+    ) -> PendingChannelConnection:
         channel = self._channel(publishing_channel_id)
         if not channel.enabled:
             raise ValueError("O canal de publicação está desativado.")
@@ -132,7 +160,9 @@ class YouTubeConnectionService:
         if not identity.enabled:
             raise ValueError("A Google Identity vinculada está desativada.")
         client_secret = self._client_secret_path()
-        credentials = self.backend.authorize(client_secret, YOUTUBE_SCOPES)
+        credentials = self.backend.authorize(
+            client_secret, YOUTUBE_SCOPES, authorization_browser
+        )
         identity = self.backend.identify_channel(credentials)
         return PendingChannelConnection(
             channel.channel_id,
@@ -287,3 +317,8 @@ class YouTubeConnectionService:
                 f"O arquivo configurado em {CLIENT_SECRET_ENV} não existe."
             )
         return path
+
+
+def _raise_identity_error(error: Exception) -> None:
+    if "youtubeSignupRequired" in str(error):
+        raise OAuthCredentialError("OAUTH_IDENTITY_WITHOUT_CHANNEL") from None

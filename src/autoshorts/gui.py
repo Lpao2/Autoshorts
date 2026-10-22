@@ -59,6 +59,10 @@ from autoshorts.faster_whisper_provider import FasterWhisperProvider
 from autoshorts.gemini_analysis_provider import GeminiAnalysisProvider
 from autoshorts.gemini_reranker import GeminiCandidateReranker
 from autoshorts.gui_jobs import JobController, JobRequest
+from autoshorts.oauth_onboarding import (
+    authorize_provisioned_channel,
+    reconcile_publishing_channels,
+)
 from autoshorts.pipeline import PipelineResult
 from autoshorts.render_events import RenderEvent
 from autoshorts.render_plan import RenderPlan
@@ -698,7 +702,7 @@ class AutoShortsWindow:
         )
         ttk.Label(
             frame,
-            text="Operação administrativa via navegador visível; não usa OAuth da API.",
+            text="Provisionamento web e vínculo OAuth com perfil persistente.",
         ).grid(row=1, column=0, sticky="w", pady=(2, 8))
         controls = ttk.Frame(frame)
         controls.grid(row=2, column=0, sticky="ew", pady=(0, 8))
@@ -707,6 +711,7 @@ class AutoShortsWindow:
         for label, command in (
             ("Atualizar existentes", self.inspect_provisioning),
             ("Provisionar selecionado", self.provision_selected),
+            ("Autorizar OAuth", self.authorize_provisioned_oauth),
             ("Provisionar pendentes", self.provision_pending),
             ("Abrir sessão", self.open_provisioning_session),
             ("Refazer login", self.open_provisioning_session),
@@ -725,6 +730,7 @@ class AutoShortsWindow:
             "actual_handle",
             "logo",
             "status",
+            "oauth",
             "channel_id",
             "error",
         )
@@ -738,6 +744,7 @@ class AutoShortsWindow:
             ("actual_handle", "Handle real", 150),
             ("logo", "Logo", 220),
             ("status", "Status", 130),
+            ("oauth", "OAuth", 110),
             ("channel_id", "Channel ID", 170),
             ("error", "Último erro", 220),
         ):
@@ -763,6 +770,21 @@ class AutoShortsWindow:
             self.provisioning_tree.delete(iid)
         with StateStore(self.state_db_path) as store:
             sessions = store.youtube_web_session_statuses()
+            oauth_by_plan = {}
+            if self.automation_config is not None:
+                for theme in self.automation_config.themes:
+                    for channel in theme.channels:
+                        if not channel.brand_plan_id:
+                            continue
+                        binding = store.get_channel_binding(channel.channel_id)
+                        oauth_by_plan[channel.brand_plan_id] = (
+                            "READY"
+                            if binding
+                            and binding.status == "CONNECTED"
+                            and binding.youtube_channel_id
+                            == channel.youtube_channel_id
+                            else "MISSING"
+                        )
         for item in self.provisioning_service.list_planned_channels():
             request = item.request
             session = sessions.get(request.google_identity_id, ("NEEDS_LOGIN", None))[0]
@@ -779,6 +801,7 @@ class AutoShortsWindow:
                     item.actual_handle or "",
                     str(request.logo_path),
                     item.status,
+                    oauth_by_plan.get(request.brand_plan_id, "MISSING"),
                     item.youtube_channel_id or "",
                     item.last_error or "",
                 ),
@@ -830,6 +853,35 @@ class AutoShortsWindow:
                 lambda: self.provisioning_service.provision_channel(selected[0]),
                 "Provisionando canal selecionado...",
             )
+
+    def authorize_provisioned_oauth(self) -> None:
+        selected = self.provisioning_tree.selection()
+        if not selected or self.automation_config is None:
+            messagebox.showinfo("OAuth YouTube", "Selecione um canal provisionado.")
+            return
+        identity_id = self.provisioning_identity.get()
+
+        def authorize():
+            with StateStore(self.state_db_path) as state:
+                mapping = reconcile_publishing_channels(
+                    self.automation_config,
+                    state,
+                    frozenset({identity_id}),
+                )
+                self.automation_config = self.automation_store.save(mapping.config)
+                connection = YouTubeConnectionService(
+                    self.automation_config,
+                    state,
+                    self.credential_store,
+                )
+                return authorize_provisioned_channel(
+                    project_root=self.provisioning_service.project_root,
+                    config=self.automation_config,
+                    connection_service=connection,
+                    brand_plan_id=selected[0],
+                )
+
+        self._run_provisioning(authorize, "Aguardando autorização OAuth...")
 
     def provision_pending(self) -> None:
         identity = self.provisioning_identity.get()
