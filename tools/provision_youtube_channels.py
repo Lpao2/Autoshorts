@@ -82,7 +82,10 @@ def run() -> int:
             config_store = AutomationStore(config_path)
             with StateStore(default_state_db_path(ROOT)) as state:
                 mapping = reconcile_publishing_channels(
-                    config_store.load(), state, frozenset({args.account})
+                    config_store.load(),
+                    state,
+                    frozenset({args.account}),
+                    frozenset({args.brand_plan_id}),
                 )
                 config = config_store.save(mapping.config)
                 connection = YouTubeConnectionService(

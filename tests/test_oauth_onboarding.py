@@ -182,3 +182,48 @@ def test_reconcile_reuses_local_slot_and_is_idempotent():
     assert channels[0].youtube_channel_id == "UC-A"
     assert second.config == first.config
     assert second.created == 0
+
+
+def test_reconcile_can_limit_mapping_to_requested_brand_plan():
+    plans = (
+        SimpleNamespace(
+            brand_plan_id="plan-a", theme_key="theme", slot=1, public_name="A"
+        ),
+        SimpleNamespace(
+            brand_plan_id="plan-b", theme_key="theme", slot=2, public_name="B"
+        ),
+    )
+
+    class MappingStore(Store):
+        def planned_identity_assignments(self):
+            return {"plan-a": "google-b", "plan-b": "google-b"}
+
+        def youtube_provisioning_records(self):
+            return (
+                SimpleNamespace(brand_plan_id="plan-a", youtube_channel_id="UC-A"),
+                SimpleNamespace(brand_plan_id="plan-b", youtube_channel_id="UC-B"),
+            )
+
+        def planned_channel_brands(self):
+            return plans
+
+        def get_approved_brand_kit(self, channel_id):
+            return None
+
+        def get_theme_template(self, theme_key):
+            raise AssertionError("existing theme should be reused")
+
+    config = AutomationConfig(
+        (ThemeProfile("Theme", "", (), "theme"),),
+        (GoogleIdentity("google-b", "B", "b@example.test"),),
+    )
+    result = reconcile_publishing_channels(
+        config,
+        MappingStore(),
+        frozenset({"google-b"}),
+        frozenset({"plan-a"}),
+    )
+    assert result.planned == 1
+    assert [item.brand_plan_id for item in result.config.themes[0].channels] == [
+        "plan-a"
+    ]

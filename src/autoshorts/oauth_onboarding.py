@@ -47,6 +47,7 @@ def reconcile_publishing_channels(
     config: AutomationConfig,
     store: StateStore,
     identities: frozenset[str] = ALLOWED_IDENTITIES,
+    brand_plan_ids: frozenset[str] | None = None,
 ) -> MappingResult:
     """Map plans to local channels without making any remote mutation."""
     assignments = store.planned_identity_assignments()
@@ -57,6 +58,7 @@ def reconcile_publishing_channels(
         plan
         for plan in store.planned_channel_brands()
         if assignments.get(plan.brand_plan_id) in identities
+        and (brand_plan_ids is None or plan.brand_plan_id in brand_plan_ids)
     )
     themes = list(config.themes)
     created = 0
