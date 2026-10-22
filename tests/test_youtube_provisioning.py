@@ -195,3 +195,154 @@ def test_resume_skips_created_and_starts_first_incomplete(tmp_path):
 def test_gitignore_excludes_all_runtime_playwright_profiles():
     text = (Path(__file__).parents[1] / ".gitignore").read_text(encoding="utf-8")
     assert "data/" in text or "youtube-profiles" in text
+
+
+class LogoLocator:
+    def __init__(self, name):
+        self.name = name
+        self.clicked = False
+
+    def count(self):
+        return 1
+
+    def is_visible(self):
+        return True
+
+    def is_enabled(self):
+        return True
+
+    def click(self):
+        self.clicked = True
+
+
+class LogoChooser:
+    def __init__(self):
+        self.path = None
+
+    def set_files(self, path):
+        self.path = path
+
+
+class LogoChooserContext:
+    def __init__(self, chooser, *, fail=False):
+        self.value = chooser
+        self.fail = fail
+
+    def __enter__(self):
+        if self.fail:
+            raise TimeoutError("chooser did not open")
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+class LogoPage:
+    def __init__(self, *, chooser_fails=False):
+        self.opener = LogoLocator("opener")
+        self.chooser = LogoChooser()
+        self.chooser_fails = chooser_fails
+        self.waits = []
+
+    def get_by_text(self, _pattern):
+        return type("First", (), {"first": self.opener})()
+
+    def expect_file_chooser(self, **_kwargs):
+        return LogoChooserContext(self.chooser, fail=self.chooser_fails)
+
+    def wait_for_timeout(self, value):
+        self.waits.append(value)
+
+
+class LogoFlowAdapter(PlaywrightYouTubeAdapter):
+    def __init__(self, *, missing=None, chooser_fails=False, apply_fails=False):
+        super().__init__(headless=True)
+        self.page = LogoPage(chooser_fails=chooser_fails)
+        self.missing = missing
+        self.apply_fails = apply_fails
+        self.steps = []
+        self.locators = {}
+
+    def _visible_image_sources(self):
+        return {"before.png"}
+
+    def _frame_text(self, pattern, **_kwargs):
+        raw = pattern.pattern
+        if "Escolha" in raw:
+            step = "popup"
+        elif "Do computador" in raw:
+            step = "computer"
+        elif "Carregar" in raw:
+            step = "upload"
+        else:
+            step = "done"
+        self.steps.append(step)
+        if self.missing == step:
+            raise TimeoutError(f"missing {step}")
+        locator = LogoLocator(step)
+        self.locators[step] = locator
+        return locator
+
+    def _wait_for_logo_applied(self, _before_images):
+        self.steps.append("applied")
+        if self.apply_fails:
+            raise TimeoutError("logo not applied")
+
+
+def logo_file(tmp_path):
+    path = tmp_path / "master.png"
+    path.write_bytes(b"png")
+    return path
+
+
+def test_logo_upload_opens_popup_and_computer_tab(tmp_path, capsys):
+    adapter = LogoFlowAdapter()
+    adapter._upload_logo(logo_file(tmp_path))
+    assert adapter.page.opener.clicked
+    assert adapter.steps[:2] == ["popup", "computer"]
+    output = capsys.readouterr().out
+    assert 'Popup "Escolha a sua imagem" aberto' in output
+    assert 'Abrindo aba "Do computador"' in output
+
+
+def test_logo_upload_opens_file_chooser(tmp_path):
+    adapter = LogoFlowAdapter()
+    logo = logo_file(tmp_path)
+    adapter._upload_logo(logo)
+    assert adapter.locators["upload"].clicked
+    assert adapter.page.chooser.path == str(logo)
+
+
+def test_logo_upload_clicks_done(tmp_path):
+    adapter = LogoFlowAdapter()
+    adapter._upload_logo(logo_file(tmp_path))
+    assert adapter.locators["done"].clicked
+
+
+def test_logo_upload_fails_when_upload_button_is_missing(tmp_path):
+    adapter = LogoFlowAdapter(missing="upload")
+    with pytest.raises(TimeoutError, match="missing upload"):
+        adapter._upload_logo(logo_file(tmp_path))
+
+
+def test_logo_upload_fails_when_chooser_does_not_open(tmp_path):
+    adapter = LogoFlowAdapter(chooser_fails=True)
+    with pytest.raises(TimeoutError, match="não abriu o file chooser"):
+        adapter._upload_logo(logo_file(tmp_path))
+
+
+def test_logo_upload_fails_when_image_is_not_confirmed(tmp_path):
+    adapter = LogoFlowAdapter(apply_fails=True)
+    with pytest.raises(TimeoutError, match="logo not applied"):
+        adapter._upload_logo(logo_file(tmp_path))
+
+
+def test_logo_upload_complete_success(tmp_path, capsys):
+    adapter = LogoFlowAdapter()
+    adapter._upload_logo(logo_file(tmp_path))
+    assert adapter.steps == ["popup", "computer", "upload", "done", "applied"]
+    output = capsys.readouterr().out
+    assert "→ File chooser aberto" in output
+    assert "→ master.png enviado" in output
+    assert '→ Confirmando "Concluído"' in output
+    assert "→ Logo aplicada ao formulário" in output
