@@ -157,6 +157,12 @@ def test_advanced_portuguese_and_english(tmp_path, label):
     assert page.roles[("button", label)].clicked
 
 
+def test_advanced_falls_back_to_semantic_text(tmp_path):
+    page = Page(texts=("Avançado",))
+    assert browser(tmp_path, page)._click_advanced()
+    assert page.texts["Avançado"].clicked
+
+
 @pytest.mark.parametrize(
     "label", ("Ir para AutoShorts (não seguro)", "Go to AutoShorts (unsafe)")
 )

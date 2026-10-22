@@ -89,13 +89,17 @@ class PlaywrightOAuthBrowser:
             self._raise_for_security_challenge()
             if not account_selected and self._select_expected_account():
                 account_selected = True
+                deadline = time.monotonic() + timeout
                 continue
             if not channel_selected and self._select_expected_channel():
                 channel_selected = True
+                deadline = time.monotonic() + timeout
                 continue
             if self._click_advanced():
+                deadline = time.monotonic() + timeout
                 continue
             if self._click_autoshorts_link():
+                deadline = time.monotonic() + timeout
                 continue
             if self._click_final_consent():
                 self.status = "CONSENT_CONTINUED"
@@ -152,7 +156,7 @@ class PlaywrightOAuthBrowser:
         return True
 
     def _click_advanced(self) -> bool:
-        match = self._unique_role("button", ADVANCED)
+        match = self._unique_action("button", ADVANCED)
         if match is None:
             return False
         self._checkpoint(
@@ -166,7 +170,7 @@ class PlaywrightOAuthBrowser:
         return True
 
     def _click_autoshorts_link(self) -> bool:
-        match = self._unique_role("link", AUTOSHORTS_LINK)
+        match = self._unique_action("link", AUTOSHORTS_LINK)
         if match is None:
             return False
         label = self._label(match)
@@ -180,9 +184,9 @@ class PlaywrightOAuthBrowser:
         return True
 
     def _click_final_consent(self) -> bool:
-        match = self._unique_role("button", ALLOW)
+        match = self._unique_action("button", ALLOW)
         if match is None:
-            match = self._unique_role("button", CONTINUE)
+            match = self._unique_action("button", CONTINUE)
         if match is None:
             return False
         label = self._label(match)
@@ -211,6 +215,13 @@ class PlaywrightOAuthBrowser:
     def _unique_role(self, role: str, name: re.Pattern[str]):
         assert self.page is not None
         return self._unique_visible(self.page.get_by_role(role, name=name))
+
+    def _unique_action(self, role: str, name: re.Pattern[str]):
+        match = self._unique_role(role, name)
+        if match is not None:
+            return match
+        assert self.page is not None
+        return self._unique_visible(self.page.get_by_text(name, exact=False))
 
     @staticmethod
     def _unique_visible(locator):
