@@ -70,17 +70,28 @@ class FakePage:
     def __init__(self, outcomes, usable=False):
         self.outcomes = iter(outcomes)
         self.usable = usable
-        self.url = "https://youtube.test/partial"
+        self.url = "https://www.youtube.com/partial"
         self.waits = []
+        self.closed = False
 
-    def goto(self, *_args, **_kwargs):
+    def goto(self, url, **_kwargs):
+        if url == "about:blank":
+            self.url = url
+            return
         outcome = next(self.outcomes)
         if isinstance(outcome, Exception):
             raise outcome
+        self.url = "https://www.youtube.com/account"
         self.usable = bool(outcome)
 
     def wait_for_timeout(self, value):
         self.waits.append(value)
+
+    def set_default_timeout(self, value):
+        pass
+
+    def is_closed(self):
+        return self.closed
 
 
 def test_navigation_timeout_retry_then_success():
@@ -101,6 +112,101 @@ def test_three_navigation_timeouts_are_recoverable():
     adapter.page = FakePage([TimeoutError("1"), TimeoutError("2"), TimeoutError("3")])
     with pytest.raises(NavigationTimeout):
         adapter.navigate_youtube("url", usable=lambda: False)
+
+
+def test_closed_page_is_replaced_before_navigation():
+    closed = FakePage([], usable=False)
+    closed.closed = True
+    replacement = FakePage([True])
+
+    class Context:
+        def new_page(self):
+            return replacement
+
+    adapter = PlaywrightYouTubeAdapter(headless=True)
+    adapter.context = Context()
+    adapter.page = closed
+    adapter.navigate_youtube("url", usable=lambda: adapter.page.usable)
+    assert adapter.page is replacement
+
+
+def test_page_closed_by_timeout_is_replaced_for_retry():
+    class ClosingPage(FakePage):
+        def goto(self, url, **kwargs):
+            self.closed = True
+            raise TimeoutError("browser page closed")
+
+    failed = ClosingPage([])
+    replacement = FakePage([True])
+
+    class Context:
+        def new_page(self):
+            return replacement
+
+    adapter = PlaywrightYouTubeAdapter(headless=True)
+    adapter.context = Context()
+    adapter.page = failed
+    adapter.navigate_youtube("url", usable=lambda: adapter.page.usable)
+    assert adapter.page is replacement
+
+
+def test_open_uses_dedicated_page_and_closes_seven_restored_tabs(monkeypatch, tmp_path):
+    class Page:
+        def __init__(self):
+            self.closed = False
+            self.timeout = None
+
+        def close(self):
+            self.closed = True
+
+        def set_default_timeout(self, value):
+            self.timeout = value
+
+    class Context:
+        def __init__(self):
+            self.all_pages = [Page() for _ in range(7)]
+
+        @property
+        def pages(self):
+            return [page for page in self.all_pages if not page.closed]
+
+        def new_page(self):
+            page = Page()
+            self.all_pages.append(page)
+            return page
+
+    context = Context()
+
+    class Playwright:
+        chromium = type(
+            "Chromium",
+            (),
+            {"launch_persistent_context": lambda self, **kwargs: context},
+        )()
+
+    monkeypatch.setattr(
+        "playwright.sync_api.sync_playwright",
+        lambda: type("Manager", (), {"start": lambda self: Playwright()})(),
+    )
+    monkeypatch.setattr(
+        "autoshorts.youtube_playwright.resolve_browser_executable", lambda: None
+    )
+    adapter = PlaywrightYouTubeAdapter(headless=True)
+    identity = GoogleIdentity("google-b", "B", "b@example.test")
+    adapter.open(identity, tmp_path / "google-b")
+    assert len(context.all_pages) == 8
+    assert all(page.closed for page in context.all_pages[:7])
+    assert context.pages == [adapter.page]
+
+    monkeypatch.setattr(adapter, "navigate_youtube", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adapter, "_body", lambda: "YouTube account")
+    adapter.page.url = "https://www.youtube.com/account"
+    assert adapter.verify_session()
+    assert context.pages == [adapter.page]
+
+    oauth_page = context.new_page()
+    assert context.pages == [adapter.page, oauth_page]
+    assert not oauth_page.closed
 
 
 class FakeAdapter:

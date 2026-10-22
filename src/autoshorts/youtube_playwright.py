@@ -6,9 +6,14 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
 from autoshorts.automation_config import GoogleIdentity
-from autoshorts.browser_runtime import persistent_context_browser_options
+from autoshorts.browser_runtime import (
+    browser_display_name,
+    persistent_context_browser_options,
+    resolve_browser_executable,
+)
 from autoshorts.youtube_provisioning import (
     ExistingYouTubeChannel,
     HandleConflict,
@@ -45,9 +50,16 @@ class PlaywrightYouTubeAdapter:
             args=["--start-maximized", "--disable-blink-features=AutomationControlled"],
             **persistent_context_browser_options(),
         )
-        self.page = (
-            self.context.pages[0] if self.context.pages else self.context.new_page()
-        )
+        restored_pages = list(self.context.pages)
+        self.page = self.context.new_page()
+        for restored_page in restored_pages:
+            if restored_page != self.page:
+                restored_page.close()
+        executable = resolve_browser_executable()
+        print(f"Browser: {browser_display_name(executable)}")
+        print(f"Profile: {identity.identity_id}")
+        print(f"Restored tabs: {len(restored_pages)}")
+        print(f"Provisioning tabs after cleanup: {len(self.context.pages)}")
         self.page.set_default_timeout(20_000)
 
     def close(self) -> None:
@@ -67,22 +79,71 @@ class PlaywrightYouTubeAdapter:
         assert self.page is not None
         errors = []
         for attempt in range(1, attempts + 1):
+            if self._page_closed():
+                self.page = self.context.new_page()
+                self.page.set_default_timeout(20_000)
             navigation_completed = False
+            print(f"→ Navegando para {url}")
             try:
                 self.page.goto(url, wait_until="domcontentloaded", timeout=45_000)
                 navigation_completed = True
             except Exception as exc:
                 errors.append(f"attempt {attempt}: {exc}")
+                current_url = self._current_url()
+                usable_now = self._youtube_page_usable(usable)
+                print("Navigation timeout")
+                print(f"Current URL: {current_url}")
+                print(f"Page closed: {str(self._page_closed()).lower()}")
+                print(f"YouTube usable: {str(usable_now).lower()}")
+                print(f"Attempt: {attempt}/{attempts}")
+                if usable_now:
+                    return
             if navigation_completed:
                 self.page.wait_for_timeout(1_500)
-            if usable():
+            if not self._page_closed() and usable():
                 return
             if attempt < attempts:
+                self._prepare_navigation_retry()
                 self.page.wait_for_timeout(attempt * 1_000)
         raise NavigationTimeout(
-            f"NAVIGATION_TIMEOUT after {attempts} attempts; url={self.page.url}; "
+            f"NAVIGATION_TIMEOUT after {attempts} attempts; "
+            f"url={self._current_url()}; "
             + " | ".join(errors)
         )
+
+    def _page_closed(self) -> bool:
+        if self.page is None:
+            return True
+        is_closed = getattr(self.page, "is_closed", None)
+        return bool(is_closed()) if is_closed else False
+
+    def _current_url(self) -> str:
+        return "" if self.page is None else str(getattr(self.page, "url", ""))
+
+    def _youtube_page_usable(self, usable: Callable[[], bool]) -> bool:
+        if self._page_closed():
+            return False
+        parsed = urlparse(self._current_url())
+        host = (parsed.hostname or "").casefold()
+        if host == "accounts.google.com":
+            return False
+        if host != "youtube.com" and not host.endswith(".youtube.com"):
+            return False
+        return usable()
+
+    def _prepare_navigation_retry(self) -> None:
+        if self._page_closed():
+            assert self.context is not None
+            self.page = self.context.new_page()
+            self.page.set_default_timeout(20_000)
+            return
+        try:
+            self.page.goto("about:blank", wait_until="commit", timeout=5_000)
+        except Exception:
+            if self._page_closed():
+                assert self.context is not None
+                self.page = self.context.new_page()
+                self.page.set_default_timeout(20_000)
 
     def verify_session(self) -> bool:
         assert self.page is not None

@@ -42,8 +42,27 @@ def test_missing_brave_uses_bundled_chromium(monkeypatch):
 def test_provisioning_context_receives_resolved_executable(tmp_path, monkeypatch):
     captured = {}
 
+    class Page:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+        def set_default_timeout(self, value):
+            pass
+
     class Context:
-        pages = [SimpleNamespace(set_default_timeout=lambda value: None)]
+        def __init__(self):
+            self._pages = [Page()]
+
+        @property
+        def pages(self):
+            return [page for page in self._pages if not page.closed]
+
+        def new_page(self):
+            page = Page()
+            self._pages.append(page)
+            return page
 
     class Chromium:
         def launch_persistent_context(self, **kwargs):
@@ -65,8 +84,12 @@ def test_provisioning_context_receives_resolved_executable(tmp_path, monkeypatch
         "autoshorts.youtube_playwright.persistent_context_browser_options",
         lambda: {"executable_path": "/usr/bin/brave-browser"},
     )
+    monkeypatch.setattr(
+        "autoshorts.youtube_playwright.resolve_browser_executable",
+        lambda: Path("/usr/bin/brave-browser"),
+    )
     adapter = PlaywrightYouTubeAdapter(headless=True)
-    adapter.open(SimpleNamespace(), tmp_path / "profile")
+    adapter.open(SimpleNamespace(identity_id="google-b"), tmp_path / "profile")
     assert captured["executable_path"] == "/usr/bin/brave-browser"
     assert captured["user_data_dir"] == str(tmp_path / "profile")
 
