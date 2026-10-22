@@ -7,6 +7,7 @@ from test_youtube_publishing import configured_service
 
 from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.youtube_branding import (
+    GoogleYouTubeBrandingBackend,
     YouTubeBrandingService,
     _conservative_branding,
     _language_matches,
@@ -23,10 +24,15 @@ class Backend:
     def __init__(self, channel_id="UC-A"):
         self.channel_id = channel_id
         self.uploads = 0
+        self.watermarks = []
         self.updates = []
         self.remote = {
             "id": channel_id,
-            "snippet": {"title": "YouTube A"},
+            "snippet": {
+                "title": "YouTube A",
+                "customUrl": "@youtube-a",
+                "thumbnails": {"default": {"url": "https://avatar"}},
+            },
             "brandingSettings": {
                 "channel": {
                     "description": "old",
@@ -60,6 +66,11 @@ class Backend:
         }
         return self.remote
 
+    def set_watermark(self, credentials, channel_id, path):
+        assert channel_id == self.channel_id
+        self.watermarks.append(path)
+        return {}
+
 
 def _service(tmp_path, *, scopes=(YOUTUBE_MANAGE_SCOPE,), backend=None):
     publishing, store, channel, _plan, _video, _uploader, _connection = (
@@ -88,10 +99,12 @@ def test_branding_dry_run_is_local_and_marks_manual_properties(tmp_path):
     assert plan.description == "Descrição editorial"
     assert plan.keywords == ("teste", "original")
     assert plan.default_language == "pt-BR"
+    assert plan.country == "BR"
     assert plan.banner.width == 2560
     assert plan.logo.width == 1024
     assert backend.uploads == 0
     assert backend.updates == []
+    assert backend.watermarks == []
     store.close()
 
 
@@ -107,6 +120,7 @@ def test_scope_insufficient_stops_before_any_remote_call(tmp_path):
         target.apply(channel.channel_id)
     assert backend.uploads == 0
     assert backend.updates == []
+    assert backend.watermarks == []
     store.close()
 
 
@@ -122,6 +136,8 @@ def test_apply_preserves_writable_settings_and_validates_banner(tmp_path):
     assert sent["channel"]["description"] == "Descrição editorial"
     assert sent["channel"]["defaultLanguage"] == "pt-BR"
     assert sent["image"]["bannerExternalUrl"].endswith("new-banner")
+    assert backend.watermarks == [result.plan.logo.file_path]
+    assert result.watermark_set
     store.close()
 
 
@@ -132,6 +148,7 @@ def test_wrong_remote_channel_stops_before_banner_upload(tmp_path):
         target.apply(channel.channel_id)
     assert backend.uploads == 0
     assert backend.updates == []
+    assert backend.watermarks == []
     store.close()
 
 
@@ -150,3 +167,35 @@ def test_language_validation_accepts_youtube_region_normalization():
     assert _language_matches("pt-BR", "pt-BR")
     assert not _language_matches("pt-BR", "en")
     assert not _language_matches("pt-BR", None)
+
+
+def test_watermark_disables_gzip_for_empty_204_response(tmp_path, monkeypatch):
+    logo = tmp_path / "logo.png"
+    logo.write_bytes(b"png")
+
+    class Request:
+        def __init__(self):
+            self.headers = {}
+
+        def execute(self):
+            assert self.headers["accept-encoding"] == "identity"
+            return None
+
+    request = Request()
+
+    class Watermarks:
+        def set(self, **kwargs):
+            assert kwargs["channelId"] == "UC-A"
+            assert kwargs["body"]["timing"] == {
+                "type": "offsetFromStart",
+                "offsetMs": 0,
+            }
+            return request
+
+    class Api:
+        def watermarks(self):
+            return Watermarks()
+
+    backend = GoogleYouTubeBrandingBackend()
+    monkeypatch.setattr(backend, "_api", lambda credentials: Api())
+    assert backend.set_watermark(object(), "UC-A", logo) is None

@@ -181,6 +181,7 @@ def _run(arguments, config, state: StateStore) -> int:
             raise ValueError("Remote branding requires --confirm-branding.")
         result = service.apply(arguments.channel)
         print(f"BANNER_REMOTE={'PASS' if result.banner_active else 'FAIL'}")
+        print(f"WATERMARK_REMOTE={'PASS' if result.watermark_set else 'FAIL'}")
         print("REMOTE_VALIDATION=PASS")
         return 0
     service = YouTubePublicationService(config, state, FilesystemCredentialStore())

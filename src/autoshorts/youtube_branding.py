@@ -20,6 +20,8 @@ from autoshorts.state_store import StateStore
 from autoshorts.youtube_oauth import YOUTUBE_MANAGE_SCOPE, YouTubeConnectionService
 
 DEFAULT_CHANNEL_LANGUAGE = "pt-BR"
+DEFAULT_CHANNEL_COUNTRY = "BR"
+WATERMARK_MAX_BYTES = 10 * 1024 * 1024
 _WRITABLE_CHANNEL_KEYS = (
     "country",
     "description",
@@ -50,6 +52,7 @@ CAPABILITIES = (
     BrandingCapability(
         "Banner", "brandingSettings.image.bannerExternalUrl", True, True
     ),
+    BrandingCapability("Watermark", "watermarks.set", True, True),
     BrandingCapability(
         "Channel audience", "status.selfDeclaredMadeForKids", True, False
     ),
@@ -83,6 +86,7 @@ class BrandingApplyResult:
     plan: ChannelBrandingPlan
     remote: dict[str, Any]
     banner_active: bool
+    watermark_set: bool
 
 
 class YouTubeBrandingBackend(Protocol):
@@ -91,6 +95,9 @@ class YouTubeBrandingBackend(Protocol):
     def update_branding(
         self, credentials: object, channel_id: str, branding: dict[str, Any]
     ) -> dict[str, Any]: ...
+    def set_watermark(
+        self, credentials: object, channel_id: str, path: Path
+    ) -> object: ...
 
 
 class GoogleYouTubeBrandingBackend:
@@ -138,6 +145,25 @@ class GoogleYouTubeBrandingBackend:
             .execute()
         )
 
+    def set_watermark(
+        self, credentials: object, channel_id: str, path: Path
+    ) -> object:
+        from googleapiclient.http import MediaFileUpload
+
+        request = (
+            self._api(credentials)
+            .watermarks()
+            .set(
+                channelId=channel_id,
+                body={"timing": {"type": "offsetFromStart", "offsetMs": 0}},
+                media_body=MediaFileUpload(str(path), mimetype="image/png"),
+            )
+        )
+        # Some httplib2 releases try to decode an empty gzipped 204 response with
+        # a zero-size chunk, raising after YouTube has already accepted the upload.
+        request.headers["accept-encoding"] = "identity"
+        return request.execute()
+
 
 class YouTubeBrandingService:
     def __init__(
@@ -169,7 +195,7 @@ class YouTubeBrandingService:
         banner = _approved_asset(assets, BrandAssetType.BANNER)
         logo = _approved_asset(assets, BrandAssetType.LOGO)
         _validate_asset(banner, 2560, 1440, 6 * 1024 * 1024)
-        _validate_asset(logo, 1024, 1024, None)
+        _validate_asset(logo, 1024, 1024, WATERMARK_MAX_BYTES)
         scopes = self._granted_scopes(binding.credential_ref)
         return ChannelBrandingPlan(
             channel.channel_id,
@@ -181,7 +207,7 @@ class YouTubeBrandingService:
             kit.description,
             kit.brand_keywords,
             DEFAULT_CHANNEL_LANGUAGE,
-            None,
+            DEFAULT_CHANNEL_COUNTRY,
             None,
             banner,
             logo,
@@ -200,6 +226,7 @@ class YouTubeBrandingService:
         )
         before = self.backend.get_channel(credentials)
         self._assert_target(before, plan)
+        immutable_before = _immutable_channel_identity(before)
         banner_url = self.backend.upload_banner(credentials, plan.banner.file_path)
         branding = _conservative_branding(before.get("brandingSettings", {}))
         channel_settings = branding.setdefault("channel", {})
@@ -214,8 +241,13 @@ class YouTubeBrandingService:
             channel_settings["country"] = plan.country
         branding["image"] = {"bannerExternalUrl": banner_url}
         self.backend.update_branding(credentials, plan.youtube_channel_id, branding)
+        self.backend.set_watermark(
+            credentials, plan.youtube_channel_id, plan.logo.file_path
+        )
         after = self.backend.get_channel(credentials)
         self._assert_target(after, plan)
+        if _immutable_channel_identity(after) != immutable_before:
+            raise RuntimeError("Remote validation found changed channel identity.")
         current = after.get("brandingSettings", {}).get("channel", {})
         if current.get("description") != plan.description:
             raise RuntimeError("Remote validation failed for channel description.")
@@ -223,6 +255,12 @@ class YouTubeBrandingService:
             plan.default_language, current.get("defaultLanguage")
         ):
             raise RuntimeError("Remote validation failed for channel language.")
+        if current.get("country") != plan.country:
+            raise RuntimeError("Remote validation failed for channel country.")
+        if _normalized_keywords(current.get("keywords")) != _normalized_keywords(
+            " ".join(plan.keywords)
+        ):
+            raise RuntimeError("Remote validation failed for channel keywords.")
         image = after.get("brandingSettings", {}).get("image", {})
         active = bool(
             image.get("bannerExternalUrl")
@@ -231,7 +269,7 @@ class YouTubeBrandingService:
         )
         if not active:
             raise RuntimeError("Remote validation did not confirm an active banner.")
-        return BrandingApplyResult(plan, after, active)
+        return BrandingApplyResult(plan, after, active, True)
 
     def _channel(self, channel_id: str) -> PublishingChannel:
         channel = next(
@@ -306,4 +344,19 @@ def _language_matches(requested: str, returned: object) -> bool:
     returned_parts = returned.casefold().replace("_", "-").split("-")
     return requested_parts == returned_parts or (
         len(returned_parts) == 1 and requested_parts[0] == returned_parts[0]
+    )
+
+
+def _normalized_keywords(value: object) -> tuple[str, ...]:
+    if not isinstance(value, str):
+        return ()
+    return tuple(part.casefold() for part in value.split() if part)
+
+
+def _immutable_channel_identity(remote: dict[str, Any]) -> tuple[object, ...]:
+    snippet = remote.get("snippet", {})
+    return (
+        snippet.get("title"),
+        snippet.get("customUrl"),
+        deepcopy(snippet.get("thumbnails")),
     )

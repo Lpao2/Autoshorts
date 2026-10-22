@@ -164,6 +164,8 @@ def _branding_plan_text(plan) -> str:
         f"{plan.banner.width}x{plan.banner.height}\n{plan.banner.checksum}\n\n"
         f"Logo (manual):\n{plan.logo.file_path}\n"
         f"{plan.logo.width}x{plan.logo.height}\n{plan.logo.checksum}\n\n"
+        f"Watermark source:\n{plan.logo.file_path}\n\n"
+        f"Language: {plan.default_language}\nCountry: {plan.country or 'UNCHANGED'}\n\n"
         f"OAuth scopes: {'OK' if plan.oauth_ready else 'NEEDS_REAUTH'}"
     )
 
@@ -3727,7 +3729,8 @@ class AutoShortsWindow:
                 if not messagebox.askyesno(
                     "Confirmar branding remoto",
                     _branding_plan_text(plan)
-                    + "\n\nAplicar descrição, keywords, idioma e banner?",
+                    + "\n\nAplicar descrição, keywords, idioma, país, banner "
+                    "e watermark?",
                 ):
                     return
                 result = service.apply(channel_id)
@@ -3738,6 +3741,7 @@ class AutoShortsWindow:
             "Branding YouTube",
             "Branding aplicado e validado.\n"
             f"Banner remoto: {'PASS' if result.banner_active else 'FAIL'}\n"
+            f"Watermark remoto: {'PASS' if result.watermark_set else 'FAIL'}\n"
             "Foto de perfil e handle permanecem manuais.",
         )
 
