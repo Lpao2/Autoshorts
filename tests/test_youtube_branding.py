@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 from test_youtube_publishing import configured_service
@@ -11,6 +12,7 @@ from autoshorts.youtube_branding import (
     YouTubeBrandingService,
     _conservative_branding,
     _language_matches,
+    _youtube_banner_asset,
 )
 from autoshorts.youtube_oauth import YOUTUBE_MANAGE_SCOPE
 
@@ -136,7 +138,7 @@ def test_apply_preserves_writable_settings_and_validates_banner(tmp_path):
     assert sent["channel"]["description"] == "Descrição editorial"
     assert sent["channel"]["defaultLanguage"] == "pt-BR"
     assert sent["image"]["bannerExternalUrl"].endswith("new-banner")
-    assert backend.watermarks == [result.plan.logo.file_path]
+    assert backend.watermarks == [result.plan.watermark_path]
     assert result.watermark_set
     store.close()
 
@@ -146,7 +148,7 @@ def test_watermark_only_does_not_reapply_other_branding(tmp_path):
     target, store, channel = _service(tmp_path, backend=backend)
     result = target.apply_watermark(channel.channel_id)
     assert result.http_result == "HTTP 204 No Content"
-    assert backend.watermarks == [result.plan.logo.file_path]
+    assert backend.watermarks == [result.plan.watermark_path]
     assert backend.uploads == 0
     assert backend.updates == []
     store.close()
@@ -210,3 +212,25 @@ def test_watermark_disables_gzip_for_empty_204_response(tmp_path, monkeypatch):
     backend = GoogleYouTubeBrandingBackend()
     monkeypatch.setattr(backend, "_api", lambda credentials: Api())
     assert backend.set_watermark(object(), "UC-A", logo) is None
+
+
+def test_oversize_banner_uses_persisted_delivery_asset(tmp_path):
+    master = tmp_path / "master.png"
+    delivery = tmp_path / "youtube.jpg"
+    master.write_bytes(b"x")
+    delivery.write_bytes(b"delivery")
+    target, store, channel = _service(tmp_path / "service")
+    asset = store.latest_valid_brand_asset(
+        store.get_approved_brand_kit(channel.channel_id).source_plan_id,
+        "BANNER",
+    )
+    oversized = replace(
+        asset,
+        file_size=7 * 1024 * 1024,
+        file_path=master,
+        delivery_path=delivery,
+    )
+    selected = _youtube_banner_asset(oversized)
+    assert selected.file_path == delivery
+    assert selected.file_size == len(b"delivery")
+    store.close()

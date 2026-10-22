@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -21,7 +22,7 @@ from autoshorts.youtube_oauth import YOUTUBE_MANAGE_SCOPE, YouTubeConnectionServ
 
 DEFAULT_CHANNEL_LANGUAGE = "pt-BR"
 DEFAULT_CHANNEL_COUNTRY = "BR"
-WATERMARK_MAX_BYTES = 10 * 1024 * 1024
+WATERMARK_MAX_BYTES = 1024 * 1024
 _WRITABLE_CHANNEL_KEYS = (
     "country",
     "description",
@@ -77,6 +78,7 @@ class ChannelBrandingPlan:
     made_for_kids: bool | None
     banner: GeneratedBrandAsset
     logo: GeneratedBrandAsset
+    watermark_path: Path
     granted_scopes: tuple[str, ...]
     oauth_ready: bool
 
@@ -127,10 +129,11 @@ class GoogleYouTubeBrandingBackend:
     def upload_banner(self, credentials: object, path: Path) -> str:
         from googleapiclient.http import MediaFileUpload
 
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         response = (
             self._api(credentials)
             .channelBanners()
-            .insert(media_body=MediaFileUpload(str(path), mimetype="image/png"))
+            .insert(media_body=MediaFileUpload(str(path), mimetype=media_type))
             .execute()
         )
         url = response.get("url")
@@ -200,8 +203,10 @@ class YouTubeBrandingService:
         assets = self.state_store.brand_assets(kit.source_plan_id)
         banner = _approved_asset(assets, BrandAssetType.BANNER)
         logo = _approved_asset(assets, BrandAssetType.LOGO)
+        banner = _youtube_banner_asset(banner)
         _validate_asset(banner, 2560, 1440, 6 * 1024 * 1024)
-        _validate_asset(logo, 1024, 1024, WATERMARK_MAX_BYTES)
+        _validate_asset(logo, 1024, 1024, None)
+        watermark_path = _watermark_path(logo)
         scopes = self._granted_scopes(binding.credential_ref)
         return ChannelBrandingPlan(
             channel.channel_id,
@@ -217,19 +222,22 @@ class YouTubeBrandingService:
             None,
             banner,
             logo,
+            watermark_path,
             scopes,
             YOUTUBE_MANAGE_SCOPE in scopes,
         )
 
     def apply(self, publishing_channel_id: str) -> BrandingApplyResult:
+        credentials = self.connection_service.load_verified_credentials(
+            publishing_channel_id
+        )
+        # Verification can refresh the persisted remote title. Build the plan
+        # afterwards so target validation never compares against stale binding data.
         plan = self.dry_run(publishing_channel_id)
         if not plan.oauth_ready:
             raise ValueError(
                 "OAuth scope insufficient; reconnect before applying branding."
             )
-        credentials = self.connection_service.load_verified_credentials(
-            publishing_channel_id
-        )
         before = self.backend.get_channel(credentials)
         self._assert_target(before, plan)
         immutable_before = _immutable_channel_identity(before)
@@ -248,7 +256,7 @@ class YouTubeBrandingService:
         branding["image"] = {"bannerExternalUrl": banner_url}
         self.backend.update_branding(credentials, plan.youtube_channel_id, branding)
         self.backend.set_watermark(
-            credentials, plan.youtube_channel_id, plan.logo.file_path
+            credentials, plan.youtube_channel_id, plan.watermark_path
         )
         after = self.backend.get_channel(credentials)
         self._assert_target(after, plan)
@@ -290,7 +298,7 @@ class YouTubeBrandingService:
         remote = self.backend.get_channel(credentials)
         self._assert_target(remote, plan)
         self.backend.set_watermark(
-            credentials, plan.youtube_channel_id, plan.logo.file_path
+            credentials, plan.youtube_channel_id, plan.watermark_path
         )
         # watermarks.set has no response resource and succeeds with HTTP 204.
         return WatermarkApplyResult(plan, "HTTP 204 No Content")
@@ -349,6 +357,31 @@ def _validate_asset(
     digest = hashlib.sha256(asset.file_path.read_bytes()).hexdigest()
     if digest != asset.checksum:
         raise ValueError(f"{asset.asset_type.value.title()} checksum mismatch.")
+
+
+def _youtube_banner_asset(asset: GeneratedBrandAsset) -> GeneratedBrandAsset:
+    if asset.file_size <= 6 * 1024 * 1024:
+        return asset
+    delivery = asset.delivery_path
+    if delivery is None or not delivery.is_file():
+        return asset
+    payload = delivery.read_bytes()
+    return replace(
+        asset,
+        file_path=delivery,
+        file_size=len(payload),
+        checksum=hashlib.sha256(payload).hexdigest(),
+    )
+
+
+def _watermark_path(logo: GeneratedBrandAsset) -> Path:
+    if logo.file_size <= WATERMARK_MAX_BYTES:
+        return logo.file_path
+    channel_root = logo.file_path.parents[2]
+    derived = channel_root / "watermark" / "v1" / "master.png"
+    if not derived.is_file() or derived.stat().st_size > WATERMARK_MAX_BYTES:
+        raise ValueError("Approved watermark derivative is missing or exceeds 1 MiB.")
+    return derived
 
 
 def _conservative_branding(remote: dict[str, Any]) -> dict[str, Any]:
