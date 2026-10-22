@@ -176,7 +176,7 @@ def test_protected_channel_can_never_be_the_target(tmp_path):
     assert not page.texts["Marcelo Clic"].clicked
 
 
-@pytest.mark.parametrize("label", ("Avançado", "Advanced"))
+@pytest.mark.parametrize("label", ("Avançado", "Avançadas", "Advanced"))
 def test_advanced_portuguese_and_english(tmp_path, label):
     page = Page(roles=(("button", label),))
     assert browser(tmp_path, page)._click_advanced()
@@ -194,6 +194,7 @@ def test_advanced_falls_back_to_semantic_text(tmp_path):
     (
         "Ir para AutoShorts (não seguro)",
         "Acessar AutoShorts (não seguro)",
+        "Aceder a AutoShorts (não seguro)",
         "Go to AutoShorts (unsafe)",
     ),
 )
