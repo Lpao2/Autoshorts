@@ -10,7 +10,9 @@ from pathlib import Path
 from autoshorts.browser_runtime import persistent_context_browser_options
 
 ADVANCED = re.compile(r"^(Avançado|Advanced)$", re.I)
-AUTOSHORTS_LINK = re.compile(r"^(Ir para|Go to).*AutoShorts", re.I)
+AUTOSHORTS_LINK = re.compile(
+    r"^(Ir para|Acessar|Go to|Proceed to).*AutoShorts", re.I
+)
 ALLOW = re.compile(r"^(Permitir|Allow)$", re.I)
 CONTINUE = re.compile(r"^(Continuar|Continue)$", re.I)
 SECURITY_CHALLENGES = (

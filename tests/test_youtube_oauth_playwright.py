@@ -164,7 +164,12 @@ def test_advanced_falls_back_to_semantic_text(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "label", ("Ir para AutoShorts (não seguro)", "Go to AutoShorts (unsafe)")
+    "label",
+    (
+        "Ir para AutoShorts (não seguro)",
+        "Acessar AutoShorts (não seguro)",
+        "Go to AutoShorts (unsafe)",
+    ),
 )
 def test_autoshorts_link_portuguese_and_english(tmp_path, label):
     page = Page(roles=(("link", label),))
