@@ -376,6 +376,7 @@ class PlaywrightYouTubeAdapter:
             (
                 re.compile(r"^Carregar a partir do computador$", re.I),
                 re.compile(r"carregar.*computador", re.I),
+                re.compile(r"^Fazer upload do computador$", re.I),
                 re.compile(r"^Upload from computer$", re.I),
                 re.compile(r"upload.*computer", re.I),
             ),

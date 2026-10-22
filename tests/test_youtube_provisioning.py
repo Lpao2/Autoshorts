@@ -485,6 +485,7 @@ class LogoFlowAdapter(PlaywrightYouTubeAdapter):
         computer_role="tab",
         computer_as_text=False,
         upload_as_text=False,
+        upload_label="Carregar a partir do computador",
         missing_upload=False,
         chooser_fails=False,
         apply_fails=False,
@@ -498,9 +499,9 @@ class LogoFlowAdapter(PlaywrightYouTubeAdapter):
             roles.append((computer_role, "Do computador"))
         if not missing_upload:
             if upload_as_text:
-                texts.append("Carregar a partir do computador")
+                texts.append(upload_label)
             else:
-                roles.append(("button", "Carregar a partir do computador"))
+                roles.append(("button", upload_label))
         frame = LogoFrame(roles=roles, texts=texts)
         self.page = LogoPage(frame=frame, chooser_fails=chooser_fails)
         self.apply_fails = apply_fails
@@ -540,6 +541,14 @@ def test_logo_upload_opens_file_chooser(tmp_path):
     logo = logo_file(tmp_path)
     adapter._upload_logo(logo)
     assert adapter.role_locator("button", "Carregar a partir do computador").clicked
+    assert adapter.page.chooser.path == str(logo)
+
+
+def test_logo_upload_accepts_current_make_upload_label(tmp_path):
+    adapter = LogoFlowAdapter(upload_label="Fazer upload do computador")
+    logo = logo_file(tmp_path)
+    adapter._upload_logo(logo)
+    assert adapter.role_locator("button", "Fazer upload do computador").clicked
     assert adapter.page.chooser.path == str(logo)
 
 
