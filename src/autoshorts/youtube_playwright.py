@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from autoshorts.automation_config import GoogleIdentity
+from autoshorts.browser_runtime import persistent_context_browser_options
 from autoshorts.youtube_provisioning import (
     ExistingYouTubeChannel,
     HandleConflict,
@@ -42,6 +43,7 @@ class PlaywrightYouTubeAdapter:
             headless=self.headless,
             no_viewport=True,
             args=["--start-maximized", "--disable-blink-features=AutomationControlled"],
+            **persistent_context_browser_options(),
         )
         self.page = (
             self.context.pages[0] if self.context.pages else self.context.new_page()

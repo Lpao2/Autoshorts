@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 
 from autoshorts.automation_store import AutomationStore, default_automation_config_path
+from autoshorts.browser_runtime import browser_display_name, resolve_browser_executable
 from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.oauth_onboarding import (
     authorize_provisioned_channel,
@@ -58,7 +59,13 @@ def run() -> int:
             )
         return 0
     if args.verify_session:
-        print(app.verify_session(args.account))
+        result = app.verify_session(args.account)
+        executable = resolve_browser_executable()
+        print(f"GoogleIdentity: {args.account}")
+        print(f"Browser: {browser_display_name(executable)}")
+        print(f"Executable: {executable or 'bundled Chromium'}")
+        print(f"Profile: {result.profile_path}")
+        print(f"Status: {result.status}")
     elif args.inspect:
         for item in app.inspect_account(args.account):
             print(item)

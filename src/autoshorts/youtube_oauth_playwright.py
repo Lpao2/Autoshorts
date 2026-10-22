@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from autoshorts.browser_runtime import persistent_context_browser_options
+
 
 class PlaywrightOAuthBrowser:
     """Open OAuth in a GoogleIdentity profile and assist only unambiguous UI."""
@@ -28,6 +30,7 @@ class PlaywrightOAuthBrowser:
             headless=False,
             no_viewport=True,
             args=["--start-maximized"],
+            **persistent_context_browser_options(),
         )
         self.page = (
             self.context.pages[0] if self.context.pages else self.context.new_page()
