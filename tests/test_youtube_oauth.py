@@ -130,6 +130,20 @@ def test_connect_requires_confirmation_before_persisting(tmp_path, monkeypatch):
     state.close()
 
 
+def test_guided_connection_requires_exact_expected_channel_id(
+    tmp_path, monkeypatch
+):
+    target, state, secrets = service(tmp_path, monkeypatch)
+    pending = target.begin_connection("lol-a")
+    with pytest.raises(OAuthCredentialError, match="OAUTH_CHANNEL_MISMATCH"):
+        target.confirm_expected_connection(pending, "UC-EXPECTED")
+    assert state.get_channel_binding("lol-a") is None
+    assert not secrets.root.exists()
+    binding = target.confirm_expected_connection(pending, "UC-A")
+    assert binding.youtube_channel_id == "UC-A"
+    state.close()
+
+
 def test_verify_refreshes_and_rejects_channel_mismatch(tmp_path, monkeypatch):
     backend = Backend()
     target, state, secrets = service(tmp_path, monkeypatch, backend=backend)

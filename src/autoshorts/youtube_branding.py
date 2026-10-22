@@ -89,6 +89,12 @@ class BrandingApplyResult:
     watermark_set: bool
 
 
+@dataclass(frozen=True, slots=True)
+class WatermarkApplyResult:
+    plan: ChannelBrandingPlan
+    http_result: str
+
+
 class YouTubeBrandingBackend(Protocol):
     def get_channel(self, credentials: object) -> dict[str, Any]: ...
     def upload_banner(self, credentials: object, path: Path) -> str: ...
@@ -270,6 +276,24 @@ class YouTubeBrandingService:
         if not active:
             raise RuntimeError("Remote validation did not confirm an active banner.")
         return BrandingApplyResult(plan, after, active, True)
+
+    def apply_watermark(self, publishing_channel_id: str) -> WatermarkApplyResult:
+        """Apply only the watermark; never rewrite channel branding settings."""
+        plan = self.dry_run(publishing_channel_id)
+        if not plan.oauth_ready:
+            raise ValueError(
+                "OAuth scope insufficient; reconnect before applying watermark."
+            )
+        credentials = self.connection_service.load_verified_credentials(
+            publishing_channel_id
+        )
+        remote = self.backend.get_channel(credentials)
+        self._assert_target(remote, plan)
+        self.backend.set_watermark(
+            credentials, plan.youtube_channel_id, plan.logo.file_path
+        )
+        # watermarks.set has no response resource and succeeds with HTTP 204.
+        return WatermarkApplyResult(plan, "HTTP 204 No Content")
 
     def _channel(self, channel_id: str) -> PublishingChannel:
         channel = next(

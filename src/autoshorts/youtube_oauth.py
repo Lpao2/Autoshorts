@@ -184,6 +184,19 @@ class YouTubeConnectionService:
             raise
         return binding
 
+    def confirm_expected_connection(
+        self,
+        pending: PendingChannelConnection,
+        expected_youtube_channel_id: str,
+    ) -> ChannelCredentialBinding:
+        """Persist a guided OAuth result only when it is the planned channel."""
+        if pending.channel.channel_id != expected_youtube_channel_id:
+            raise OAuthCredentialError(
+                "OAUTH_CHANNEL_MISMATCH: o canal autorizado não corresponde ao "
+                "Channel ID planejado. Nenhuma credencial foi persistida."
+            )
+        return self.confirm_connection(pending)
+
     def verify_binding(self, publishing_channel_id: str) -> ChannelCredentialBinding:
         binding = self.state_store.get_channel_binding(publishing_channel_id)
         if binding is None:

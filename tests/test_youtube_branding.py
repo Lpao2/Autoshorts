@@ -141,6 +141,17 @@ def test_apply_preserves_writable_settings_and_validates_banner(tmp_path):
     store.close()
 
 
+def test_watermark_only_does_not_reapply_other_branding(tmp_path):
+    backend = Backend()
+    target, store, channel = _service(tmp_path, backend=backend)
+    result = target.apply_watermark(channel.channel_id)
+    assert result.http_result == "HTTP 204 No Content"
+    assert backend.watermarks == [result.plan.logo.file_path]
+    assert backend.uploads == 0
+    assert backend.updates == []
+    store.close()
+
+
 def test_wrong_remote_channel_stops_before_banner_upload(tmp_path):
     backend = Backend("UC-WRONG")
     target, store, channel = _service(tmp_path, backend=backend)

@@ -14,6 +14,7 @@ from autoshorts.channel_setup import link_approved_brand_plan
 from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.state_store import StateStore, default_state_db_path
 from autoshorts.youtube_branding import CAPABILITIES, YouTubeBrandingService
+from autoshorts.youtube_oauth import YouTubeConnectionService
 from autoshorts.youtube_publishing import (
     PublicationMetadata,
     YouTubePublicationService,
@@ -31,11 +32,17 @@ def create_parser() -> argparse.ArgumentParser:
     commands.add_parser("list-identities")
     commands.add_parser("list-channels")
     commands.add_parser("list-publications")
+    oauth_connect = commands.add_parser("oauth-connect")
+    oauth_connect.add_argument("--channel", required=True)
+    oauth_connect.add_argument("--expected-youtube-channel-id", required=True)
     branding_dry_run = commands.add_parser("branding-dry-run")
     branding_dry_run.add_argument("--channel", required=True)
     branding_apply = commands.add_parser("branding-apply")
     branding_apply.add_argument("--channel", required=True)
     branding_apply.add_argument("--confirm-branding", action="store_true")
+    watermark_apply = commands.add_parser("branding-watermark")
+    watermark_apply.add_argument("--channel", required=True)
+    watermark_apply.add_argument("--confirm-watermark", action="store_true")
     link = commands.add_parser("link-brand")
     link.add_argument("--channel", required=True)
     create = commands.add_parser("create")
@@ -137,6 +144,20 @@ def _run(arguments, config, state: StateStore) -> int:
         print(f"brand_links={brand_count}")
         print(f"publications={len(state.publications())}")
         return 0
+    if command == "oauth-connect":
+        service = YouTubeConnectionService(
+            config, state, FilesystemCredentialStore()
+        )
+        pending = service.begin_connection(arguments.channel)
+        binding = service.confirm_expected_connection(
+            pending, arguments.expected_youtube_channel_id
+        )
+        print(
+            "OAUTH_READY "
+            f"channel={binding.youtube_channel_title} "
+            f"channel_id={binding.youtube_channel_id}"
+        )
+        return 0
     if command == "list-publications":
         for item in state.publications():
             print(
@@ -169,13 +190,23 @@ def _run(arguments, config, state: StateStore) -> int:
         )
         print(f"linked={kit.public_name} source_plan_id={kit.source_plan_id}")
         return 0
-    if command in {"branding-dry-run", "branding-apply"}:
+    if command in {
+        "branding-dry-run",
+        "branding-apply",
+        "branding-watermark",
+    }:
         service = YouTubeBrandingService(
             config, state, FilesystemCredentialStore()
         )
         plan = service.dry_run(arguments.channel)
         _print_branding_plan(plan)
         if command == "branding-dry-run":
+            return 0
+        if command == "branding-watermark":
+            if not arguments.confirm_watermark:
+                raise ValueError("Remote watermark requires --confirm-watermark.")
+            result = service.apply_watermark(arguments.channel)
+            print(f"WATERMARK_REMOTE=PASS result={result.http_result}")
             return 0
         if not arguments.confirm_branding:
             raise ValueError("Remote branding requires --confirm-branding.")
