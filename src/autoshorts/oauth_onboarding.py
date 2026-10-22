@@ -88,10 +88,15 @@ def reconcile_publishing_channels(
         channel = next(
             (x for x in theme.channels if x.brand_plan_id == plan.brand_plan_id), None
         )
+        if channel is None and youtube_id:
+            channel = next(
+                (x for x in theme.channels if x.youtube_channel_id == youtube_id),
+                None,
+            )
         if channel is None:
             channel = _linked_channel(store, theme.channels, plan)
         if channel is None:
-            channel = _reusable_slot(store, theme.channels, plan, identity_id)
+            channel = _reusable_slot(store, theme.channels, plan)
         if channel is None:
             channel = PublishingChannel(
                 channel_id=str(
@@ -110,6 +115,7 @@ def reconcile_publishing_channels(
             updated = replace(
                 channel,
                 name=plan.public_name,
+                slot=plan.slot,
                 enabled=True,
                 google_identity_id=identity_id,
                 youtube_channel_id=youtube_id,
@@ -301,7 +307,6 @@ def _reusable_slot(
     store: StateStore,
     channels: tuple[PublishingChannel, ...],
     plan: PlannedChannelBrand,
-    identity_id: str,
 ) -> PublishingChannel | None:
     return next(
         (
@@ -309,9 +314,9 @@ def _reusable_slot(
             for channel in channels
             if channel.slot == plan.slot
             and not channel.brand_plan_id
+            and not channel.youtube_channel_id
             and not _protected(channel.name)
             and store.get_channel_binding(channel.channel_id) is None
-            and channel.google_identity_id in {None, identity_id}
         ),
         None,
     )

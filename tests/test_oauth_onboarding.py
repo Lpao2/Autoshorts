@@ -227,3 +227,146 @@ def test_reconcile_can_limit_mapping_to_requested_brand_plan():
     assert [item.brand_plan_id for item in result.config.themes[0].channels] == [
         "plan-a"
     ]
+
+
+class ReconcileStore(Store):
+    def __init__(self, plans, records, assignments, bindings=()):
+        super().__init__(bindings)
+        self.plans = tuple(plans)
+        self.records = tuple(records)
+        self.assignments = assignments
+
+    def planned_identity_assignments(self):
+        return self.assignments
+
+    def youtube_provisioning_records(self):
+        return self.records
+
+    def planned_channel_brands(self):
+        return self.plans
+
+    def get_approved_brand_kit(self, channel_id):
+        return None
+
+    def get_theme_template(self, theme_key):
+        raise AssertionError("existing theme should be reused")
+
+
+def _plan(plan_id="plan-c", slot=3, name="Channel C"):
+    return SimpleNamespace(
+        brand_plan_id=plan_id,
+        theme_key="theme",
+        slot=slot,
+        public_name=name,
+    )
+
+
+def _record(plan_id="plan-c", youtube_id="UC-C"):
+    return SimpleNamespace(brand_plan_id=plan_id, youtube_channel_id=youtube_id)
+
+
+def _mapping_config(channels):
+    return AutomationConfig(
+        (ThemeProfile("Theme", "", (), "theme", channels=tuple(channels)),),
+        (
+            GoogleIdentity("google-a", "A", "a@example.test"),
+            GoogleIdentity("google-d", "D", "d@example.test"),
+        ),
+    )
+
+
+def test_reconcile_reuses_same_youtube_channel_id_instead_of_appending():
+    existing = PublishingChannel(
+        "existing", "Old", 3, google_identity_id="google-d", youtube_channel_id="UC-C"
+    )
+    store = ReconcileStore(
+        (_plan(),), (_record(),), {"plan-c": "google-d"}
+    )
+    result = reconcile_publishing_channels(
+        _mapping_config((existing,)), store, frozenset({"google-d"})
+    )
+    channels = result.config.themes[0].channels
+    assert len(channels) == 1
+    assert channels[0].channel_id == "existing"
+    assert channels[0].brand_plan_id == "plan-c"
+    assert result.reused == 1
+
+
+def test_retry_after_created_channel_is_idempotent():
+    store = ReconcileStore(
+        (_plan(),), (_record(),), {"plan-c": "google-d"}
+    )
+    first = reconcile_publishing_channels(
+        _mapping_config(()), store, frozenset({"google-d"})
+    )
+    second = reconcile_publishing_channels(
+        first.config, store, frozenset({"google-d"})
+    )
+    assert second.config == first.config
+    assert len(second.config.themes[0].channels) == 1
+    assert second.created == 0
+    assert second.reused == 1
+
+
+def test_retry_before_oauth_reuses_existing_publishing_channel():
+    existing = PublishingChannel(
+        "existing",
+        "Channel C",
+        3,
+        google_identity_id="google-d",
+        youtube_channel_id="UC-C",
+        brand_plan_id="plan-c",
+    )
+    store = ReconcileStore(
+        (_plan(),), (_record(),), {"plan-c": "google-d"}
+    )
+    result = reconcile_publishing_channels(
+        _mapping_config((existing,)), store, frozenset({"google-d"})
+    )
+    assert [item.channel_id for item in result.config.themes[0].channels] == [
+        "existing"
+    ]
+    assert result.reused == 1
+
+
+def test_third_plan_reuses_empty_slot_owned_by_old_identity():
+    channels = (
+        PublishingChannel("a", "A", 1, brand_plan_id="plan-a"),
+        PublishingChannel("b", "B", 2, brand_plan_id="plan-b"),
+        PublishingChannel(
+            "stale", "Placeholder", 3, google_identity_id="google-a"
+        ),
+    )
+    store = ReconcileStore(
+        (_plan(),), (_record(),), {"plan-c": "google-d"}
+    )
+    result = reconcile_publishing_channels(
+        _mapping_config(channels), store, frozenset({"google-d"})
+    )
+    mapped = result.config.themes[0].channels
+    assert len(mapped) == 3
+    assert mapped[2].channel_id == "stale"
+    assert mapped[2].brand_plan_id == "plan-c"
+    assert mapped[2].google_identity_id == "google-d"
+
+
+def test_fourth_distinct_channel_is_still_rejected():
+    channels = tuple(
+        PublishingChannel(
+            f"channel-{slot}",
+            f"Channel {slot}",
+            slot,
+            brand_plan_id=f"plan-{slot}",
+            youtube_channel_id=f"UC-{slot}",
+        )
+        for slot in (1, 2, 3)
+    )
+    store = ReconcileStore(
+        (_plan("plan-four", 3, "Fourth"),),
+        (_record("plan-four", "UC-4"),),
+        {"plan-four": "google-d"},
+    )
+    with pytest.raises(ValueError, match="at most 3"):
+        reconcile_publishing_channels(
+            _mapping_config(channels), store, frozenset({"google-d"})
+        )
