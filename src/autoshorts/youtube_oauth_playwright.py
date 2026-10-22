@@ -95,12 +95,16 @@ class PlaywrightOAuthBrowser:
                 self.status = "CALLBACK_STARTED"
                 return
             self._raise_for_security_challenge()
-            if not account_selected and self._select_expected_account():
+            if not channel_selected and self._select_expected_channel():
+                channel_selected = True
+                # A Brand Account item on Google's chooser already belongs to the
+                # configured persistent Google identity; do not click its personal
+                # account entry afterward.
                 account_selected = True
                 deadline = time.monotonic() + timeout
                 continue
-            if not channel_selected and self._select_expected_channel():
-                channel_selected = True
+            if not account_selected and self._select_expected_account():
+                account_selected = True
                 deadline = time.monotonic() + timeout
                 continue
             if self._click_advanced():
@@ -234,7 +238,10 @@ class PlaywrightOAuthBrowser:
 
     def _raise_for_security_challenge(self) -> None:
         assert self.page is not None
-        body = self.page.locator("body").inner_text().casefold()
+        try:
+            body = self.page.locator("body").inner_text(timeout=1_000).casefold()
+        except Exception:
+            return
         if any(text in body for text in SECURITY_CHALLENGES):
             self._fail("NEEDS_HUMAN")
 

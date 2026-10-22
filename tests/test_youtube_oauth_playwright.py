@@ -46,7 +46,7 @@ class Locator:
     def nth(self, index):
         return self.elements[index]
 
-    def inner_text(self):
+    def inner_text(self, **kwargs):
         return self.text
 
     def all_inner_texts(self):
@@ -135,6 +135,32 @@ def test_expected_channel_is_selected(tmp_path):
     assert browser(tmp_path, page)._select_expected_channel()
     assert page.texts["Força Constante"].clicked
     assert not page.texts["Marcelo Clic"].clicked
+
+
+def test_state_machine_prefers_visible_target_channel_over_personal_account(
+    tmp_path, monkeypatch
+):
+    target = browser(tmp_path, Page())
+    events = []
+    monkeypatch.setattr(target, "_raise_for_security_challenge", lambda: None)
+    monkeypatch.setattr(
+        target, "_select_expected_channel", lambda: events.append("channel") or True
+    )
+    monkeypatch.setattr(
+        target,
+        "_select_expected_account",
+        lambda: (_ for _ in ()).throw(AssertionError("personal account selected")),
+    )
+    monkeypatch.setattr(target, "_click_advanced", lambda: False)
+    monkeypatch.setattr(target, "_click_autoshorts_link", lambda: False)
+    monkeypatch.setattr(
+        target,
+        "_click_consent_action",
+        lambda **kwargs: events.append("consent") or "CONTINUE",
+    )
+    target._assist(timeout=1)
+    assert events == ["channel", "consent"]
+    assert target.status == "CONSENT_CONTINUED"
 
 
 def test_wrong_channel_present_but_target_absent_is_not_selected(tmp_path):
