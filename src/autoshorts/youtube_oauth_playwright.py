@@ -86,6 +86,7 @@ class PlaywrightOAuthBrowser:
     def _assist(self, *, timeout: int = 90) -> None:
         assert self.page is not None
         deadline = time.monotonic() + timeout
+        channel_preference_deadline = time.monotonic() + 10
         account_selected = False
         channel_selected = False
         while time.monotonic() < deadline:
@@ -103,7 +104,11 @@ class PlaywrightOAuthBrowser:
                 account_selected = True
                 deadline = time.monotonic() + timeout
                 continue
-            if not account_selected and self._select_expected_account():
+            if (
+                time.monotonic() >= channel_preference_deadline
+                and not account_selected
+                and self._select_expected_account()
+            ):
                 account_selected = True
                 deadline = time.monotonic() + timeout
                 continue

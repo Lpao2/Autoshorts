@@ -156,11 +156,59 @@ def test_state_machine_prefers_visible_target_channel_over_personal_account(
     monkeypatch.setattr(
         target,
         "_click_consent_action",
-        lambda **kwargs: events.append("consent") or "CONTINUE",
+        lambda **kwargs: (
+            events.append("consent") or "CONTINUE" if events else None
+        ),
     )
     target._assist(timeout=1)
     assert events == ["channel", "consent"]
     assert target.status == "CONSENT_CONTINUED"
+
+
+def test_state_machine_waits_for_brand_account_before_email_fallback(
+    tmp_path, monkeypatch
+):
+    target = browser(tmp_path, Page())
+    events = []
+    clock = {"value": -2}
+
+    def monotonic():
+        clock["value"] += 2
+        return clock["value"]
+
+    monkeypatch.setattr(
+        "autoshorts.youtube_oauth_playwright.time.monotonic", monotonic
+    )
+    monkeypatch.setattr(target, "_raise_for_security_challenge", lambda: None)
+    monkeypatch.setattr(
+        target,
+        "_select_expected_channel",
+        lambda: (
+            events.append("channel") or True if "account" in events else False
+        ),
+    )
+    monkeypatch.setattr(
+        target,
+        "_select_expected_account",
+        lambda: (
+            (_ for _ in ()).throw(AssertionError("email fallback was too early"))
+            if clock["value"] < 10
+            else events.append("account") or True
+        ),
+    )
+    monkeypatch.setattr(target, "_click_advanced", lambda: False)
+    monkeypatch.setattr(target, "_click_autoshorts_link", lambda: False)
+    monkeypatch.setattr(
+        target,
+        "_click_consent_action",
+        lambda **kwargs: (
+            events.append("consent") or "CONTINUE"
+            if "channel" in events
+            else None
+        ),
+    )
+    target._assist(timeout=90)
+    assert events == ["account", "channel", "consent"]
 
 
 def test_wrong_channel_present_but_target_absent_is_not_selected(tmp_path):
