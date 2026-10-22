@@ -26,7 +26,12 @@ SECURITY_CHALLENGES = (
     "e-mail de recuperação",
     "verify it's you",
     "confirme que é você",
+    "verifique seu",
+    "check your",
 )
+HUMAN_CHALLENGE_TIMEOUT_MS = 10 * 60 * 1000
+HUMAN_CHALLENGE_POLL_MS = 1_000
+HUMAN_CHALLENGE_PROGRESS_MS = 30_000
 
 
 class OAuthUIError(RuntimeError):
@@ -47,6 +52,8 @@ class PlaywrightOAuthBrowser:
         protected_channel_names: tuple[str, ...] = (),
         require_confirmations: bool = False,
         confirm_callback: Callable[[str], object] | None = None,
+        human_challenge_timeout_ms: int = HUMAN_CHALLENGE_TIMEOUT_MS,
+        human_challenge_poll_ms: int = HUMAN_CHALLENGE_POLL_MS,
     ) -> None:
         self.profile_path = profile_path
         self.expected_channel_name = expected_channel_name
@@ -56,6 +63,8 @@ class PlaywrightOAuthBrowser:
         self.protected_channel_names = protected_channel_names
         self.require_confirmations = require_confirmations
         self.confirm_callback = confirm_callback or input
+        self.human_challenge_timeout_ms = human_challenge_timeout_ms
+        self.human_challenge_poll_ms = human_challenge_poll_ms
         self.status = "PENDING"
         self._playwright = None
         self.context = None
@@ -95,7 +104,13 @@ class PlaywrightOAuthBrowser:
                     self._fail("OAUTH_TARGET_CHANNEL_NOT_FOUND")
                 self.status = "CALLBACK_STARTED"
                 return
-            self._raise_for_security_challenge()
+            if self._wait_for_human_security_challenge():
+                # Human challenges have their own long timeout and do not consume
+                # the normal UI-state deadline. Re-evaluate whatever DOM Google
+                # presents next without navigating or recreating the page.
+                deadline = time.monotonic() + timeout
+                channel_preference_deadline = time.monotonic() + 10
+                continue
             if not channel_selected and self._select_expected_channel():
                 channel_selected = True
                 # A Brand Account item on Google's chooser already belongs to the
@@ -241,14 +256,46 @@ class PlaywrightOAuthBrowser:
         host = (urlparse(self.page.url).hostname or "").casefold()
         return host in {"127.0.0.1", "localhost"}
 
-    def _raise_for_security_challenge(self) -> None:
+    def _security_challenge_visible(self) -> bool:
         assert self.page is not None
         try:
             body = self.page.locator("body").inner_text(timeout=1_000).casefold()
         except Exception:
-            return
-        if any(text in body for text in SECURITY_CHALLENGES):
-            self._fail("NEEDS_HUMAN")
+            return False
+        return any(text in body for text in SECURITY_CHALLENGES)
+
+    def _wait_for_human_security_challenge(self) -> bool:
+        """Keep the current OAuth page alive while the user satisfies Google."""
+        assert self.page is not None
+        if not self._security_challenge_visible():
+            return False
+
+        self.status = "NEEDS_HUMAN"
+        print("[OAUTH] HUMAN SECURITY CHALLENGE")
+        print(self._diagnostic("Verificação humana solicitada pelo Google."))
+        print(
+            "Browser permanecerá aberto.\n"
+            "Resolva a solicitação manualmente no browser/celular.\n"
+            "[OAUTH] Aguardando a verificação ser concluída..."
+        )
+        started = time.monotonic()
+        deadline = started + self.human_challenge_timeout_ms / 1_000
+        next_progress = started + HUMAN_CHALLENGE_PROGRESS_MS / 1_000
+        while time.monotonic() < deadline:
+            self.page.wait_for_timeout(self.human_challenge_poll_ms)
+            if not self._security_challenge_visible():
+                self.status = "HUMAN_CHALLENGE_COMPLETED"
+                print("[OAUTH] Verificação humana concluída.")
+                print("[OAUTH] Continuando autorização...")
+                return True
+            now = time.monotonic()
+            if now >= next_progress:
+                print("[OAUTH] Ainda aguardando verificação humana...")
+                next_progress = now + HUMAN_CHALLENGE_PROGRESS_MS / 1_000
+
+        print("[OAUTH] Tempo limite aguardando a verificação humana do Google.")
+        self._fail("NEEDS_HUMAN_TIMEOUT")
+        return True
 
     def _unique_role(self, role: str, name: re.Pattern[str]):
         assert self.page is not None

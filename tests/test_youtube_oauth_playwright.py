@@ -142,7 +142,9 @@ def test_state_machine_prefers_visible_target_channel_over_personal_account(
 ):
     target = browser(tmp_path, Page())
     events = []
-    monkeypatch.setattr(target, "_raise_for_security_challenge", lambda: None)
+    monkeypatch.setattr(
+        target, "_wait_for_human_security_challenge", lambda: False
+    )
     monkeypatch.setattr(
         target, "_select_expected_channel", lambda: events.append("channel") or True
     )
@@ -179,7 +181,9 @@ def test_state_machine_waits_for_brand_account_before_email_fallback(
     monkeypatch.setattr(
         "autoshorts.youtube_oauth_playwright.time.monotonic", monotonic
     )
-    monkeypatch.setattr(target, "_raise_for_security_challenge", lambda: None)
+    monkeypatch.setattr(
+        target, "_wait_for_human_security_challenge", lambda: False
+    )
     monkeypatch.setattr(
         target,
         "_select_expected_channel",
@@ -282,13 +286,135 @@ def test_allow_never_clicks_before_target_channel_is_selected(tmp_path):
         "2-Step Verification",
         "CAPTCHA",
         "Recovery email",
+        "Confirme que é você — Verifique seu Galaxy A54 5G",
+        "Verify it's you — Check your phone",
     ),
 )
-def test_oauth_challenges_require_human(tmp_path, body):
-    target = browser(tmp_path, Page(body=body))
-    with pytest.raises(OAuthUIError, match="NEEDS_HUMAN"):
-        target._raise_for_security_challenge()
-    assert target.status == "NEEDS_HUMAN"
+def test_oauth_challenges_are_detected_without_automation(tmp_path, body):
+    page = Page(body=body, roles=(("button", "Confirmar"),))
+    target = browser(tmp_path, page, human_challenge_timeout_ms=1)
+    assert target._security_challenge_visible()
+    assert not page.roles[("button", "Confirmar")].clicked
+
+
+def test_security_challenge_wait_keeps_same_page_alive_and_continues(
+    tmp_path, monkeypatch
+):
+    page = Page(body="Confirme que é você")
+    target = browser(tmp_path, page, human_challenge_poll_ms=1)
+    original_page = target.page
+    checks = iter((True, True, False))
+    monkeypatch.setattr(target, "_security_challenge_visible", lambda: next(checks))
+
+    assert target._wait_for_human_security_challenge()
+    assert target.page is original_page
+    assert target.context is None
+    assert page.waits == [1, 1]
+    assert target.status == "HUMAN_CHALLENGE_COMPLETED"
+
+
+@pytest.mark.parametrize(
+    "next_state",
+    ("consent", "brand_account", "unverified_app", "callback"),
+)
+def test_assist_re_evaluates_valid_state_after_human_challenge(
+    tmp_path, monkeypatch, next_state
+):
+    target = browser(tmp_path, Page())
+    events = []
+    challenge = iter((True, False))
+    monkeypatch.setattr(
+        target,
+        "_wait_for_human_security_challenge",
+        lambda: next(challenge, False),
+    )
+    monkeypatch.setattr(
+        target,
+        "_callback_started",
+        lambda: next_state == "callback" and bool(events),
+    )
+    monkeypatch.setattr(
+        target,
+        "_select_expected_channel",
+        lambda: (
+            events.append("brand_account") or True
+            if next_state
+            in {"brand_account", "consent", "unverified_app", "callback"}
+            and not events
+            else False
+        ),
+    )
+    monkeypatch.setattr(target, "_select_expected_account", lambda: False)
+    monkeypatch.setattr(
+        target,
+        "_click_advanced",
+        lambda: events.append("unverified_app") or True
+        if next_state == "unverified_app" and len(events) == 1
+        else False,
+    )
+    monkeypatch.setattr(target, "_click_autoshorts_link", lambda: False)
+    monkeypatch.setattr(
+        target,
+        "_click_consent_action",
+        lambda **kwargs: (
+            events.append("consent") or "CONTINUE"
+            if next_state in {"consent", "brand_account"} and events
+            else None
+        ),
+    )
+    if next_state == "unverified_app":
+        # End the focused state-machine test after proving Advanced is reached.
+        monkeypatch.setattr(
+            target,
+            "_click_autoshorts_link",
+            lambda: (_ for _ in ()).throw(StopIteration),
+        )
+        with pytest.raises(StopIteration):
+            target._assist(timeout=1)
+        assert "unverified_app" in events
+    else:
+        target._assist(timeout=1)
+        assert target.status in {"CONSENT_CONTINUED", "CALLBACK_STARTED"}
+
+
+def test_security_challenge_timeout_is_distinct(tmp_path, monkeypatch):
+    target = browser(
+        tmp_path,
+        Page(body="Confirme que é você"),
+        human_challenge_timeout_ms=2,
+        human_challenge_poll_ms=1,
+    )
+    clock = iter((0.0, 0.0, 0.001, 0.003))
+    monkeypatch.setattr(
+        "autoshorts.youtube_oauth_playwright.time.monotonic", lambda: next(clock)
+    )
+    with pytest.raises(OAuthUIError, match="NEEDS_HUMAN_TIMEOUT"):
+        target._wait_for_human_security_challenge()
+    assert target.status == "NEEDS_HUMAN_TIMEOUT"
+
+
+def test_confirm_steps_still_run_after_security_challenge(tmp_path, monkeypatch):
+    messages = []
+    page = Page(texts=("Força Constante",))
+    target = browser(
+        tmp_path,
+        page,
+        require_confirmations=True,
+        confirm_callback=messages.append,
+    )
+    completed = iter((True, False))
+    monkeypatch.setattr(
+        target,
+        "_wait_for_human_security_challenge",
+        lambda: next(completed, False),
+    )
+    monkeypatch.setattr(
+        target,
+        "_click_consent_action",
+        lambda **kwargs: "CONTINUE" if page.texts["Força Constante"].clicked else None,
+    )
+    target._assist(timeout=1)
+    assert any("Pressione ENTER para selecionar" in item for item in messages)
 
 
 def test_checkpoints_are_injectable_and_can_be_disabled(tmp_path):
