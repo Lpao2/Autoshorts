@@ -1,0 +1,24 @@
+[Unit]
+Description=AutoShorts inventory production orchestrator
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=lpao
+Group=lpao
+WorkingDirectory=/srv/projects/autoshorts
+EnvironmentFile=/srv/autoshorts/run/runtime.env
+EnvironmentFile=/srv/autoshorts/run/secrets.env
+ExecStart=/srv/projects/autoshorts/.venv/bin/autoshorts-orchestrator --config /srv/autoshorts/config/automation.local.json --state-db /srv/autoshorts/data/autoshorts.db --workspace /srv/autoshorts/data/automation run --interval 300 --max-productions 1
+Restart=on-failure
+RestartSec=60s
+TimeoutStopSec=120s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
