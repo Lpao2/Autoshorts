@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +12,7 @@ from autoshorts.editorial_sources import (
     SourceRightsStatus,
     SourceValidationStatus,
 )
-from autoshorts.ingestion import discover_next_source_video, ingest
+from autoshorts.ingestion import _decode, discover_next_source_video, ingest
 from autoshorts.media_probe import MediaInfo, MediaProbeError
 from autoshorts.state_store import StateStore, VideoStatus
 
@@ -141,7 +143,9 @@ def test_ingest_persists_validated_download_and_second_run_excludes_it(
         def probe(path, _ffprobe):
             return MediaInfo(path.resolve(), 1200.4, 1920, 1080, 30.0, True, 0)
 
-        monkeypatch.setattr("autoshorts.ingestion._decode", lambda *_args: None)
+        monkeypatch.setattr(
+            "autoshorts.ingestion._decode", lambda *_args, **_kwargs: None
+        )
         result = ingest(
             report.selected,
             profile,
@@ -190,7 +194,9 @@ def test_ingest_failure_is_persisted_and_partials_are_removed(
         def probe(_path, _ffprobe):
             raise failure
 
-        monkeypatch.setattr("autoshorts.ingestion._decode", lambda *_args: None)
+        monkeypatch.setattr(
+            "autoshorts.ingestion._decode", lambda *_args, **_kwargs: None
+        )
         with pytest.raises(type(failure)):
             ingest(
                 report.selected,
@@ -202,6 +208,57 @@ def test_ingest_failure_is_persisted_and_partials_are_removed(
             )
         assert store.get_video("broken").status is VideoStatus.FAILED
         assert not list((tmp_path / "automation").rglob("*.part"))
+
+
+def test_decode_samples_beginning_middle_and_tail(tmp_path, monkeypatch):
+    media = tmp_path / "source.mp4"
+    media.touch()
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("autoshorts.ingestion.subprocess.run", run)
+
+    _decode(media, "ffmpeg", duration_seconds=2108)
+
+    assert len(calls) == 3
+    assert "-ss" not in calls[0][0]
+    assert calls[1][0][calls[1][0].index("-ss") + 1] == "1054.000"
+    assert calls[2][0][calls[2][0].index("-ss") + 1] == "2100.000"
+    assert all(call[1]["timeout"] == 120 for call in calls)
+    assert all("-xerror" in call[0] for call in calls)
+
+
+def test_decode_sample_timeout_is_controlled(tmp_path, monkeypatch):
+    media = tmp_path / "source.mp4"
+    media.touch()
+
+    def timeout(command, **_kwargs):
+        raise subprocess.TimeoutExpired(command, 120)
+
+    monkeypatch.setattr("autoshorts.ingestion.subprocess.run", timeout)
+
+    with pytest.raises(RuntimeError, match="timed out at 0.000s"):
+        _decode(media, "ffmpeg", duration_seconds=1200)
+
+
+def test_decode_sample_failure_reports_offset(tmp_path, monkeypatch):
+    media = tmp_path / "source.mp4"
+    media.touch()
+    results = iter(
+        (
+            SimpleNamespace(returncode=0, stderr=""),
+            SimpleNamespace(returncode=1, stderr="corrupt frame"),
+        )
+    )
+    monkeypatch.setattr(
+        "autoshorts.ingestion.subprocess.run", lambda *_args, **_kwargs: next(results)
+    )
+
+    with pytest.raises(RuntimeError, match="failed at 600.000s: corrupt frame"):
+        _decode(media, "ffmpeg", duration_seconds=1200)
 
 
 def test_unique_external_video_id_is_global(tmp_path):

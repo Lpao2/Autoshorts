@@ -209,7 +209,7 @@ def ingest(
             raise ValueError("Downloaded source has no positive duration.")
         if not media.has_audio:
             raise ValueError("Downloaded source has no audio stream.")
-        _decode(local_path, ffmpeg_path)
+        _decode(local_path, ffmpeg_path, duration_seconds=media.duration_seconds)
         checksum = _checksum(local_path)
         state.record_downloaded_video(
             candidate.external_video_id,
@@ -329,21 +329,65 @@ def _videos_url(source: ContentSource) -> str:
     return f"{base}/videos"
 
 
-def _decode(path: Path, ffmpeg_path: str) -> None:
-    try:
-        result = subprocess.run(
-            [ffmpeg_path, "-v", "error", "-i", str(path), "-f", "null", "-"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            timeout=900,
+def _decode(
+    path: Path,
+    ffmpeg_path: str,
+    *,
+    duration_seconds: float,
+    sample_seconds: float = 8.0,
+    timeout_seconds: int = 120,
+) -> None:
+    """Decode representative samples without rereading the entire source.
+
+    ``ffprobe`` has already validated the container and stream inventory. Sampling
+    the beginning, midpoint, and tail catches the common truncated/corrupt media
+    cases while keeping ingestion bounded for long source videos.
+    """
+    if duration_seconds <= 0:
+        raise ValueError("FFmpeg decode requires a positive media duration.")
+    last_start = max(0.0, duration_seconds - sample_seconds)
+    offsets = tuple(
+        dict.fromkeys((0.0, max(0.0, duration_seconds / 2), last_start))
+    )
+    for offset in offsets:
+        command = [ffmpeg_path, "-nostdin", "-v", "error", "-xerror"]
+        if offset:
+            command.extend(("-ss", f"{offset:.3f}"))
+        command.extend(
+            (
+                "-i",
+                str(path),
+                "-t",
+                f"{min(sample_seconds, duration_seconds):.3f}",
+                "-map",
+                "0:v:0?",
+                "-map",
+                "0:a:0?",
+                "-sn",
+                "-f",
+                "null",
+                "-",
+            )
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("FFmpeg decode exceeded 15 minutes.") from exc
-    if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg decode failed: {result.stderr[-2000:]}")
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"FFmpeg sample decode timed out at {offset:.3f}s."
+            ) from exc
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"FFmpeg sample decode failed at {offset:.3f}s: "
+                f"{result.stderr[-2000:]}"
+            )
 
 
 def _checksum(path: Path) -> str:
