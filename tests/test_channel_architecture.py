@@ -73,6 +73,29 @@ def test_editorial_resolution_composes_base_theme_and_channel_without_hardcode()
     assert resolved.visual_profile == selected.visual_profile
 
 
+def test_theme_visual_profile_is_inherited_with_channel_palette():
+    theme_visual = VisualProfile(
+        crop_preset="lol-gameplay-v1",
+        focal_y=0.38,
+        safe_bottom=450,
+    )
+    selected = channel(
+        visual_profile=VisualProfile(
+            palette=ColorPalette("red", "black", "white", "#111111")
+        )
+    )
+    theme = ThemeProfile(
+        "LoL", "", (), "lol", channels=(selected,), visual_profile=theme_visual
+    )
+    resolved = resolve_publishing_profile(theme, selected)
+    assert resolved.visual_profile.crop_preset == "lol-gameplay-v1"
+    assert resolved.visual_profile.focal_y == 0.38
+    assert resolved.visual_profile.palette == selected.visual_profile.palette
+
+    other = ThemeProfile("Other", "", (), "other")
+    assert other.visual_profile.crop_preset == "default"
+
+
 def test_visual_and_posting_profiles_round_trip_with_defaults():
     visual = VisualProfile(
         ColorPalette("red", "black", "white", "#111111"),
@@ -89,9 +112,28 @@ def test_visual_and_posting_profiles_round_trip_with_defaults():
     restored = loaded.themes[0].channels[0]
     assert restored.visual_profile == visual
     assert restored.posting_policy == posting
+    assert loaded.themes[0].visual_profile == VisualProfile()
     assert PostingPolicy().enabled is False
     with pytest.raises(ValueError, match="positive"):
         PostingPolicy(daily_limit=0)
+
+
+def test_theme_visual_profile_round_trip():
+    profile = VisualProfile(
+        crop_preset="gameplay",
+        caption_preset="gameplay-safe",
+        focal_x=0.45,
+        focal_y=0.38,
+        foreground_scale=1.1,
+        blur_strength=24,
+        safe_top=100,
+        safe_bottom=420,
+    )
+    config = AutomationConfig(
+        (ThemeProfile("LoL", "", (), "lol", visual_profile=profile),)
+    )
+    restored = automation_config_from_dict(automation_config_to_dict(config))
+    assert restored.themes[0].visual_profile == profile
 
 
 def test_maximum_three_enabled_channels_and_persistent_slots():

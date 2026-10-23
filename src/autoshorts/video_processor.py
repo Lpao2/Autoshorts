@@ -11,8 +11,9 @@ from queue import Empty, Queue
 from tempfile import TemporaryFile
 from threading import Event, Thread
 
+from autoshorts.automation_config import VisualProfile
 from autoshorts.config import Settings
-from autoshorts.media_probe import validate_rendered_media
+from autoshorts.media_probe import MediaInfo, probe_media, validate_rendered_media
 from autoshorts.render_events import (
     ProgressCallback,
     RenderEvent,
@@ -33,20 +34,33 @@ class RenderResult:
     status: str
 
 
-def build_vertical_filter(width: int, height: int) -> str:
+def build_vertical_filter(
+    width: int, height: int, profile: VisualProfile | None = None
+) -> str:
     """Create a vertical layout with a blurred background."""
 
     if width <= 0 or height <= 0 or width % 2 or height % 2:
         raise ValueError("Output dimensions must be positive even integers.")
 
+    profile = profile or VisualProfile()
+    if profile.crop_mode == "center_crop":
+        return (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height}:"
+            f"(in_w-out_w)*{profile.focal_x:.3f}:"
+            f"(in_h-out_h)*{profile.focal_y:.3f},format=yuv420p[video]"
+        )
+    zoom = profile.foreground_scale
     return (
         "[0:v]split=2[background_source][foreground_source];"
         f"[background_source]scale={width}:{height}:"
         "force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},boxblur=20:10[background];"
+        f"crop={width}:{height},boxblur={profile.blur_strength}:10[background];"
         f"[foreground_source]scale={width}:{height}:"
-        "force_original_aspect_ratio=decrease[foreground];"
-        "[background][foreground]overlay=(W-w)/2:(H-h)/2,"
+        "force_original_aspect_ratio=decrease,"
+        f"scale=trunc(iw*{zoom:.3f}/2)*2:trunc(ih*{zoom:.3f}/2)*2[foreground];"
+        "[background][foreground]overlay="
+        f"(W-w)*{profile.focal_x:.3f}:(H-h)*{profile.focal_y:.3f},"
         "format=yuv420p[video]"
     )
 
@@ -56,6 +70,7 @@ def _ffmpeg_command(
     planned: PlannedClip,
     temporary_path: Path,
     settings: Settings,
+    visual_profile: VisualProfile | None = None,
 ) -> list[str]:
     return [
         settings.ffmpeg_path,
@@ -74,7 +89,9 @@ def _ffmpeg_command(
         "-t",
         f"{planned.duration_seconds:.3f}",
         "-filter_complex",
-        build_vertical_filter(settings.output_width, settings.output_height),
+        build_vertical_filter(
+            settings.output_width, settings.output_height, visual_profile
+        ),
         "-map",
         "[video]",
         "-map",
@@ -175,6 +192,7 @@ def render_planned_clip(
     *,
     cancel: Event | None = None,
     on_progress: ProgressCallback | None = None,
+    visual_profile: VisualProfile | None = None,
 ) -> RenderResult:
     """Render and validate one planned clip atomically."""
     cancel = cancel if cancel is not None else Event()
@@ -211,7 +229,9 @@ def render_planned_clip(
     temporary_path.unlink(missing_ok=True)
     try:
         _run_ffmpeg(
-            _ffmpeg_command(source, planned, temporary_path, settings),
+            _ffmpeg_command(
+                source, planned, temporary_path, settings, visual_profile
+            ),
             planned.duration_seconds,
             cancel,
             lambda value: report("rendering", value),
@@ -276,3 +296,47 @@ def process_render_plan(
     if first_error is not None:
         raise first_error
     return tuple(results[index] for index in sorted(results))
+
+
+def render_crop_preview(
+    source: Path,
+    output: Path,
+    *,
+    start_seconds: float,
+    duration_seconds: float,
+    settings: Settings,
+    visual_profile: VisualProfile,
+) -> MediaInfo:
+    """Render a short, non-persistent sample for theme crop calibration."""
+    if duration_seconds <= 0:
+        raise ValueError("Preview duration must be positive.")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(".part.mp4")
+    temporary.unlink(missing_ok=True)
+    command = [
+        settings.ffmpeg_path,
+        "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+        "-ss", seconds_to_timestamp(start_seconds), "-i", str(source),
+        "-t", f"{duration_seconds:.3f}",
+        "-filter_complex",
+        build_vertical_filter(
+            settings.output_width, settings.output_height, visual_profile
+        ),
+        "-map", "[video]", "-map", "0:a?", "-c:v", settings.video_codec,
+        "-preset", settings.video_preset, "-crf", str(settings.video_crf),
+        "-c:a", settings.audio_codec, "-b:a", settings.audio_bitrate,
+        "-movflags", "+faststart", str(temporary),
+    ]
+    try:
+        subprocess.run(command, check=True)
+        validate_rendered_media(
+            temporary,
+            ffprobe_path=settings.ffprobe_path,
+            expected_width=settings.output_width,
+            expected_height=settings.output_height,
+            expected_duration=duration_seconds,
+        )
+        temporary.replace(output)
+        return probe_media(output, settings.ffprobe_path)
+    finally:
+        temporary.unlink(missing_ok=True)

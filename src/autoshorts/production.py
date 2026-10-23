@@ -99,7 +99,8 @@ def run_single_production(
     transcript_path = work / "transcript.json"
     analysis_path = work / "analysis.json"
     selection_path = work / "selection.json"
-    manifest_path = work / "production.json"
+    visual_fingerprint = _visual_fingerprint(theme)
+    manifest_path = work / f"production-{visual_fingerprint}.json"
 
     transcript = _get_transcript(
         state, video, transcript_path, transcription_provider
@@ -113,7 +114,9 @@ def run_single_production(
     if current.status == VideoStatus.ANALYZED:
         state.transition_video(youtube_id, VideoStatus.SEGMENT_SELECTED)
 
-    output_path = output_dir / f"01_{_safe(selection.title)}.mp4"
+    output_path = output_dir / (
+        f"01_{_safe(selection.title)}_visual-{visual_fingerprint}.mp4"
+    )
     if dry_run:
         return ProductionResult(
             selection, output_path, manifest_path, None, None, False, False
@@ -122,60 +125,72 @@ def run_single_production(
     current = state.get_video(youtube_id)
     assert current is not None
     shorts = state.shorts_for_video(youtube_id)
+    recalibrating_ready = current.status is VideoStatus.READY
     if current.status in {
         VideoStatus.RENDERED,
         VideoStatus.CAPTIONED,
         VideoStatus.READY,
     }:
         if (
-            len(shorts) != 1
-            or shorts[0].file_path != output_path
-            or not output_path.is_file()
+            len(shorts) == 1
+            and shorts[0].file_path == output_path
+            and output_path.is_file()
         ):
+            media = probe_media(output_path, settings.ffprobe_path)
+            checksum = _sha256(output_path)
+            _validate_manifest(manifest_path, selection, output_path, checksum)
+            return ProductionResult(
+                selection, output_path, manifest_path, media, checksum, False, True
+            )
+        if not recalibrating_ready:
             raise RuntimeError(
                 "Rendered state is inconsistent; refusing duplicate output."
             )
-        media = probe_media(output_path, settings.ffprobe_path)
-        checksum = _sha256(output_path)
-        _validate_manifest(manifest_path, selection, output_path, checksum)
-        return ProductionResult(
-            selection, output_path, manifest_path, media, checksum, False, True
-        )
 
-    state.transition_video(youtube_id, VideoStatus.RENDERING)
+    if not recalibrating_ready:
+        state.transition_video(youtube_id, VideoStatus.RENDERING)
     render_settings = replace(
         settings,
         output_dir=output_dir,
         extra_clip_seconds=0,
         max_workers=1,
-        overwrite_policy="error",
+        overwrite_policy="skip" if recalibrating_ready else "error",
     )
     plan = build_render_plan(
         probe_media(video.local_path, settings.ffprobe_path),
         [_selection_clip(selection)],
         render_settings,
     )
-    result = render_planned_clip(video.local_path, plan.clips[0], render_settings)
+    planned = replace(plan.clips[0], output_path=output_path)
+    result = render_planned_clip(
+        video.local_path,
+        planned,
+        render_settings,
+        visual_profile=theme.visual_profile,
+    )
     _decode_fully(result.output_path, settings.ffmpeg_path)
     media = probe_media(result.output_path, settings.ffprobe_path)
     checksum = _sha256(result.output_path)
-    state.record_single_rendered_short(
-        youtube_id,
-        RenderedShort(
-            1,
-            result.output_path,
-            selection.title,
-            selection.headline,
-            selection.score,
-            candidate_id=f"{youtube_id}:winner:1",
-            duration_seconds=selection.duration_seconds,
-        ),
+    rendered_short = RenderedShort(
+        1,
+        result.output_path,
+        selection.title,
+        selection.headline,
+        selection.score,
+        candidate_id=f"{youtube_id}:winner:1",
+        duration_seconds=selection.duration_seconds,
     )
+    if recalibrating_ready:
+        state.replace_ready_rendered_short(youtube_id, rendered_short)
+    else:
+        state.record_single_rendered_short(youtube_id, rendered_short)
     _write_json_atomic(
         manifest_path,
         {
             "schema_version": 1,
             "production_version": PRODUCTION_VERSION,
+            "visual_profile": asdict(theme.visual_profile),
+            "visual_fingerprint": visual_fingerprint,
             "selection": asdict(selection),
             "output_path": str(result.output_path),
             "checksum_sha256": checksum,
@@ -219,7 +234,11 @@ def produce_source_video(
     if dry_run:
         return ReadyProductionResult(base, None, None, base.reused)
 
-    from autoshorts.captions import render_captioned_short
+    from autoshorts.captions import (
+        DEFAULT_CAPTION_PRESET,
+        SafeArea,
+        render_captioned_short,
+    )
 
     transcript_record = state.get_transcript(youtube_id)
     if transcript_record is None:
@@ -232,6 +251,14 @@ def produce_source_video(
         transcript_path=transcript_record.file_path,
         ffmpeg_path=settings.ffmpeg_path,
         ffprobe_path=settings.ffprobe_path,
+        preset=replace(
+            DEFAULT_CAPTION_PRESET,
+            name=theme.visual_profile.caption_preset,
+            safe_area=SafeArea(
+                margin_top=theme.visual_profile.safe_top,
+                margin_bottom=theme.visual_profile.safe_bottom,
+            ),
+        ),
     )
     manifest = json.loads(captioned.manifest_path.read_text(encoding="utf-8"))
     fingerprint = str(manifest["fingerprint"])
@@ -364,6 +391,11 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _visual_fingerprint(theme: ThemeProfile) -> str:
+    payload = json.dumps(asdict(theme.visual_profile), sort_keys=True).encode()
+    return hashlib.sha256(payload).hexdigest()[:8]
 
 
 def _decode_fully(path: Path, ffmpeg: str) -> None:

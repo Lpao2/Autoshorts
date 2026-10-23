@@ -22,6 +22,7 @@ from autoshorts.production import SegmentSelection, produce_source_video
 from autoshorts.scheduler import SchedulerService
 from autoshorts.state_store import StateStore, default_state_db_path
 from autoshorts.transcription import load_transcript
+from autoshorts.video_processor import render_crop_preview
 from autoshorts.youtube_publishing import YouTubePublicationService
 
 
@@ -39,6 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
     caption = sub.add_parser("caption")
     caption.add_argument("--source-video-id", required=True)
     caption.add_argument("--state-db", type=Path, default=default_state_db_path())
+    preview = sub.add_parser("preview-crop")
+    preview.add_argument("--source-video-id", required=True)
+    preview.add_argument("--seconds", type=float, default=6.0)
+    preview.add_argument("--output", type=Path)
+    preview.add_argument("--state-db", type=Path, default=default_state_db_path())
+    preview.add_argument(
+        "--config", type=Path, default=Path("config/automation.local.json")
+    )
     metadata = sub.add_parser("metadata")
     metadata.add_argument("--source-video-id", required=True)
     metadata.add_argument("--channel", required=True)
@@ -63,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "caption":
         return _caption(args)
+    if args.command == "preview-crop":
+        return _preview_crop(args)
     if args.command == "metadata":
         return _metadata(args)
     if args.command == "approve-metadata":
@@ -168,6 +179,43 @@ def _caption(args) -> int:
     print(f"Video: {result.video_path}")
     print(f"SHA-256: {result.checksum}")
     print(f"Result: {'REUSED' if result.reused else 'RENDERED'}")
+    return 0
+
+
+def _preview_crop(args) -> int:
+    config = load_automation_config(args.config)
+    settings = load_settings()
+    with StateStore(args.state_db) as state:
+        video = state.get_video(args.source_video_id)
+        transcript = state.get_transcript(args.source_video_id)
+        if video is None or video.local_path is None or transcript is None:
+            raise SystemExit("Crop preview requires a downloaded, transcribed source.")
+        theme = _resolve_video_theme(config, state, video)
+        selection_path = transcript.file_path.parent / "selection.json"
+        if not selection_path.is_file():
+            raise SystemExit(f"Selection artifact not found: {selection_path}")
+        selection = SegmentSelection(
+            **json.loads(selection_path.read_text(encoding="utf-8"))
+        )
+        duration = min(args.seconds, selection.duration_seconds)
+        output = args.output or (
+            Path("data/automation")
+            / theme.output_subdirectory
+            / "previews"
+            / f"{video.youtube_id}-{theme.visual_profile.crop_preset}.mp4"
+        )
+        media = render_crop_preview(
+            video.local_path,
+            output.resolve(),
+            start_seconds=selection.start_seconds,
+            duration_seconds=duration,
+            settings=settings,
+            visual_profile=theme.visual_profile,
+        )
+    print(f"Theme: {theme.output_subdirectory}")
+    print(f"Visual profile: {theme.visual_profile.crop_preset}")
+    print(f"Preview: {media.path}")
+    print(f"Media: {media.width}x{media.height} {media.duration_seconds:.3f}s")
     return 0
 
 

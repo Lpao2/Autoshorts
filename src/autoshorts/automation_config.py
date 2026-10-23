@@ -59,6 +59,25 @@ class VisualProfile:
     crop_preset: str = "default"
     caption_preset: str = "default"
     branding_preset: str = "none"
+    crop_mode: str = "blurred_fit"
+    focal_x: float = 0.5
+    focal_y: float = 0.5
+    foreground_scale: float = 1.0
+    blur_strength: int = 20
+    safe_top: int = 120
+    safe_bottom: int = 450
+
+    def __post_init__(self) -> None:
+        if self.crop_mode not in {"blurred_fit", "center_crop"}:
+            raise ValueError("crop_mode must be blurred_fit or center_crop.")
+        if not 0 <= self.focal_x <= 1 or not 0 <= self.focal_y <= 1:
+            raise ValueError("Visual focal positions must be between 0 and 1.")
+        if not 1 <= self.foreground_scale <= 2:
+            raise ValueError("foreground_scale must be between 1 and 2.")
+        if not 0 <= self.blur_strength <= 100:
+            raise ValueError("blur_strength must be between 0 and 100.")
+        if self.safe_top < 0 or self.safe_bottom < 0:
+            raise ValueError("Visual safe-area margins cannot be negative.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +143,7 @@ class ThemeProfile:
     channels: tuple[PublishingChannel, ...] = ()
     youtube_category_id: str | None = None
     youtube_category_name: str | None = None
+    visual_profile: VisualProfile = field(default_factory=VisualProfile)
 
     def __post_init__(self) -> None:
         if not self.theme_id:
@@ -216,7 +236,7 @@ def resolve_publishing_profile(
         theme.name,
         channel,
         resolve_editorial_context(theme, channel, base_prompt=base_prompt),
-        channel.visual_profile,
+        field_replace(theme.visual_profile, palette=channel.visual_profile.palette),
         channel.posting_policy,
     )
 
@@ -339,6 +359,9 @@ def automation_config_from_dict(data: object) -> AutomationConfig:
                 channels=channels,
                 youtube_category_id=_optional_text(raw_theme.get("youtube_category_id")),
                 youtube_category_name=_optional_text(raw_theme.get("youtube_category_name")),
+                visual_profile=_load_visual_profile(
+                    raw_theme.get("visual_profile"), "theme visual_profile"
+                ),
             )
         )
     return AutomationConfig(tuple(themes), tuple(identities))
@@ -364,6 +387,7 @@ def automation_config_to_dict(config: AutomationConfig) -> dict[str, object]:
                 "output_subdirectory": theme.output_subdirectory,
                 "youtube_category_id": theme.youtube_category_id,
                 "youtube_category_name": theme.youtube_category_name,
+                "visual_profile": _visual_profile_to_dict(theme.visual_profile),
                 "creators": [
                     {
                         "name": creator.name,
@@ -399,17 +423,7 @@ def _channel_to_dict(channel: PublishingChannel) -> dict[str, object]:
             "headline_style": channel.editorial_profile.headline_style,
             "tone": channel.editorial_profile.tone,
         },
-        "visual_profile": {
-            "palette": {
-                "primary": channel.visual_profile.palette.primary,
-                "secondary": channel.visual_profile.palette.secondary,
-                "accent": channel.visual_profile.palette.accent,
-                "background": channel.visual_profile.palette.background,
-            },
-            "crop_preset": channel.visual_profile.crop_preset,
-            "caption_preset": channel.visual_profile.caption_preset,
-            "branding_preset": channel.visual_profile.branding_preset,
-        },
+        "visual_profile": _visual_profile_to_dict(channel.visual_profile),
         "posting_policy": {
             "enabled": channel.posting_policy.enabled,
             "daily_limit": channel.posting_policy.daily_limit,
@@ -528,8 +542,6 @@ def _load_channel(data: object, theme_name: str) -> PublishingChannel:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Channel '{name}' slot must be 1, 2 or 3.") from exc
     editorial = _mapping(data.get("editorial_profile"), "editorial_profile")
-    visual = _mapping(data.get("visual_profile"), "visual_profile")
-    palette = _mapping(visual.get("palette"), "palette")
     posting = _mapping(data.get("posting_policy"), "posting_policy")
     windows = posting.get("posting_windows", [])
     if not isinstance(windows, list) or not all(isinstance(x, str) for x in windows):
@@ -553,16 +565,8 @@ def _load_channel(data: object, theme_name: str) -> PublishingChannel:
             str(editorial.get("headline_style", "")),
             str(editorial.get("tone", "")),
         ),
-        visual_profile=VisualProfile(
-            ColorPalette(
-                str(palette.get("primary", "#ffffff")),
-                str(palette.get("secondary", "#000000")),
-                str(palette.get("accent", "#3b82f6")),
-                str(palette.get("background", "#0f172a")),
-            ),
-            str(visual.get("crop_preset", "default")),
-            str(visual.get("caption_preset", "default")),
-            str(visual.get("branding_preset", "none")),
+        visual_profile=_load_visual_profile(
+            data.get("visual_profile"), "visual_profile"
         ),
         posting_policy=PostingPolicy(
             _boolean(posting, "enabled", False, f"channel '{name}' posting policy"),
@@ -580,6 +584,53 @@ def _mapping(value: object, name: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object.")
     return value
+
+
+def _load_visual_profile(value: object, name: str) -> VisualProfile:
+    visual = _mapping(value, name)
+    palette = _mapping(visual.get("palette"), "palette")
+    try:
+        return VisualProfile(
+            palette=ColorPalette(
+                str(palette.get("primary", "#ffffff")),
+                str(palette.get("secondary", "#000000")),
+                str(palette.get("accent", "#3b82f6")),
+                str(palette.get("background", "#0f172a")),
+            ),
+            crop_preset=str(visual.get("crop_preset", "default")),
+            caption_preset=str(visual.get("caption_preset", "default")),
+            branding_preset=str(visual.get("branding_preset", "none")),
+            crop_mode=str(visual.get("crop_mode", "blurred_fit")),
+            focal_x=float(visual.get("focal_x", 0.5)),
+            focal_y=float(visual.get("focal_y", 0.5)),
+            foreground_scale=float(visual.get("foreground_scale", 1.0)),
+            blur_strength=int(visual.get("blur_strength", 20)),
+            safe_top=int(visual.get("safe_top", 120)),
+            safe_bottom=int(visual.get("safe_bottom", 450)),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid {name}: {exc}") from exc
+
+
+def _visual_profile_to_dict(profile: VisualProfile) -> dict[str, object]:
+    return {
+        "palette": {
+            "primary": profile.palette.primary,
+            "secondary": profile.palette.secondary,
+            "accent": profile.palette.accent,
+            "background": profile.palette.background,
+        },
+        "crop_preset": profile.crop_preset,
+        "caption_preset": profile.caption_preset,
+        "branding_preset": profile.branding_preset,
+        "crop_mode": profile.crop_mode,
+        "focal_x": profile.focal_x,
+        "focal_y": profile.focal_y,
+        "foreground_scale": profile.foreground_scale,
+        "blur_strength": profile.blur_strength,
+        "safe_top": profile.safe_top,
+        "safe_bottom": profile.safe_bottom,
+    }
 
 
 def _optional_text(value: object) -> str | None:

@@ -864,6 +864,31 @@ class StateStore:
             raise RuntimeError("Single-short persistence invariant failed.")
         return rows[0]
 
+    def replace_ready_rendered_short(
+        self, youtube_id: str, short: RenderedShort
+    ) -> ShortRecord:
+        """Atomically point an existing READY source at a recalibrated render."""
+        if short.clip_index != 1 or not short.file_path.is_file():
+            raise ValueError("A valid single rendered short is required.")
+        current = self.get_video(youtube_id)
+        rows = self.shorts_for_video(youtube_id)
+        if current is None or current.status is not VideoStatus.READY or len(rows) != 1:
+            raise ValueError("Visual recalibration requires one READY Short.")
+        with self.connection:
+            cursor = self.connection.execute(
+                """UPDATE shorts SET file_path=?, title=?, headline=?,
+                generator_score=?, editorial_score=?, candidate_id=?,
+                duration_seconds=?, updated_at=? WHERE youtube_id=? AND clip_index=1""",
+                (
+                    str(short.file_path), short.title, short.headline,
+                    short.generator_score, short.editorial_score,
+                    short.candidate_id, short.duration_seconds, _now(), youtube_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("READY Short recalibration update failed.")
+        return self.shorts_for_video(youtube_id)[0]
+
     def get_ready_artifact(self, youtube_id: str) -> ReadyArtifact | None:
         row = self.connection.execute(
             "SELECT * FROM ready_artifacts WHERE youtube_id = ?", (youtube_id,)
