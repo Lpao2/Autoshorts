@@ -2,6 +2,8 @@
 Description=AutoShorts private publication scheduler
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -13,8 +15,6 @@ EnvironmentFile=/srv/autoshorts/run/secrets.env
 ExecStart=/srv/projects/autoshorts/.venv/bin/autoshorts-scheduler run --confirm-private-uploads
 Restart=on-failure
 RestartSec=30s
-StartLimitIntervalSec=600
-StartLimitBurst=3
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
