@@ -1,0 +1,22 @@
+[Unit]
+Description=AutoShorts private publication scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lpao
+Group=lpao
+WorkingDirectory=/srv/projects/autoshorts
+EnvironmentFile=/srv/autoshorts/run/autoshorts.env
+ExecStart=/srv/projects/autoshorts/.venv/bin/autoshorts-scheduler run --confirm-private-uploads
+Restart=on-failure
+RestartSec=30s
+StartLimitIntervalSec=600
+StartLimitBurst=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

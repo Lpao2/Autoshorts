@@ -1,0 +1,13 @@
+[Unit]
+Description=Backup essential AutoShorts runtime state
+
+[Service]
+Type=oneshot
+User=lpao
+Group=lpao
+WorkingDirectory=/srv/projects/autoshorts
+EnvironmentFile=/srv/autoshorts/run/autoshorts.env
+ExecStart=/srv/projects/autoshorts/.venv/bin/python tools/autoshorts_backup.py --runtime /srv/autoshorts --keep 7
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
