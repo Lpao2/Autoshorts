@@ -23,6 +23,7 @@ class FasterWhisperProvider:
         device: str | None = None,
         compute_type: str | None = None,
         language: str | None = None,
+        local_files_only: bool | None = None,
     ) -> None:
         self.model = model or os.getenv("AUTOSHORTS_WHISPER_MODEL", "small")
         self.device = device or os.getenv("AUTOSHORTS_WHISPER_DEVICE", "cpu")
@@ -30,6 +31,14 @@ class FasterWhisperProvider:
             "AUTOSHORTS_WHISPER_COMPUTE_TYPE", "int8"
         )
         self.language = language
+        self.local_files_only = (
+            local_files_only
+            if local_files_only is not None
+            else os.getenv("AUTOSHORTS_WHISPER_LOCAL_FILES_ONLY", "")
+            .strip()
+            .casefold()
+            in {"1", "true", "yes", "on"}
+        )
         self._engine = None
 
     def transcribe(
@@ -96,7 +105,10 @@ class FasterWhisperProvider:
                     "pip install -e '.[transcription]'"
                 ) from exc
             self._engine = WhisperModel(
-                self.model, device=self.device, compute_type=self.compute_type
+                self.model,
+                device=self.device,
+                compute_type=self.compute_type,
+                local_files_only=self.local_files_only,
             )
         return self._engine
 

@@ -260,6 +260,28 @@ def test_pipeline_resumes_assigned_analysis_before_discovery(tmp_path):
     state.close()
 
 
+@pytest.mark.parametrize("status", ("DOWNLOADED", "TRANSCRIBING"))
+def test_pipeline_finds_interrupted_transcription_for_resume(tmp_path, status):
+    state = StateStore(tmp_path / "state.db")
+    state.register_video(
+        youtube_id="partial-transcript",
+        source_url="https://youtube.test/partial-transcript",
+        creator_name="Creator",
+        theme_name="lol",
+        title="Partial",
+    )
+    state.connection.execute(
+        "UPDATE videos SET status=?, local_path=? WHERE youtube_id=?",
+        (status, str(tmp_path / "source.mp4"), "partial-transcript"),
+    )
+    state.assign_source_to_channel("partial-transcript", "channel-1")
+    producer = object.__new__(PipelineChannelProducer)
+    producer.state = state
+
+    assert producer._resumable_source("channel-1") == "partial-transcript"
+    state.close()
+
+
 def test_dry_run_has_no_side_effects_and_limit_is_zero(tmp_path):
     state, orchestrator, worker = setup_orchestrator(tmp_path)
     before = state.connection.total_changes

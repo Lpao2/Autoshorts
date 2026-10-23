@@ -185,6 +185,29 @@ def test_optional_provider_module_imports_without_faster_whisper(monkeypatch):
         provider._load_engine()
 
 
+def test_faster_whisper_can_be_forced_to_use_local_cache(monkeypatch):
+    captured = {}
+
+    class WhisperModel:
+        def __init__(self, model, **kwargs):
+            captured.update(model=model, **kwargs)
+
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=WhisperModel)
+    )
+    monkeypatch.setenv("AUTOSHORTS_WHISPER_LOCAL_FILES_ONLY", "true")
+    module = importlib.import_module("autoshorts.faster_whisper_provider")
+
+    module.FasterWhisperProvider(model="small")._load_engine()
+
+    assert captured == {
+        "model": "small",
+        "device": "cpu",
+        "compute_type": "int8",
+        "local_files_only": True,
+    }
+
+
 def test_faster_whisper_adapter_filters_zero_duration_words():
     from autoshorts.faster_whisper_provider import _valid_word
 

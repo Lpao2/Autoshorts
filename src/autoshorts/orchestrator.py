@@ -38,6 +38,7 @@ from autoshorts.state_store import (
     PublicationStatus,
     ReviewPolicy,
     StateStore,
+    VideoStatus,
 )
 from autoshorts.youtube_publishing import YouTubePublicationService
 
@@ -238,6 +239,9 @@ class PipelineChannelProducer:
                 source_id, context.channel.channel_id
             )
         else:
+            current = self.state.get_video(source_id)
+            if current is not None and current.status is VideoStatus.TRANSCRIBING:
+                self.state.reset_for_recovery(source_id, VideoStatus.DOWNLOADED)
             LOGGER.info(
                 "Resuming source=%s channel=%s from persisted pipeline state.",
                 source_id,
@@ -285,7 +289,8 @@ class PipelineChannelProducer:
             LEFT JOIN ready_artifacts ready ON ready.youtube_id=video.youtube_id
             WHERE assignment.publishing_channel_id=? AND ready.youtube_id IS NULL
               AND video.status IN (
-                  'TRANSCRIBED', 'ANALYZING', 'ANALYZED', 'SEGMENT_SELECTED',
+                  'DOWNLOADED', 'TRANSCRIBING', 'TRANSCRIBED', 'ANALYZING',
+                  'ANALYZED', 'SEGMENT_SELECTED',
                   'RENDERING', 'RENDERED', 'CAPTIONED'
               )
             ORDER BY assignment.created_at, assignment.youtube_id
