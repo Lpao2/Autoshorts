@@ -269,6 +269,7 @@ def test_pipeline_emits_candidate_skipped_and_passes_auth(tmp_path, monkeypatch)
 
 
 def test_gui_request_passes_selected_youtube_browser(tmp_path):
+    pytest.importorskip("tkinter")
     from autoshorts.gui import AutoShortsWindow
 
     class Variable:
