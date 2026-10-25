@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from autoshorts.automation_store import AutomationStore, default_automation_config_path
 from autoshorts.credential_store import FilesystemCredentialStore
+from autoshorts.media_retention import PublishedMediaRetention
 from autoshorts.scheduler import (
     SchedulerExecutionError,
     SchedulerExecutionResult,
@@ -24,8 +26,13 @@ from autoshorts.youtube_publishing import (
 
 
 class YouTubeSchedulerExecutor:
-    def __init__(self, service: YouTubePublicationService) -> None:
+    def __init__(
+        self,
+        service: YouTubePublicationService,
+        retention: PublishedMediaRetention | None = None,
+    ) -> None:
         self.service = service
+        self.retention = retention
 
     def execute(self, publication_id: int) -> SchedulerExecutionResult:
         try:
@@ -36,6 +43,14 @@ class YouTubeSchedulerExecutor:
             ) from exc
         except (FileNotFoundError, KeyError, OSError, RuntimeError, ValueError) as exc:
             raise SchedulerExecutionError(str(exc), recoverable=False) from exc
+        if (
+            self.retention is not None
+            and publication.remote_video_id is not None
+            and publication.status == "PUBLISHED"
+        ):
+            cleanup = self.retention.cleanup(publication.publication_id)
+            for error in cleanup.errors:
+                print(f"Media retention warning: {error}")
         return SchedulerExecutionResult(
             publication.remote_video_id is not None
             and publication.status == "PUBLISHED"
@@ -74,8 +89,18 @@ def main(argv: list[str] | None = None) -> int:
         publishing = YouTubePublicationService(
             config, state, FilesystemCredentialStore()
         )
+        retention_root = os.getenv("AUTOSHORTS_PUBLISHED_MEDIA_RETENTION_ROOT")
+        retention = (
+            PublishedMediaRetention(state, Path(retention_root))
+            if retention_root
+            else None
+        )
+        if retention is not None:
+            for cleanup in retention.cleanup_all():
+                for error in cleanup.errors:
+                    print(f"Media retention warning: {error}")
         scheduler = SchedulerService(
-            config, state, YouTubeSchedulerExecutor(publishing)
+            config, state, YouTubeSchedulerExecutor(publishing, retention)
         )
         command = arguments.command
         if command == "status":

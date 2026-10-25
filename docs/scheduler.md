@@ -46,3 +46,20 @@ Os horários são persistidos em formato local junto ao timezone IANA. A funçã
 de planejamento retorna um instante timezone-aware e suporta janelas que
 atravessam meia-noite, dias preferenciais flexíveis, conflitos, janela
 experimental explícita e bypass `FRESH` para `FRESHNESS_FIRST`.
+
+## Retenção da mídia publicada
+
+Defina `AUTOSHORTS_PUBLISHED_MEDIA_RETENTION_ROOT` no ambiente do scheduler
+para habilitar a remoção conservadora dos vídeos locais depois do upload. O
+valor deve ser a raiz absoluta da área de automação, por exemplo:
+
+```bash
+AUTOSHORTS_PUBLISHED_MEDIA_RETENTION_ROOT=/srv/autoshorts/data/automation
+```
+
+A limpeza exige simultaneamente `Publication=PUBLISHED` e um YouTube video ID
+remoto persistido. Ela nunca remove mídia `APPROVED_FOR_PUBLISH`, agendada,
+falha ou `UPLOAD_UNCERTAIN`, recusa caminhos fora da raiz configurada e mantém
+SQLite, checksum, metadata, manifests, legendas e histórico de tentativas. Ao
+iniciar, o scheduler também aplica a mesma política idempotente às Publications
+que já estavam confirmadas como publicadas.
