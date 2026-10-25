@@ -1,87 +1,133 @@
+<div align="center">
+
 # AutoShorts
 
-Pipeline local-first para transformar vídeos longos em Shorts verticais, desde a
-descoberta da fonte até o agendamento e a publicação no YouTube. O projeto combina
-Python, FFmpeg, Faster Whisper, Gemini, SQLite, YouTube Data API e Playwright em um
-fluxo auditável, recuperável e orientado a múltiplos canais.
+### From long-form video to publish-ready Shorts.
 
-> Este é o repositório público do projeto. Credenciais, tokens OAuth, perfis de
-> navegador, banco de produção, mídia e configurações locais nunca são versionados.
+An automated, local-first pipeline for discovering, understanding, editing,
+scheduling, and publishing short-form video across multiple YouTube channels.
 
-## O que o AutoShorts faz
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FFmpeg](https://img.shields.io/badge/FFmpeg-007808?style=for-the-badge&logo=ffmpeg&logoColor=white)
+![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white)
+![YouTube](https://img.shields.io/badge/YouTube_API-FF0000?style=for-the-badge&logo=youtube&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-493_passing-2EA44F?style=for-the-badge)
 
-1. Descobre e baixa fontes autorizadas com `yt-dlp`.
-2. Valida mídia e duração com `ffprobe`/FFmpeg, usando amostragem para evitar
-   leituras integrais desnecessárias.
-3. Transcreve localmente com Faster Whisper e reaproveita artefatos válidos.
-4. Solicita ao Gemini candidatos estruturados de cortes e metadados editoriais.
-5. Valida timestamps, duração, contexto, transcript e score; um único candidato
-   qualificado já é suficiente e o melhor vence pelo ranking.
-6. Renderiza em 9:16, aplica crop por tema e grava legendas sincronizadas.
-7. Mantém identidades, logos, banners e histórico de assets por Brand Plan.
-8. Submete o resultado à revisão manual ou ao fluxo `AUTO_APPROVE` configurável.
-9. Cria Publications explícitas e auditáveis, agenda e publica pela YouTube Data
-   API, com proteção contra duplicidade e estado `UPLOAD_UNCERTAIN`.
-10. Repõe o inventário por canal continuamente e remove a mídia local apenas após
-    confirmação inequívoca da publicação.
+</div>
 
-## Principais capacidades
+---
 
-- GUI desktop em Tkinter e CLIs independentes por etapa.
-- Catálogo de 20 temas, com até três canais por tema e políticas por canal.
-- Distribuição justa de produções e reposição baseada em inventário.
-- Coleta autenticada e não autenticada, cancelamento cooperativo e progresso.
-- Transcrição local, cache de Whisper e retomada sem repetir trabalho caro.
-- Análise estruturada, reranking editorial e metadados revisáveis.
-- Crop, composição e legendas configuráveis por perfil visual de tema.
-- Branding versionado, provenance, checksums e diretórios legíveis por canal.
-- Sessões web persistentes e isoladas por Google Identity.
-- Provisionamento e reconciliação idempotentes de canais do YouTube.
-- OAuth multicanal com validação estrita do Channel ID esperado.
-- Metadados explícitos de público infantil, mídia sintética, promoção paga,
-  categoria, idioma, licença, incorporação, estatísticas e privacidade.
-- Scheduler persistente, posting profiles e janelas editoriais por mercado.
-- Upload idempotente, tentativa única em caso ambíguo e recuperação controlada.
-- Serviços `systemd`, health check, backup, retenção e execução 24/7.
-- SQLite com migrações incrementais; schema atual: **30**.
+## About
 
-## Arquitetura
+**AutoShorts** turns authorized long-form videos into vertical, captioned, and
+reviewable YouTube Shorts.
+
+It combines local media processing with AI-assisted editorial analysis and a
+stateful publishing workflow. Every important step is persisted, auditable, and
+safe to resume after interruption — from source ingestion to confirmed upload.
+
+The platform was designed to operate a multi-channel content network without
+sacrificing editorial control, channel identity, or upload safety.
+
+## Pipeline
+
+<div align="center">
 
 ```text
-Fonte autorizada
-      │
-      ▼
-Coleta e validação ──► Transcrição ──► Gemini / ranking
-                                              │
-                                              ▼
-                                  Render + crop + legendas
-                                              │
-                                              ▼
-                           READY ──► revisão/AUTO_APPROVE
-                                              │
-                                              ▼
-                           Publication ──► Scheduler ──► YouTube
-                                              │
-                                              ▼
-                                  confirmação + retenção
+Source discovery
+      ↓
+Download & media validation
+      ↓
+Local transcription with Faster Whisper
+      ↓
+Gemini analysis, candidate validation & ranking
+      ↓
+Vertical render, theme crop & synchronized captions
+      ↓
+Metadata review or controlled auto-approval
+      ↓
+Scheduling & idempotent YouTube publishing
 ```
 
-O SQLite é a fonte autoritativa para jobs, produções, assets, Publications,
-tentativas e bindings. Operações externas só avançam depois de validações locais;
-reruns reaproveitam o estado já persistido.
+</div>
 
-## Requisitos
+## Main features
+
+### Intelligent video production
+
+- Source discovery and authenticated collection with `yt-dlp`
+- Sampled FFmpeg validation for faster ingestion
+- Local transcription with Faster Whisper and reusable cache
+- Structured Gemini analysis and editorial reranking
+- Quality gates for timestamps, duration, transcript, context, and score
+- 9:16 rendering with theme-specific crop profiles and burned-in captions
+
+### Multi-channel operation
+
+- Catalog designed for **20 themes and up to 60 channels**
+- Independent editorial, visual, and posting profiles
+- Versioned Brand Plans, logos, banners, checksums, and provenance
+- Inventory-based replenishment with fairness between channels
+- Manual review and configurable `AUTO_APPROVE` policies
+
+### YouTube integration
+
+- Multi-account OAuth with strict Channel ID validation
+- Persistent browser sessions isolated by Google Identity
+- Idempotent channel provisioning and reconciliation
+- Explicit audience, synthetic-media, paid-promotion, category, language,
+  license, embedding, statistics, and privacy metadata
+- Persistent scheduling through market-aware posting windows
+
+### Reliability and safety
+
+- SQLite-backed state machine with incremental migrations
+- Recovery without repeating downloads, transcription, or rendering
+- Duplicate protection for channels, Publications, jobs, and uploads
+- Ambiguous uploads stop at `UPLOAD_UNCERTAIN` instead of retrying blindly
+- Local media is removed only after confirmed publication
+- Health checks, backups, retention jobs, and continuous `systemd` services
+
+## Tech stack
+
+### Core
 
 - Python 3.11+
-- FFmpeg e `ffprobe`
-- Chromium/Brave apenas para fluxos web guiados
-- Dependências opcionais conforme o uso:
-  - `automation`: `yt-dlp` e Playwright
-  - `transcription`: Faster Whisper
-  - `analysis`: Google Gen AI
-  - `youtube-oauth`: clientes oficiais Google/YouTube
+- FFmpeg and FFprobe
+- SQLite
+- Tkinter desktop GUI
 
-## Instalação local
+### AI and media
+
+- Faster Whisper
+- Google Gemini
+- yt-dlp
+
+### YouTube automation
+
+- YouTube Data API v3
+- Google OAuth 2.0
+- Playwright
+- Brave / Chromium persistent profiles
+
+### Operations
+
+- systemd
+- Ruff
+- pytest
+
+## Current status
+
+AutoShorts currently supports the complete production lifecycle: ingestion,
+transcription, analysis, candidate selection, rendering, captions, branding,
+review, scheduling, publishing, recovery, and post-publication retention.
+
+The current state schema is **30**, backed by **493 automated tests** covering the
+domain, persistence, GUI, media pipeline, AI integrations, branding, OAuth,
+provisioning, scheduler, publishing, orchestration, and recovery.
+
+## Quick start
 
 ```bash
 git clone https://github.com/Lpao2/Autoshorts.git
@@ -91,71 +137,13 @@ python -m venv .venv
 cp .env.example .env
 ```
 
-Instale os navegadores do Playwright somente se usar os fluxos guiados:
-
-```bash
-.venv/bin/playwright install chromium
-```
-
-Nunca envie `.env`, arquivos OAuth, cookies, profiles, banco SQLite ou mídia ao
-Git. As regras correspondentes já estão em `.gitignore`.
-
-## Uso rápido
-
-Abrir a interface:
+Launch the desktop interface:
 
 ```bash
 .venv/bin/autoshorts-gui
 ```
 
-Executar componentes separadamente:
-
-```bash
-.venv/bin/autoshorts-ingest --help
-.venv/bin/autoshorts-produce --help
-.venv/bin/autoshorts-orchestrator --help
-.venv/bin/autoshorts-scheduler --help
-.venv/bin/autoshorts-publish --help
-```
-
-Antes de qualquer upload, use o dry-run da publicação e confira canal, Channel
-ID, arquivo, checksum, título, descrição, tags, categoria, idioma, audiência,
-privacidade e demais declarações.
-
-## Estados e segurança operacional
-
-O pipeline distingue falhas de conteúdo, configuração, autenticação, navegação e
-respostas externas ambíguas. Pontos importantes:
-
-- `MANUAL_REVIEW` pode permanecer ativo por canal.
-- `AUTO_APPROVE` é uma política explícita, não um efeito colateral.
-- uma resposta ambígua do YouTube gera `UPLOAD_UNCERTAIN` e nunca retry cego;
-- Channel ID e Google Identity são validados antes de trocar credenciais;
-- canais e Publications existentes são reconciliados em vez de duplicados;
-- a mídia publicada só é removida quando há estado `PUBLISHED` e video ID remoto;
-- histórico, manifests, metadados e trilha de tentativas permanecem preservados.
-
-## Operação contínua
-
-Os exemplos em [`deploy/systemd`](deploy/systemd) cobrem scheduler, orquestrador,
-backup e retenção. Ajuste primeiro os caminhos de
-[`deploy/runtime.env.example`](deploy/runtime.env.example) e mantenha segredos em
-um arquivo de ambiente separado, com permissões restritas.
-
-Documentação detalhada:
-
-- [Ciclo de produção](docs/production-cycle.md)
-- [GUI local](docs/local-gui.md)
-- [Transcrição](docs/transcription.md)
-- [Análise Gemini](docs/gemini-analysis.md)
-- [Metadados e revisão](docs/metadata-review.md)
-- [Scheduler](docs/scheduler.md)
-- [OAuth do YouTube](docs/youtube-oauth.md)
-- [Provisionamento de canais](docs/youtube-channel-provisioning.md)
-- [Smoke test de publicação](docs/youtube-publishing-smoke-test.md)
-- [Recuperação](docs/recovery.md)
-
-## Qualidade
+Run the quality gate:
 
 ```bash
 .venv/bin/ruff check .
@@ -164,19 +152,40 @@ Documentação detalhada:
 git diff --check
 ```
 
-A suíte atual possui **493 testes** cobrindo domínio, persistência, GUI, coleta,
-transcrição, análise, render, branding, OAuth, provisionamento, scheduler,
-publicação, orquestração, recuperação e retenção.
+## Documentation
 
-## Privacidade e custos
+- [Production cycle](docs/production-cycle.md)
+- [Local GUI](docs/local-gui.md)
+- [Gemini analysis](docs/gemini-analysis.md)
+- [Metadata review](docs/metadata-review.md)
+- [YouTube OAuth](docs/youtube-oauth.md)
+- [Channel provisioning](docs/youtube-channel-provisioning.md)
+- [Scheduler](docs/scheduler.md)
+- [Recovery](docs/recovery.md)
 
-O processamento pesado de mídia e transcrição pode ser local. Custos externos
-dependem do provedor/modelo de IA, tráfego e infraestrutura escolhidos. A aplicação
-não armazena senhas Google nem 2FA; OAuth da API e sessão web do Playwright são
-credenciais distintas e ficam fora do repositório.
+## Repository
 
-## Licença e autoria
+This public repository is the sanitized portfolio edition of AutoShorts.
 
-Projeto desenvolvido por [Lucas Patrocínio](https://github.com/Lpao2). Consulte o
-autor antes de reutilizar o projeto em produção comercial; não há licença aberta
-declarada neste repositório.
+Credentials, OAuth tokens, browser profiles, cookies, production databases,
+private channel configuration, and generated media are never versioned. The
+private repository contains the active operational history and deployment state.
+
+## Author
+
+Developed by **Lucas Patrocínio**.
+
+[![GitHub](https://img.shields.io/badge/GitHub-Lpao2-181717?style=for-the-badge&logo=github)](https://github.com/Lpao2)
+
+## Code usage
+
+This repository is available for portfolio and demonstration purposes.
+
+No open-source license is provided. Copying, redistributing, modifying, or using
+the project commercially without explicit authorization is not permitted.
+
+---
+
+<div align="center">
+  <sub>AutoShorts — automated production with editorial control.</sub>
+</div>
