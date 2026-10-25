@@ -1,307 +1,182 @@
-# AutoShorts — Portfolio Edition
+# AutoShorts
 
-O ciclo automático local até `QUEUED` está documentado em
-[docs/production-cycle.md](docs/production-cycle.md).
+Pipeline local-first para transformar vídeos longos em Shorts verticais, desde a
+descoberta da fonte até o agendamento e a publicação no YouTube. O projeto combina
+Python, FFmpeg, Faster Whisper, Gemini, SQLite, YouTube Data API e Playwright em um
+fluxo auditável, recuperável e orientado a múltiplos canais.
 
-A transcrição local opcional está documentada em
-[docs/transcription.md](docs/transcription.md).
-A análise real por transcript está documentada em
-[docs/gemini-analysis.md](docs/gemini-analysis.md).
+> Este é o repositório público do projeto. Credenciais, tokens OAuth, perfis de
+> navegador, banco de produção, mídia e configurações locais nunca são versionados.
 
-Automated local pipeline for transforming selected moments from long-form videos into vertical short-form content.
+## O que o AutoShorts faz
 
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
-![FFmpeg](https://img.shields.io/badge/FFmpeg-Video%20Processing-007808?logo=ffmpeg&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-4B5563)
-![Status](https://img.shields.io/badge/Status-Functional-success)
+1. Descobre e baixa fontes autorizadas com `yt-dlp`.
+2. Valida mídia e duração com `ffprobe`/FFmpeg, usando amostragem para evitar
+   leituras integrais desnecessárias.
+3. Transcreve localmente com Faster Whisper e reaproveita artefatos válidos.
+4. Solicita ao Gemini candidatos estruturados de cortes e metadados editoriais.
+5. Valida timestamps, duração, contexto, transcript e score; um único candidato
+   qualificado já é suficiente e o melhor vence pelo ranking.
+6. Renderiza em 9:16, aplica crop por tema e grava legendas sincronizadas.
+7. Mantém identidades, logos, banners e histórico de assets por Brand Plan.
+8. Submete o resultado à revisão manual ou ao fluxo `AUTO_APPROVE` configurável.
+9. Cria Publications explícitas e auditáveis, agenda e publica pela YouTube Data
+   API, com proteção contra duplicidade e estado `UPLOAD_UNCERTAIN`.
+10. Repõe o inventário por canal continuamente e remove a mídia local apenas após
+    confirmação inequívoca da publicação.
 
-> This repository contains the portfolio edition of a larger private automation project. It demonstrates the local media-processing pipeline while excluding credentials, authenticated sessions and production-specific integrations.
+## Principais capacidades
 
----
+- GUI desktop em Tkinter e CLIs independentes por etapa.
+- Catálogo de 20 temas, com até três canais por tema e políticas por canal.
+- Distribuição justa de produções e reposição baseada em inventário.
+- Coleta autenticada e não autenticada, cancelamento cooperativo e progresso.
+- Transcrição local, cache de Whisper e retomada sem repetir trabalho caro.
+- Análise estruturada, reranking editorial e metadados revisáveis.
+- Crop, composição e legendas configuráveis por perfil visual de tema.
+- Branding versionado, provenance, checksums e diretórios legíveis por canal.
+- Sessões web persistentes e isoladas por Google Identity.
+- Provisionamento e reconciliação idempotentes de canais do YouTube.
+- OAuth multicanal com validação estrita do Channel ID esperado.
+- Metadados explícitos de público infantil, mídia sintética, promoção paga,
+  categoria, idioma, licença, incorporação, estatísticas e privacidade.
+- Scheduler persistente, posting profiles e janelas editoriais por mercado.
+- Upload idempotente, tentativa única em caso ambíguo e recuperação controlada.
+- Serviços `systemd`, health check, backup, retenção e execução 24/7.
+- SQLite com migrações incrementais; schema atual: **30**.
 
-## Linux desktop — start here
+## Arquitetura
 
-The minimal local interface lets you choose a video, open or edit cuts, validate,
-render, cancel, and follow overall/per-clip progress without memorizing commands.
-The CLI remains available with its existing arguments.
+```text
+Fonte autorizada
+      │
+      ▼
+Coleta e validação ──► Transcrição ──► Gemini / ranking
+                                              │
+                                              ▼
+                                  Render + crop + legendas
+                                              │
+                                              ▼
+                           READY ──► revisão/AUTO_APPROVE
+                                              │
+                                              ▼
+                           Publication ──► Scheduler ──► YouTube
+                                              │
+                                              ▼
+                                  confirmação + retenção
+```
+
+O SQLite é a fonte autoritativa para jobs, produções, assets, Publications,
+tentativas e bindings. Operações externas só avançam depois de validações locais;
+reruns reaproveitam o estado já persistido.
+
+## Requisitos
+
+- Python 3.11+
+- FFmpeg e `ffprobe`
+- Chromium/Brave apenas para fluxos web guiados
+- Dependências opcionais conforme o uso:
+  - `automation`: `yt-dlp` e Playwright
+  - `transcription`: Faster Whisper
+  - `analysis`: Google Gen AI
+  - `youtube-oauth`: clientes oficiais Google/YouTube
+
+## Instalação local
 
 ```bash
-sudo apt install python3-venv python3-tk ffmpeg xdg-utils
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/autoshorts-install-desktop
+git clone https://github.com/Lpao2/Autoshorts.git
+cd Autoshorts
+python -m venv .venv
+.venv/bin/pip install -e '.[dev,automation,transcription,analysis,youtube-oauth]'
+cp .env.example .env
+```
+
+Instale os navegadores do Playwright somente se usar os fluxos guiados:
+
+```bash
+.venv/bin/playwright install chromium
+```
+
+Nunca envie `.env`, arquivos OAuth, cookies, profiles, banco SQLite ou mídia ao
+Git. As regras correspondentes já estão em `.gitignore`.
+
+## Uso rápido
+
+Abrir a interface:
+
+```bash
 .venv/bin/autoshorts-gui
 ```
 
-Run those commands from the repository on branch `codex/resume-audit`. After
-installing the shortcut, open **AutoShorts** from the Linux application menu.
-No `.env` is required with FFmpeg/FFprobe on PATH. If you already have `.env`,
-check that its executable paths are Linux paths.
-
-See [the Linux GUI guide](docs/local-gui.md) for updating an existing checkout,
-the interface comparison, usage, cancellation behavior, and test checklist.
-
-## About the project
-
-AutoShorts receives a source video and a list of selected timestamps, cuts each moment with FFmpeg and exports vertical videos ready for short-form platforms.
-
-The public edition focuses on the core engineering work:
-
-- Parsing clip definitions
-- Validating timestamps
-- Cutting source videos
-- Converting horizontal media to a vertical layout
-- Creating a blurred background
-- Preserving optional audio
-- Loading configuration from environment variables
-- Running the complete flow through a command-line interface
-- Probing and validating source media before rendering
-- Dry-run render plans and machine-readable run manifests
-- Atomic outputs with explicit overwrite policies
-- Bounded parallel rendering
-- FFprobe validation of generated dimensions and duration
-
-Production account integrations, authenticated browser sessions and private automation logic remain outside this repository.
-
-## Pipeline
-
-```mermaid
-flowchart LR
-    A[Source video] --> B[Timestamp file]
-    B --> C[Clip parser]
-    C --> D[Validation]
-    D --> E[FFmpeg processing]
-    E --> F[Vertical 1080x1920 layout]
-    F --> G[Generated short videos]
-```
-
-## Visual demonstration
-
-The image below represents a fictional long-form video used as input by the pipeline.
-
-![Fictional source video used by AutoShorts](samples/sample.png)
-
-*Fictional demonstration created exclusively for this portfolio project.*
-
-## Technologies
-
-| Area | Technology |
-|---|---|
-| Language | Python |
-| Media processing | FFmpeg |
-| Configuration | python-dotenv |
-| Interface | Tkinter/ttk desktop and command-line interface |
-| Data formats | Text and JSON |
-| Version control | Git and GitHub |
-
-## Project structure
-
-```text
-autoshorts/
-├── config/
-│   └── pipeline.example.json
-├── docs/
-├── samples/
-│   ├── cuts.demo.txt
-│   ├── cuts.example.txt
-│   └── sample.png
-├── src/
-│   └── autoshorts/
-│       ├── __init__.py
-│       ├── config.py
-│       ├── media_probe.py
-│       ├── main.py
-│       ├── naming.py
-│       ├── pipeline.py
-│       ├── render_plan.py
-│       ├── timestamp_parser.py
-│       └── video_processor.py
-├── tests/                     # Unit and FFmpeg integration tests
-├── pyproject.toml
-├── .env.example
-├── .gitignore
-├── requirements.txt
-└── README.md
-```
-
-## Requirements
-
-- Python 3.11 or newer
-- FFmpeg available in the system `PATH`
-- Windows PowerShell or a Linux shell
-
-## Installation
-
-Clone the repository:
-
-```powershell
-git clone https://github.com/Lpao2/autoshorts.git
-cd autoshorts
-```
-
-Create a virtual environment:
-
-```powershell
-python -m venv .venv
-```
-
-Install the project and development dependencies:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-```
-
-Create the local configuration file:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-The default settings use FFmpeg from the system `PATH` and write generated videos to `data/output`.
-
-## Clip definition format
-
-Create a text file using one clip per line:
-
-```text
-[00:15 - 00:42] - First gameplay highlight
-[01:10 - 01:48] - Unexpected comeback
-[00:02:05 - 00:02:47] - Final match-winning play
-```
-
-Accepted timestamp formats:
-
-```text
-MM:SS
-HH:MM:SS
-```
-
-## Usage
-
-Run the pipeline:
-
-```powershell
-.\.venv\Scripts\autoshorts.exe `
-  --input "path\to\source-video.mp4" `
-  --cuts "samples\cuts.example.txt"
-```
-
-Use a custom output folder:
-
-```powershell
-.\.venv\Scripts\autoshorts.exe `
-  --input "path\to\source-video.mp4" `
-  --cuts "samples\cuts.example.txt" `
-  --output "path\to\output"
-```
-
-Generated files follow this pattern:
-
-```text
-01_First_gameplay_highlight.mp4
-02_Unexpected_comeback.mp4
-03_Final_match-winning_play.mp4
-```
-
-## Configuration
-
-The `.env.example` file documents the available local settings:
-
-```env
-FFMPEG_PATH=ffmpeg
-FFPROBE_PATH=ffprobe
-INPUT_DIR=./data/input
-OUTPUT_DIR=./data/output
-MAX_WORKERS=2
-OUTPUT_WIDTH=1080
-OUTPUT_HEIGHT=1920
-MAX_CLIP_DURATION=60
-EXTRA_CLIP_SECONDS=6
-VIDEO_CODEC=libx264
-VIDEO_PRESET=medium
-VIDEO_CRF=20
-AUDIO_CODEC=aac
-AUDIO_BITRATE=192k
-OVERWRITE_POLICY=error
-```
-
-The real `.env` file is ignored by Git.
-
-## Privacy and security
-
-This repository does not include:
-
-- Account credentials
-- Browser cookies
-- Authenticated sessions
-- Channel identifiers
-- Personal directories
-- Production upload integrations
-- Generated media files
-- Private automation strategies
-
-Sensitive and generated files are excluded through `.gitignore`.
-
-## Status
-
-The public local-processing pipeline is functional.
-
-Current capabilities:
-
-- Timestamp parsing
-- Input validation
-- Automatic filename sanitization
-- Bounded parallel clip processing
-- Vertical video generation
-- Blurred background composition
-- Optional audio preservation
-- CLI execution
-- External configuration
-
-Possible future improvements:
-
-- Subtitle rendering
-- Persistent project library and queue
-- Optional content-analysis adapters
-- Pluggable uploader interfaces
-
-See [the manual end-to-end test](docs/manual-test.md) to validate the current
-pipeline with a real local video.
-
-## Operational orchestrator
-
-The inventory orchestrator coordinates the existing ingestion, production,
-caption, metadata, review and scheduling APIs. It does not upload videos or run
-the scheduler itself.
+Executar componentes separadamente:
 
 ```bash
-autoshorts-orchestrator status
-autoshorts-orchestrator run-once --dry-run
-autoshorts-orchestrator run-once --max-productions 1
-autoshorts-orchestrator run --interval 300 --max-productions 1
+.venv/bin/autoshorts-ingest --help
+.venv/bin/autoshorts-produce --help
+.venv/bin/autoshorts-orchestrator --help
+.venv/bin/autoshorts-scheduler --help
+.venv/bin/autoshorts-publish --help
 ```
 
-The default inventory policy is a minimum of 2 future videos and a target of
-3. Persistent per-channel overrides, decisions, backoff and SQLite leases make
-the cycle auditable and safe to rerun. Continuous mode is intended for a later
-service-installation step; it is not installed automatically.
+Antes de qualquer upload, use o dry-run da publicação e confira canal, Channel
+ID, arquivo, checksum, título, descrição, tags, categoria, idioma, audiência,
+privacidade e demais declarações.
 
-YouTube access is conservative and configurable. Browser cookies are referenced
-directly and are never copied into SQLite or logs:
+## Estados e segurança operacional
+
+O pipeline distingue falhas de conteúdo, configuração, autenticação, navegação e
+respostas externas ambíguas. Pontos importantes:
+
+- `MANUAL_REVIEW` pode permanecer ativo por canal.
+- `AUTO_APPROVE` é uma política explícita, não um efeito colateral.
+- uma resposta ambígua do YouTube gera `UPLOAD_UNCERTAIN` e nunca retry cego;
+- Channel ID e Google Identity são validados antes de trocar credenciais;
+- canais e Publications existentes são reconciliados em vez de duplicados;
+- a mídia publicada só é removida quando há estado `PUBLISHED` e video ID remoto;
+- histórico, manifests, metadados e trilha de tentativas permanecem preservados.
+
+## Operação contínua
+
+Os exemplos em [`deploy/systemd`](deploy/systemd) cobrem scheduler, orquestrador,
+backup e retenção. Ajuste primeiro os caminhos de
+[`deploy/runtime.env.example`](deploy/runtime.env.example) e mantenha segredos em
+um arquivo de ambiente separado, com permissões restritas.
+
+Documentação detalhada:
+
+- [Ciclo de produção](docs/production-cycle.md)
+- [GUI local](docs/local-gui.md)
+- [Transcrição](docs/transcription.md)
+- [Análise Gemini](docs/gemini-analysis.md)
+- [Metadados e revisão](docs/metadata-review.md)
+- [Scheduler](docs/scheduler.md)
+- [OAuth do YouTube](docs/youtube-oauth.md)
+- [Provisionamento de canais](docs/youtube-channel-provisioning.md)
+- [Smoke test de publicação](docs/youtube-publishing-smoke-test.md)
+- [Recuperação](docs/recovery.md)
+
+## Qualidade
 
 ```bash
-autoshorts-orchestrator --youtube-browser brave run-once --max-productions 1
-# or configure AUTOSHORTS_YOUTUBE_BROWSER=brave
+.venv/bin/ruff check .
+.venv/bin/pytest
+.venv/bin/python -m compileall src
+git diff --check
 ```
 
-Firefox is also supported. A Netscape cookie file may be supplied with
-`--youtube-cookie-file` or `AUTOSHORTS_YOUTUBE_COOKIE_FILE`, but it must already
-exist with mode `0600`. Timeout, bounded retries, fragment retries and pacing can
-be configured with `AUTOSHORTS_YOUTUBE_TIMEOUT`, `AUTOSHORTS_YOUTUBE_RETRIES`,
-`AUTOSHORTS_YOUTUBE_FRAGMENT_RETRIES` and
-`AUTOSHORTS_YOUTUBE_PACING_SECONDS`. Rate limits and challenges stop discovery
-immediately and create a persistent, increasing candidate cooldown.
+A suíte atual possui **493 testes** cobrindo domínio, persistência, GUI, coleta,
+transcrição, análise, render, branding, OAuth, provisionamento, scheduler,
+publicação, orquestração, recuperação e retenção.
 
----
+## Privacidade e custos
 
-Developed by **[Lucas Patrocínio](https://github.com/Lpao2)**.
+O processamento pesado de mídia e transcrição pode ser local. Custos externos
+dependem do provedor/modelo de IA, tráfego e infraestrutura escolhidos. A aplicação
+não armazena senhas Google nem 2FA; OAuth da API e sessão web do Playwright são
+credenciais distintas e ficam fora do repositório.
+
+## Licença e autoria
+
+Projeto desenvolvido por [Lucas Patrocínio](https://github.com/Lpao2). Consulte o
+autor antes de reutilizar o projeto em produção comercial; não há licença aberta
+declarada neste repositório.
