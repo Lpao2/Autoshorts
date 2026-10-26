@@ -101,7 +101,11 @@ def prepared(tmp_path):
     return store, config, channel
 
 
-def test_ready_metadata_is_persisted_idempotent_and_manual_does_not_enqueue(tmp_path):
+@pytest.mark.parametrize("privacy", ["private", "public", "unlisted"])
+def test_ready_metadata_is_persisted_idempotent_and_manual_does_not_enqueue(
+    tmp_path, monkeypatch, privacy
+):
+    monkeypatch.setenv("AUTOSHORTS_PUBLICATION_PRIVACY", privacy)
     store, config, channel = prepared(tmp_path)
     provider = FakeProvider()
     with store:
@@ -125,6 +129,7 @@ def test_ready_metadata_is_persisted_idempotent_and_manual_does_not_enqueue(tmp_
         assert first.review_policy == ReviewPolicy.MANUAL_REVIEW
         assert first.category_id == "20"
         assert first.default_language == "pt-BR"
+        assert first.privacy_status == privacy
         assert first.publishing_channel_id == "tiltado"
         publications = store.connection.execute(
             "SELECT count(*) FROM publications"

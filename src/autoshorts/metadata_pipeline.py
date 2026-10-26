@@ -114,6 +114,11 @@ def generate_metadata_draft(
     state: StateStore,
     provider: MetadataProvider,
 ) -> MetadataDraft:
+    privacy_status = os.environ.get("AUTOSHORTS_PUBLICATION_PRIVACY", "private")
+    if privacy_status not in {"private", "unlisted", "public"}:
+        raise ValueError(
+            "AUTOSHORTS_PUBLICATION_PRIVACY must be private, unlisted or public."
+        )
     ready = state.get_ready_artifact(youtube_id)
     video = state.get_video(youtube_id)
     if ready is None or video is None or video.status.value != "READY":
@@ -138,7 +143,9 @@ def generate_metadata_draft(
         raise ValueError("Persisted segment selection is required.")
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     prompt = _prompt(video.title, selection, theme.prompt, market, kit, channel)
-    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    prompt_hash = hashlib.sha256(
+        f"{prompt}\nPublication privacy: {privacy_status}".encode()
+    ).hexdigest()
     fingerprint = _fingerprint(
         ready.checksum,
         channel.channel_id,
@@ -165,13 +172,14 @@ def generate_metadata_draft(
         provider,
         prompt_hash,
     )
+    base["privacy_status"] = privacy_status
     try:
         generated = provider.generate(prompt)
         metadata = PublicationMetadata(
             generated.selected_title,
             _description(generated.description, generated.hashtags),
             generated.tags,
-            "private",
+            privacy_status,
             False,
             False,
             False,

@@ -26,3 +26,10 @@ idempotent. The default review policy is stored in `metadata_settings`; optional
 per-channel overrides are stored in `metadata_channel_settings`. Changing the
 effective policy to `AUTO_APPROVE` allows a future orchestrator to call the same
 generation and approval functions without a human checkpoint.
+
+## Publication privacy
+
+Set `AUTOSHORTS_PUBLICATION_PRIVACY=public` in the orchestrator environment to
+generate new drafts and Publications with public visibility. The default remains
+`private`. Restart the service after changing its environment. Existing drafts,
+queued Publications and remote videos retain their persisted visibility.
