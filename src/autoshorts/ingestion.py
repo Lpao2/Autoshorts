@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from autoshorts.collection import (
 )
 from autoshorts.editorial_sources import (
     ContentSource,
+    SourceRightsStatus,
     SourceValidationStatus,
     ThemeContentSource,
     ThemeMarketProfile,
@@ -32,6 +34,7 @@ from autoshorts.state_store import StateStore, VideoStatus
 Discover = Callable[..., list[VideoCandidate]]
 Download = Callable[..., Path]
 Probe = Callable[[Path, str], MediaInfo]
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +82,7 @@ def discover_next_source_video(
     access: YouTubeAccess | None = None,
     discover: Discover = discover_creator_videos,
 ) -> DiscoveryReport:
-    """Discover candidates from enabled, validated DB sources without writes."""
+    """Discover candidates; persist metadata cache and bounded failure cooldowns."""
     if per_source < 1:
         raise ValueError("per_source must be positive.")
     linked = tuple(
@@ -88,35 +91,49 @@ def discover_next_source_video(
         if association.enabled
         and source.enabled
         and source.validation_status is SourceValidationStatus.VALIDATED
+        and source.rights_status is not SourceRightsStatus.RESTRICTED
     )
     eligible: list[SourceCandidate] = []
     skipped: list[IngestionSkip] = []
     examined = 0
     for association, source in linked:
         remote_skips: list[CandidateSkip] = []
-        videos = discover(
-            source.display_name,
-            _videos_url(source),
-            quantity=per_source,
-            age_days=maximum_age_days,
-            min_duration_seconds=association.target_duration_min_seconds,
-            max_duration_seconds=association.target_duration_max_seconds,
-            access=access or YouTubeAccess(),
-            skip_handler=remote_skips.append,
-            candidate_allowed=lambda video_id: state.source_candidate_available(
-                profile.profile_id, video_id
-            ),
-            failure_handler=lambda video_id, category, detail: (
-                state.record_source_failure(
-                    profile.profile_id,
-                    video_id,
-                    category=category.value,
-                    detail=detail,
+        try:
+            videos = discover(
+                source.display_name,
+                _videos_url(source),
+                quantity=per_source,
+                age_days=maximum_age_days,
+                min_duration_seconds=association.target_duration_min_seconds,
+                max_duration_seconds=association.target_duration_max_seconds,
+                access=access or YouTubeAccess(),
+                skip_handler=remote_skips.append,
+                candidate_allowed=lambda video_id: state.source_candidate_available(
+                    profile.profile_id, video_id
+                ),
+                failure_handler=lambda video_id, category, detail: (
+                    state.record_source_failure(
+                        profile.profile_id,
+                        video_id,
+                        category=category.value,
+                        detail=detail,
+                    )
+                ),
+                metadata_lookup=lambda video_id: _cached_candidate(state, video_id),
+                metadata_save=lambda video: _save_candidate_metadata(state, video),
+            )
+        except YouTubeCollectionError as exc:
+            if exc.category not in {
+                YouTubeErrorCategory.AUTH_REQUIRED,
+                YouTubeErrorCategory.VIDEO_UNAVAILABLE,
+            }:
+                raise
+            skipped.append(
+                IngestionSkip(
+                    source.display_name, "", None, exc.category.value, str(exc)
                 )
-            ),
-            metadata_lookup=lambda video_id: _cached_candidate(state, video_id),
-            metadata_save=lambda video: _save_candidate_metadata(state, video),
-        )
+            )
+            continue
         examined += len(videos) + len(remote_skips)
         skipped.extend(
             IngestionSkip(
@@ -283,6 +300,87 @@ def record_ingestion_failure(
     )
 
 
+def ingest_with_replacement(
+    profile: ThemeMarketProfile,
+    state: StateStore,
+    *,
+    workspace: Path,
+    theme_prompt: str,
+    maximum_age_days: int,
+    access: YouTubeAccess,
+    ffprobe_path: str = "ffprobe",
+    ffmpeg_path: str = "ffmpeg",
+    max_attempts: int = 5,
+    discover=None,
+    ingest_candidate=None,
+    fallback=None,
+) -> str:
+    """Try approved candidates first, then one bounded Gemini source extension."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive.")
+    discover = discover or discover_next_source_video
+    ingest_candidate = ingest_candidate or ingest
+    if fallback is None:
+        from autoshorts.source_fallback import extend_sources
+
+        fallback = extend_sources
+    attempts = 0
+    attempted: set[str] = set()
+    for phase in range(2):
+        report = discover(
+            profile, state, maximum_age_days=maximum_age_days, access=access
+        )
+        for candidate in report.eligible:
+            video_id = candidate.external_video_id
+            if video_id in attempted or not state.source_candidate_available(
+                profile.profile_id, video_id
+            ):
+                continue
+            if attempts >= max_attempts:
+                raise RuntimeError("Source replacement download budget exhausted.")
+            attempted.add(video_id)
+            attempts += 1
+            try:
+                ingest_candidate(
+                    candidate,
+                    profile,
+                    state,
+                    workspace=workspace,
+                    ffprobe_path=ffprobe_path,
+                    ffmpeg_path=ffmpeg_path,
+                    access=access,
+                )
+                LOGGER.info(
+                    "Source selected profile=%s video=%s attempt=%s",
+                    profile.profile_id,
+                    video_id,
+                    attempts,
+                )
+                return video_id
+            except YouTubeCollectionError as exc:
+                retry_after = record_ingestion_failure(state, profile, video_id, exc)
+                LOGGER.warning(
+                    "Source rejected profile=%s video=%s category=%s retry_after=%s",
+                    profile.profile_id,
+                    video_id,
+                    exc.category,
+                    retry_after,
+                )
+                if exc.category not in {
+                    YouTubeErrorCategory.AUTH_REQUIRED,
+                    YouTubeErrorCategory.VIDEO_UNAVAILABLE,
+                }:
+                    raise
+            except Exception as exc:
+                record_ingestion_failure(state, profile, video_id, exc)
+                raise
+        if phase == 1 or attempts >= max_attempts:
+            break
+        if not fallback(profile, state, theme_prompt=theme_prompt, access=access):
+            break
+    raise RuntimeError("No eligible source after bounded editorial replacement.")
+
+
 def _cached_candidate(state: StateStore, youtube_id: str) -> VideoCandidate | None:
     row = state.cached_source_metadata(youtube_id)
     if row is None:
@@ -346,9 +444,7 @@ def _decode(
     if duration_seconds <= 0:
         raise ValueError("FFmpeg decode requires a positive media duration.")
     last_start = max(0.0, duration_seconds - sample_seconds)
-    offsets = tuple(
-        dict.fromkeys((0.0, max(0.0, duration_seconds / 2), last_start))
-    )
+    offsets = tuple(dict.fromkeys((0.0, max(0.0, duration_seconds / 2), last_start)))
     for offset in offsets:
         command = [ffmpeg_path, "-nostdin", "-v", "error", "-xerror"]
         if offset:
@@ -385,8 +481,7 @@ def _decode(
             ) from exc
         if result.returncode != 0:
             raise RuntimeError(
-                f"FFmpeg sample decode failed at {offset:.3f}s: "
-                f"{result.stderr[-2000:]}"
+                f"FFmpeg sample decode failed at {offset:.3f}s: {result.stderr[-2000:]}"
             )
 
 

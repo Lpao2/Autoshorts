@@ -391,13 +391,11 @@ def test_pipeline_producer_respects_review_policy(
         ),
         assign_source_to_channel=lambda *_args: None,
     )
-    selected = SimpleNamespace(external_video_id="source-1")
     monkeypatch.setattr(
         orchestrator_module,
-        "discover_next_source_video",
-        lambda *_args, **_kwargs: SimpleNamespace(selected=selected),
+        "ingest_with_replacement",
+        lambda *_args, **_kwargs: "source-1",
     )
-    monkeypatch.setattr(orchestrator_module, "ingest", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         orchestrator_module, "produce_source_video", lambda **kwargs: None
     )

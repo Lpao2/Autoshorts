@@ -65,7 +65,7 @@ from autoshorts.theme_catalog import (
 from autoshorts.transcript_analysis import AnalysisUsage
 
 STATE_DB_ENV = "AUTOSHORTS_STATE_DB"
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 
 
 class ReviewPolicy(StrEnum):
@@ -2292,6 +2292,7 @@ class StateStore:
         enabled: bool = True,
         target_duration_min_seconds: int = 900,
         target_duration_max_seconds: int = 2400,
+        replace_priority: bool = False,
     ) -> ThemeContentSource:
         if not 1 <= priority <= 5:
             raise ValueError("Source priority must be between 1 and 5.")
@@ -2299,6 +2300,12 @@ class StateStore:
             raise ValueError("Source target duration range is invalid.")
         now = _now()
         with self.connection:
+            if replace_priority:
+                self.connection.execute(
+                    "DELETE FROM theme_content_sources "
+                    "WHERE profile_id=? AND priority=? AND source_id<>?",
+                    (profile_id, priority, source_id),
+                )
             self.connection.execute(
                 """INSERT INTO theme_content_sources (
                     profile_id, source_id, priority, enabled,
@@ -4064,6 +4071,7 @@ class StateStore:
                     (_now(),),
                 )
                 self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self._migrate_v30_to_v31()
             return
         if version == 1:
             self._migrate_v1_to_v2()
@@ -4152,6 +4160,24 @@ class StateStore:
         if version == 29:
             self._migrate_v29_to_v30()
             version = 30
+        if version == 30:
+            self._migrate_v30_to_v31()
+
+    def _migrate_v30_to_v31(self) -> None:
+        with self.connection:
+            self.connection.executescript(
+                """CREATE TABLE IF NOT EXISTS editorial_source_fallbacks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    profile_id INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    audit_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(profile_id) REFERENCES theme_market_profiles(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_source_fallback_profile
+                    ON editorial_source_fallbacks(profile_id, started_at);
+                PRAGMA user_version = 31;"""
+            )
 
     def _migrate_v1_to_v2(self) -> None:
         """Separate rendered masters from queue assignment while preserving rows."""

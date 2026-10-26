@@ -12,7 +12,7 @@ scheduling, and publishing short-form video across multiple YouTube channels.
 ![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white)
 ![YouTube](https://img.shields.io/badge/YouTube_API-FF0000?style=for-the-badge&logo=youtube&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-493_passing-2EA44F?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-525_passing-2EA44F?style=for-the-badge)
 
 </div>
 
@@ -123,7 +123,7 @@ AutoShorts currently supports the complete production lifecycle: ingestion,
 transcription, analysis, candidate selection, rendering, captions, branding,
 review, scheduling, publishing, recovery, and post-publication retention.
 
-The current state schema is **30**, backed by **493 automated tests** covering the
+The current state schema is **31**, backed by **525 automated tests** covering the
 domain, persistence, GUI, media pipeline, AI integrations, branding, OAuth,
 provisioning, scheduler, publishing, orchestration, and recovery.
 

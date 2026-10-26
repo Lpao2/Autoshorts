@@ -240,7 +240,9 @@ def discover_creator_videos(
         with yt_dlp.YoutubeDL(flat_options) as ydl:
             info = ydl.extract_info(videos_url, download=False)
     except Exception as exc:
-        raise RuntimeError(friendly_youtube_error(exc)) from exc
+        raise YouTubeCollectionError(
+            classify_youtube_error(exc), safe_youtube_error(exc)
+        ) from exc
     cutoff = date.today() - timedelta(days=age_days)
     candidates: list[VideoCandidate] = []
     for entry in (info or {}).get("entries") or []:
@@ -254,9 +256,13 @@ def discover_creator_videos(
         if not url:
             _skip(skip_handler, creator_name, title, "", "unavailable", "URL ausente")
             continue
-        entry_id = str(entry.get("id") or candidate_youtube_id(
-            VideoCandidate(creator_name, url, title, None, None)
-        ) or "")
+        entry_id = str(
+            entry.get("id")
+            or candidate_youtube_id(
+                VideoCandidate(creator_name, url, title, None, None)
+            )
+            or ""
+        )
         if entry_id and candidate_allowed and not candidate_allowed(entry_id):
             _skip(skip_handler, creator_name, title, url, "cooldown", entry_id)
             continue
@@ -342,7 +348,6 @@ def discover_creator_videos(
             if category in {
                 YouTubeErrorCategory.RATE_LIMITED,
                 YouTubeErrorCategory.ANTI_BOT_CHALLENGE,
-                YouTubeErrorCategory.AUTH_REQUIRED,
                 YouTubeErrorCategory.NETWORK_ERROR,
             }:
                 raise YouTubeCollectionError(
@@ -448,7 +453,19 @@ def classify_youtube_error(error: BaseException | str) -> YouTubeErrorCategory:
         return YouTubeErrorCategory.RATE_LIMITED
     if "not a bot" in text or "challenge" in text:
         return YouTubeErrorCategory.ANTI_BOT_CHALLENGE
-    if "sign in" in text or "authentication" in text or "login required" in text:
+    if any(
+        marker in text
+        for marker in (
+            "sign in",
+            "authentication",
+            "login required",
+            "age-restricted",
+            "confirm your age",
+            "members-only",
+            "members only",
+            "join this channel",
+        )
+    ):
         return YouTubeErrorCategory.AUTH_REQUIRED
     if "unavailable" in text or "private video" in text or "removed" in text:
         return YouTubeErrorCategory.VIDEO_UNAVAILABLE

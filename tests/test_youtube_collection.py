@@ -248,6 +248,41 @@ def test_rate_limit_stops_hydration_immediately(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "message",
+    [
+        "Sign in to confirm your age",
+        "Join this channel for members-only content",
+    ],
+)
+def test_restricted_video_skipped_during_hydration(monkeypatch, message):
+    flat = {"entries": [{"id": "blocked"}, {"id": "accessible"}]}
+    install_fake_ytdlp(
+        monkeypatch,
+        [
+            flat,
+            RuntimeError(message),
+            {
+                "id": "accessible",
+                "title": "Good",
+                "duration": 1200,
+                "upload_date": date.today().strftime("%Y%m%d"),
+                "webpage_url": "https://youtube.com/watch?v=accessible",
+            },
+        ],
+    )
+    failures = []
+    videos = discover_creator_videos(
+        "Creator",
+        "https://youtube.com/@creator/videos",
+        quantity=1,
+        age_days=30,
+        failure_handler=lambda *args: failures.append(args),
+    )
+    assert videos[0].youtube_id == "accessible"
+    assert failures[0][1] == YouTubeErrorCategory.AUTH_REQUIRED
+
+
+@pytest.mark.parametrize(
     ("error", "category"),
     (
         (

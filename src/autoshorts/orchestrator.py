@@ -20,11 +20,7 @@ from autoshorts.config import Settings
 from autoshorts.credential_store import FilesystemCredentialStore
 from autoshorts.faster_whisper_provider import FasterWhisperProvider
 from autoshorts.gemini_analysis_provider import GeminiAnalysisProvider
-from autoshorts.ingestion import (
-    discover_next_source_video,
-    ingest,
-    record_ingestion_failure,
-)
+from autoshorts.ingestion import ingest_with_replacement
 from autoshorts.metadata_pipeline import (
     GeminiMetadataProvider,
     approve_and_enqueue_metadata,
@@ -200,41 +196,16 @@ class PipelineChannelProducer:
         profile = (preferred or profiles)[0]
         source_id = self._resumable_source(context.channel.channel_id)
         if source_id is None:
-            report = discover_next_source_video(
+            source_id = ingest_with_replacement(
                 profile,
                 self.state,
+                workspace=self.workspace,
+                theme_prompt=context.theme.prompt,
                 maximum_age_days=context.theme.policy.maximum_age_days,
                 access=self.access,
+                ffprobe_path=self.settings.ffprobe_path,
+                ffmpeg_path=self.settings.ffmpeg_path,
             )
-            if report.selected is None:
-                raise RuntimeError("No eligible source video was discovered.")
-            source_id = report.selected.external_video_id
-            try:
-                ingest(
-                    report.selected,
-                    profile,
-                    self.state,
-                    workspace=self.workspace,
-                    ffprobe_path=self.settings.ffprobe_path,
-                    ffmpeg_path=self.settings.ffmpeg_path,
-                    access=self.access,
-                )
-            except Exception as exc:
-                retry_after = record_ingestion_failure(
-                    self.state, profile, source_id, exc
-                )
-                LOGGER.warning(
-                    "YouTube source=%s video=%s attempt=recorded access=%s "
-                    "result=%s retry_after=%s",
-                    report.selected.source.display_name,
-                    source_id,
-                    self.access.mode,
-                    getattr(
-                        getattr(exc, "category", None), "value", "DOWNLOAD_ERROR"
-                    ),
-                    retry_after or "never",
-                )
-                raise
             self.state.assign_source_to_channel(
                 source_id, context.channel.channel_id
             )
